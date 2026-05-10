@@ -1,0 +1,42 @@
+//! Error types for OpenAuth core.
+
+/// Core library error.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum OpenAuthError {
+    #[error("invalid configuration: {0}")]
+    InvalidConfig(String),
+    #[error("crypto error: {0}")]
+    Crypto(String),
+    #[error("invalid secret configuration: {0}")]
+    InvalidSecretConfig(String),
+    #[error("password hash error: {0}")]
+    PasswordHash(String),
+    #[error("cookie error: {0}")]
+    Cookie(String),
+    #[error("api error: {0}")]
+    Api(String),
+    #[error("no request state found in the current async scope")]
+    RequestStateMissing,
+    #[error("request state value had an unexpected type")]
+    RequestStateTypeMismatch,
+    #[error("schema table `{table}` was not found")]
+    TableNotFound { table: String },
+    #[error("schema field `{field}` was not found in table `{table}`")]
+    FieldNotFound { table: String, field: String },
+    #[error(
+        "no foreign key found between base model `{base_model}` and join model `{join_model}`"
+    )]
+    JoinForeignKeyNotFound {
+        base_model: String,
+        join_model: String,
+    },
+    #[error(
+        "multiple foreign keys found between base model `{base_model}` and join model `{join_model}`"
+    )]
+    JoinForeignKeyAmbiguous {
+        base_model: String,
+        join_model: String,
+    },
+    #[error("adapter error: {0}")]
+    Adapter(String),
+}
