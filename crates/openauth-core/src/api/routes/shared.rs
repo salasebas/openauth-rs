@@ -152,6 +152,15 @@ pub(super) fn request_cookie_header(request: &ApiRequest) -> Option<String> {
         .map(str::to_owned)
 }
 
+pub(super) fn query_param(request: &ApiRequest, name: &str) -> Option<String> {
+    request.uri().query().and_then(|query| {
+        query.split('&').find_map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (key == name).then(|| percent_decode(value))
+        })
+    })
+}
+
 pub(super) async fn current_session(
     adapter: &dyn DbAdapter,
     context: &AuthContext,
@@ -352,6 +361,42 @@ fn serialize_cookie(cookie: &Cookie) -> String {
         parts.push("Partitioned".to_owned());
     }
     parts.join("; ")
+}
+
+pub(super) fn percent_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = &value[index + 1..index + 3];
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                decoded.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(if bytes[index] == b'+' {
+            b' '
+        } else {
+            bytes[index]
+        });
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 fn request_user_agent(request: &ApiRequest) -> Option<String> {

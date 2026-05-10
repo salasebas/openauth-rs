@@ -8,6 +8,9 @@ use crate::api::AsyncAuthEndpoint;
 use crate::db::DbAdapter;
 
 mod account;
+mod change_email;
+mod delete_user;
+mod email_verification;
 mod password;
 mod session;
 mod shared;
@@ -35,6 +38,11 @@ pub fn core_auth_async_endpoints(adapter: Arc<dyn DbAdapter>) -> Vec<AsyncAuthEn
         account::list_user_accounts_endpoint(Arc::clone(&adapter)),
         account::unlink_account_endpoint(Arc::clone(&adapter)),
         update_user::update_user_endpoint(Arc::clone(&adapter)),
+        change_email::change_email_endpoint(Arc::clone(&adapter)),
+        email_verification::send_verification_email_endpoint(Arc::clone(&adapter)),
+        email_verification::verify_email_endpoint(Arc::clone(&adapter)),
+        delete_user::delete_user_endpoint(Arc::clone(&adapter)),
+        delete_user::delete_user_callback_endpoint(Arc::clone(&adapter)),
         password::change_password_endpoint(Arc::clone(&adapter)),
         password::set_password_endpoint(Arc::clone(&adapter)),
         password::verify_password_endpoint(Arc::clone(&adapter)),

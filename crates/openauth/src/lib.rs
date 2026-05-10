@@ -28,11 +28,12 @@ pub use openauth_core::crypto::{
 };
 pub use openauth_core::error::OpenAuthError;
 pub use openauth_core::options::{
-    AdvancedOptions, CookieAttributesOverride, CookieCacheOptions, CookieCacheStrategy,
-    CookieConfig, DynamicRateLimitPathRule, IpAddressOptions, OpenAuthOptions, PasswordOptions,
-    RateLimitOptions, RateLimitPathRule, RateLimitRecord, RateLimitRule, RateLimitRuleProvider,
-    RateLimitStorage, RateLimitStorageOption, SessionOptions, TrustedOriginOptions,
-    TrustedOriginsProvider,
+    AdvancedOptions, ChangeEmailOptions, CookieAttributesOverride, CookieCacheOptions,
+    CookieCacheStrategy, CookieConfig, DeleteUserOptions, DynamicRateLimitPathRule,
+    EmailVerificationOptions, IpAddressOptions, OpenAuthOptions, PasswordOptions, RateLimitOptions,
+    RateLimitPathRule, RateLimitRecord, RateLimitRule, RateLimitRuleProvider, RateLimitStorage,
+    RateLimitStorageOption, SendVerificationEmail, SessionOptions, TrustedOriginOptions,
+    TrustedOriginsProvider, UserOptions, VerificationEmail,
 };
 pub use openauth_core::plugin::{AuthPlugin, PluginMiddleware, PluginRequestAction};
 pub use openauth_core::session::{CreateSessionInput, DbSessionStore};

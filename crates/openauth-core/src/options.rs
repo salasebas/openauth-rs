@@ -1,6 +1,7 @@
 //! Configuration types for OpenAuth core.
 
 use crate::crypto::SecretEntry;
+use crate::db::User;
 use crate::error::OpenAuthError;
 use crate::plugin::AuthPlugin;
 use crate::utils::ip::Ipv6Subnet;
@@ -18,6 +19,8 @@ pub struct OpenAuthOptions {
     pub trusted_origins: TrustedOriginOptions,
     pub disabled_paths: Vec<String>,
     pub session: SessionOptions,
+    pub user: UserOptions,
+    pub email_verification: EmailVerificationOptions,
     pub password: PasswordOptions,
     pub advanced: AdvancedOptions,
     pub rate_limit: RateLimitOptions,
@@ -39,11 +42,94 @@ impl fmt::Debug for OpenAuthOptions {
             .field("trusted_origins", &self.trusted_origins)
             .field("disabled_paths", &self.disabled_paths)
             .field("session", &self.session)
+            .field("user", &self.user)
+            .field("email_verification", &self.email_verification)
             .field("password", &self.password)
             .field("advanced", &self.advanced)
             .field("rate_limit", &self.rate_limit)
             .field("plugins", &self.plugins)
             .field("production", &self.production)
+            .finish()
+    }
+}
+
+/// User lifecycle configuration.
+#[derive(Debug, Clone, Default)]
+pub struct UserOptions {
+    pub change_email: ChangeEmailOptions,
+    pub delete_user: DeleteUserOptions,
+}
+
+/// Email change behavior.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChangeEmailOptions {
+    pub enabled: bool,
+    pub update_email_without_verification: bool,
+}
+
+/// User deletion behavior.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeleteUserOptions {
+    pub enabled: bool,
+}
+
+/// Payload passed to an email verification sender.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerificationEmail {
+    pub user: User,
+    pub url: String,
+    pub token: String,
+}
+
+/// Synchronous email verification sender hook.
+pub trait SendVerificationEmail: Send + Sync + 'static {
+    fn send_verification_email(
+        &self,
+        email: VerificationEmail,
+        request: Option<&Request<Vec<u8>>>,
+    ) -> Result<(), OpenAuthError>;
+}
+
+impl<F> SendVerificationEmail for F
+where
+    F: for<'a> Fn(VerificationEmail, Option<&'a Request<Vec<u8>>>) -> Result<(), OpenAuthError>
+        + Send
+        + Sync
+        + 'static,
+{
+    fn send_verification_email(
+        &self,
+        email: VerificationEmail,
+        request: Option<&Request<Vec<u8>>>,
+    ) -> Result<(), OpenAuthError> {
+        self(email, request)
+    }
+}
+
+/// Email verification configuration.
+#[derive(Clone, Default)]
+pub struct EmailVerificationOptions {
+    pub send_verification_email: Option<Arc<dyn SendVerificationEmail>>,
+    pub expires_in: Option<u64>,
+    pub auto_sign_in_after_verification: bool,
+}
+
+impl fmt::Debug for EmailVerificationOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EmailVerificationOptions")
+            .field(
+                "send_verification_email",
+                &self
+                    .send_verification_email
+                    .as_ref()
+                    .map(|_| "<send-verification-email>"),
+            )
+            .field("expires_in", &self.expires_in)
+            .field(
+                "auto_sign_in_after_verification",
+                &self.auto_sign_in_after_verification,
+            )
             .finish()
     }
 }

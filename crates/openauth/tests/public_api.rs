@@ -2,9 +2,11 @@ use http::{Method, Request, StatusCode};
 use openauth::{
     core_auth_async_endpoints, create_auth_endpoint, open_auth, open_auth_with_endpoints,
     ApiErrorResponse, ApiRequest, ApiResponse, AsyncAuthEndpoint, AuthEndpoint,
-    AuthEndpointOptions, AuthPlugin, BodyField, BodySchema, CookieCacheStrategy, EndpointKind,
-    JsonSchemaType, OpenApiOperation, OpenAuthError, OpenAuthOptions, PluginRequestAction,
-    RateLimitOptions, SessionAuth, SignOutResult, TrustedOriginOptions, UpdateUserInput,
+    AuthEndpointOptions, AuthPlugin, BodyField, BodySchema, ChangeEmailOptions,
+    CookieCacheStrategy, DeleteUserOptions, EmailVerificationOptions, EndpointKind, JsonSchemaType,
+    OpenApiOperation, OpenAuthError, OpenAuthOptions, PluginRequestAction, RateLimitOptions,
+    SessionAuth, SignOutResult, TrustedOriginOptions, UpdateUserInput, UserOptions,
+    VerificationEmail,
 };
 
 #[test]
@@ -66,6 +68,15 @@ fn openauth_crate_reexports_core_contract_types() {
     let _action_type: Option<PluginRequestAction> = None;
     let _trusted_origins = TrustedOriginOptions::default();
     let _rate_limit = RateLimitOptions::default();
+    let _user_options = UserOptions {
+        change_email: ChangeEmailOptions {
+            enabled: true,
+            update_email_without_verification: true,
+        },
+        delete_user: DeleteUserOptions { enabled: true },
+    };
+    let _email_verification = EmailVerificationOptions::default();
+    let _verification_email_type: Option<VerificationEmail> = None;
     let _cookie_strategy = CookieCacheStrategy::Jwe;
     let _memory_storage = openauth::rate_limit::MemoryRateLimitStorage::new();
     let _session_auth_type: Option<SessionAuth<'_>> = None;

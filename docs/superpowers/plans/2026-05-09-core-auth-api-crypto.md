@@ -66,7 +66,10 @@ Implement the next core/public-auth slice as a Rust-native port of Better Auth 1
 - [x] Add DB-backed session route builders for `/list-sessions`, `/revoke-session`, `/revoke-sessions`, and `/revoke-other-sessions`.
 - [x] Add DB-backed user/password route builders for `/update-user`, `/change-password`, `/set-password`, `/verify-password`, `/request-password-reset`, and `/reset-password`.
 - [x] Add DB-backed account route builders for `/list-accounts` and `/unlink-account`, leaving OAuth token/linking routes out of core scope for now.
+- [x] Add core email verification route builders for `/send-verification-email` and `/verify-email`, using HS256 verification tokens and a Rust-owned sender hook.
+- [x] Add core user lifecycle route builders for `/change-email`, `/delete-user`, and `/delete-user/callback` behind explicit user options.
 - [x] Reorganize integration tests into grouped `tests/<domain>/main.rs` suites so API, auth, cookies, crypto, DB, context, env, rate limit, and utils coverage can grow without one flat directory.
+- [x] Split API route integration tests into `tests/api/routes/<endpoint>.rs` files with a shared `routes/mod.rs` harness.
 - [x] Add disabled-path handling, trusted-origin checks, percent-decoded callback URL validation, Fetch Metadata CSRF checks, origin/path normalization hooks, strict/default trailing-slash route matching, and typed API errors.
 - [x] Resolve static base URL/path at context initialization; keep dynamic request-derived URL support minimal and explicit.
 - [x] Add plugin lookup helpers without porting client behavior.
@@ -80,8 +83,8 @@ Implement the next core/public-auth slice as a Rust-native port of Better Auth 1
 - [x] Implement full rate limiting behavior, including storage contracts, request keying, response headers, disabled-path interaction, and tests against the Better Auth route behavior.
 - [x] Add router-level plugin hooks for `onRequest`, `onResponse`, middleware path matching, and endpoint conflict detection.
 - [ ] Add `update-session` once OpenAuth has first-class additional session field configuration; upstream route only updates configured additional fields.
-- [ ] Add email verification and email change routes once email callback/config contracts are modeled.
-- [ ] Add delete-user routes once user deletion options, verification callbacks, and before/after hooks are modeled.
+- [ ] Add full email-change two-step confirmation hooks and before/after email verification callbacks; current core support covers direct unverified-user update and verification-token update flows.
+- [ ] Add delete-user verification-email sender and before/after delete hooks; current core support covers password/token deletion and DB cleanup.
 - [ ] Add OAuth account routes such as `/link-social`, `/get-access-token`, `/refresh-token`, `/account-info`, and callback routes in `openauth-oauth` rather than core.
 
 ## Continued Hardening

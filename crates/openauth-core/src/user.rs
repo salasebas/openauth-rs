@@ -4,7 +4,8 @@ use time::OffsetDateTime;
 
 use crate::crypto::random::generate_random_string;
 use crate::db::{
-    Account, Create, DbAdapter, DbRecord, DbValue, Delete, FindMany, FindOne, Update, User, Where,
+    Account, Create, DbAdapter, DbRecord, DbValue, Delete, DeleteMany, FindMany, FindOne, Update,
+    User, Where,
 };
 use crate::error::OpenAuthError;
 
@@ -327,11 +328,65 @@ impl<'a> DbUserStore<'a> {
             .transpose()
     }
 
+    pub async fn update_user_email_verified(
+        &self,
+        user_id: &str,
+        email_verified: bool,
+    ) -> Result<Option<User>, OpenAuthError> {
+        self.adapter
+            .update(
+                Update::new(USER_MODEL)
+                    .where_clause(Where::new("id", DbValue::String(user_id.to_owned())))
+                    .data("email_verified", DbValue::Boolean(email_verified))
+                    .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc())),
+            )
+            .await?
+            .map(user_from_record)
+            .transpose()
+    }
+
+    pub async fn update_user_email(
+        &self,
+        user_id: &str,
+        email: &str,
+        email_verified: bool,
+    ) -> Result<Option<User>, OpenAuthError> {
+        self.adapter
+            .update(
+                Update::new(USER_MODEL)
+                    .where_clause(Where::new("id", DbValue::String(user_id.to_owned())))
+                    .data("email", DbValue::String(normalize_email(email)))
+                    .data("email_verified", DbValue::Boolean(email_verified))
+                    .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc())),
+            )
+            .await?
+            .map(user_from_record)
+            .transpose()
+    }
+
     pub async fn delete_account(&self, account_id: &str) -> Result<(), OpenAuthError> {
         self.adapter
             .delete(
                 Delete::new(ACCOUNT_MODEL)
                     .where_clause(Where::new("id", DbValue::String(account_id.to_owned()))),
+            )
+            .await
+    }
+
+    pub async fn delete_user_accounts(&self, user_id: &str) -> Result<u64, OpenAuthError> {
+        self.adapter
+            .delete_many(
+                DeleteMany::new(ACCOUNT_MODEL)
+                    .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned()))),
+            )
+            .await
+    }
+
+    pub async fn delete_user(&self, user_id: &str) -> Result<(), OpenAuthError> {
+        self.adapter
+            .delete(
+                Delete::new(USER_MODEL)
+                    .where_clause(Where::new("id", DbValue::String(user_id.to_owned()))),
             )
             .await
     }
