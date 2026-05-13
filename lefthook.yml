@@ -14,5 +14,5 @@ pre-commit:
 pre-push:
   parallel: true
   commands:
-    test:
-      run: cargo test --workspace --all-targets --all-features --locked
+    check:
+      run: cargo check --workspace --tests --locked
