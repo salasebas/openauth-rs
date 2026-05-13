@@ -4,8 +4,8 @@ use indexmap::IndexMap;
 use openauth_core::db::{
     auth_schema, AdapterCapabilities, AdapterFuture, AuthSchemaOptions, Connector, Count, Create,
     DbAdapter, DbField, DbFieldType, DbRecord, DbSchema, DbTable, DbValue, Delete, DeleteMany,
-    FindMany, FindOne, JoinAdapter, OnDelete, SchemaCreation, SortDirection, TransactionCallback,
-    Update, UpdateMany, Where, WhereMode, WhereOperator,
+    FindMany, FindOne, JoinAdapter, JoinRelation, OnDelete, SchemaCreation, SortDirection,
+    TransactionCallback, Update, UpdateMany, Where, WhereMode, WhereOperator,
 };
 use openauth_core::error::OpenAuthError;
 use sqlx::postgres::{PgArguments, PgPoolOptions, PgRow};
@@ -74,20 +74,12 @@ impl DbAdapter for PostgresAdapter {
     }
 
     fn find_one<'a>(&'a self, query: FindOne) -> AdapterFuture<'a, Option<DbRecord>> {
-        Box::pin(async move {
-            if query.joins.is_empty() {
-                self.state().find_one(query).await
-            } else {
-                let adapter =
-                    JoinAdapter::new(self.schema.as_ref().clone(), Arc::new(self.clone()), false);
-                adapter.find_one(query).await
-            }
-        })
+        Box::pin(async move { self.state().find_one(query).await })
     }
 
     fn find_many<'a>(&'a self, query: FindMany) -> AdapterFuture<'a, Vec<DbRecord>> {
         Box::pin(async move {
-            if query.joins.is_empty() {
+            if query.joins.len() <= 1 {
                 self.state().find_many(query).await
             } else {
                 let adapter =
@@ -259,16 +251,18 @@ impl PostgresState<'_, '_> {
     }
 
     async fn find_one(self, mut query: FindOne) -> Result<Option<DbRecord>, OpenAuthError> {
-        reject_joins(&query.joins)?;
         let mut find_many = FindMany::new(query.model);
         find_many.where_clauses = std::mem::take(&mut query.where_clauses);
         find_many.limit = Some(1);
         find_many.select = query.select;
+        find_many.joins = query.joins;
         Ok(self.find_many(find_many).await?.into_iter().next())
     }
 
     async fn find_many(mut self, query: FindMany) -> Result<Vec<DbRecord>, OpenAuthError> {
-        reject_joins(&query.joins)?;
+        if !query.joins.is_empty() {
+            return self.find_many_with_joins(query).await;
+        }
         let table = resolve_table(self.schema, &query.model)?;
         let selection = select_fields(table, &query.select)?;
         let mut args = PgArguments::default();
@@ -309,6 +303,98 @@ impl PostgresState<'_, '_> {
         rows.iter()
             .map(|row| row_record(row, &selection))
             .collect::<Result<Vec<_>, _>>()
+    }
+
+    async fn find_many_with_joins(
+        mut self,
+        query: FindMany,
+    ) -> Result<Vec<DbRecord>, OpenAuthError> {
+        let (base_logical, table) = resolve_table_with_logical(self.schema, &query.model)?;
+        let joins = resolve_native_joins(self.schema, base_logical, table, &query.joins, 100)?;
+        let base_selection = internal_base_selection(table, &query.select, &joins)?;
+        let base_id_alias = "__base_id";
+        let mut args = PgArguments::default();
+        let mut placeholders = PlaceholderCounter::default();
+        let where_sql = where_sql(table, &query.where_clauses, &mut args, &mut placeholders)?;
+        let base_columns = base_selection
+            .iter()
+            .map(|(_, field)| quote_identifier(&field.name))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut base_sql = format!(
+            "SELECT {} FROM {}{}",
+            base_columns.join(", "),
+            quote_identifier(&table.name)?,
+            where_sql
+        );
+
+        if let Some(sort) = &query.sort_by {
+            let (_, field) = resolve_field(table, &sort.field)?;
+            let direction = match sort.direction {
+                SortDirection::Asc => "ASC",
+                SortDirection::Desc => "DESC",
+            };
+            base_sql.push_str(" ORDER BY ");
+            base_sql.push_str(&quote_identifier(&field.name)?);
+            base_sql.push(' ');
+            base_sql.push_str(direction);
+        }
+        if let Some(limit) = query.limit {
+            base_sql.push_str(" LIMIT ");
+            base_sql.push_str(&limit.to_string());
+        }
+        if let Some(offset) = query.offset {
+            base_sql.push_str(" OFFSET ");
+            base_sql.push_str(&offset.to_string());
+        }
+
+        let mut selects = vec![format!(
+            "{}.{} AS {}",
+            quote_identifier("base")?,
+            quote_identifier(&resolve_field_from_selection(&base_selection, "id")?.name)?,
+            quote_identifier(base_id_alias)?
+        )];
+        for (index, (_, field)) in base_selection.iter().enumerate() {
+            selects.push(format!(
+                "{}.{} AS {}",
+                quote_identifier("base")?,
+                quote_identifier(&field.name)?,
+                quote_identifier(&base_alias(index))?
+            ));
+        }
+        for (join_index, join) in joins.iter().enumerate() {
+            for (field_index, (_, field)) in join.selection.iter().enumerate() {
+                selects.push(format!(
+                    "{}.{} AS {}",
+                    quote_identifier(&join_alias(join_index))?,
+                    quote_identifier(&field.name)?,
+                    quote_identifier(&join_field_alias(join_index, field_index))?
+                ));
+            }
+        }
+
+        let mut sql = format!(
+            "SELECT {} FROM ({}) AS {}",
+            selects.join(", "),
+            base_sql,
+            quote_identifier("base")?
+        );
+        for (index, join) in joins.iter().enumerate() {
+            sql.push_str(" LEFT JOIN ");
+            sql.push_str(&quote_identifier(&join.table.name)?);
+            sql.push_str(" AS ");
+            sql.push_str(&quote_identifier(&join_alias(index))?);
+            sql.push_str(" ON ");
+            sql.push_str(&quote_identifier(&join_alias(index))?);
+            sql.push('.');
+            sql.push_str(&quote_identifier(&join.to)?);
+            sql.push_str(" = ");
+            sql.push_str(&quote_identifier("base")?);
+            sql.push('.');
+            sql.push_str(&quote_identifier(&join.from)?);
+        }
+
+        let rows = self.fetch_all(sql, args).await?;
+        joined_rows(&rows, &base_selection, &query.select, &joins, row_value_at)
     }
 
     async fn count(mut self, query: Count) -> Result<u64, OpenAuthError> {
@@ -774,30 +860,34 @@ fn row_record(row: &PgRow, selection: &[(&str, &DbField)]) -> Result<DbRecord, O
 }
 
 fn row_value(row: &PgRow, field: &DbField) -> Result<DbValue, OpenAuthError> {
+    row_value_at(row, field, field.name.as_str())
+}
+
+fn row_value_at(row: &PgRow, field: &DbField, column: &str) -> Result<DbValue, OpenAuthError> {
     match field.field_type {
         DbFieldType::String => row
-            .try_get::<Option<String>, _>(field.name.as_str())
+            .try_get::<Option<String>, _>(column)
             .map(|value| value.map(DbValue::String).unwrap_or(DbValue::Null))
             .map_err(sql_error),
         DbFieldType::Number => row
-            .try_get::<Option<i64>, _>(field.name.as_str())
+            .try_get::<Option<i64>, _>(column)
             .map(|value| value.map(DbValue::Number).unwrap_or(DbValue::Null))
             .map_err(sql_error),
         DbFieldType::Boolean => row
-            .try_get::<Option<bool>, _>(field.name.as_str())
+            .try_get::<Option<bool>, _>(column)
             .map(|value| value.map(DbValue::Boolean).unwrap_or(DbValue::Null))
             .map_err(sql_error),
         DbFieldType::Timestamp => row
-            .try_get::<Option<OffsetDateTime>, _>(field.name.as_str())
+            .try_get::<Option<OffsetDateTime>, _>(column)
             .map(|value| value.map(DbValue::Timestamp).unwrap_or(DbValue::Null))
             .map_err(sql_error),
         DbFieldType::Json => row
-            .try_get::<Option<serde_json::Value>, _>(field.name.as_str())
+            .try_get::<Option<serde_json::Value>, _>(column)
             .map(|value| value.map(DbValue::Json).unwrap_or(DbValue::Null))
             .map_err(sql_error),
         DbFieldType::StringArray => {
             let value = row
-                .try_get::<Option<serde_json::Value>, _>(field.name.as_str())
+                .try_get::<Option<serde_json::Value>, _>(column)
                 .map_err(sql_error)?;
             value
                 .map(|value| {
@@ -810,7 +900,7 @@ fn row_value(row: &PgRow, field: &DbField) -> Result<DbValue, OpenAuthError> {
         }
         DbFieldType::NumberArray => {
             let value = row
-                .try_get::<Option<serde_json::Value>, _>(field.name.as_str())
+                .try_get::<Option<serde_json::Value>, _>(column)
                 .map_err(sql_error)?;
             value
                 .map(|value| {
@@ -822,6 +912,271 @@ fn row_value(row: &PgRow, field: &DbField) -> Result<DbValue, OpenAuthError> {
                 .map(|value| value.unwrap_or(DbValue::Null))
         }
     }
+}
+
+struct NativeJoin<'a> {
+    model: String,
+    table: &'a DbTable,
+    selection: Vec<(&'a str, &'a DbField)>,
+    from: String,
+    to: String,
+    relation: JoinRelation,
+    limit: usize,
+}
+
+fn resolve_native_joins<'a>(
+    schema: &'a DbSchema,
+    base_model: &str,
+    base_table: &'a DbTable,
+    joins: &IndexMap<String, openauth_core::db::JoinOption>,
+    default_limit: usize,
+) -> Result<Vec<NativeJoin<'a>>, OpenAuthError> {
+    let mut resolved = Vec::new();
+    for (join_model, option) in joins {
+        if !option.enabled {
+            continue;
+        }
+        let (join_logical, join_table) = resolve_table_with_logical(schema, join_model)?;
+        let mut foreign_keys = foreign_keys_to_table(join_table, &base_table.name);
+        let is_forward_join = !foreign_keys.is_empty();
+        if foreign_keys.is_empty() {
+            foreign_keys = foreign_keys_to_table(base_table, &join_table.name);
+        }
+        let [(_foreign_key, field)] =
+            foreign_keys
+                .as_slice()
+                .try_into()
+                .map_err(|_| match foreign_keys.len() {
+                    0 => OpenAuthError::JoinForeignKeyNotFound {
+                        base_model: base_model.to_owned(),
+                        join_model: join_model.clone(),
+                    },
+                    _ => OpenAuthError::JoinForeignKeyAmbiguous {
+                        base_model: base_model.to_owned(),
+                        join_model: join_model.clone(),
+                    },
+                })?;
+        let reference =
+            field
+                .foreign_key
+                .as_ref()
+                .ok_or_else(|| OpenAuthError::JoinForeignKeyNotFound {
+                    base_model: base_model.to_owned(),
+                    join_model: join_model.clone(),
+                })?;
+        let (from, to, is_unique) = if is_forward_join {
+            let (_, base_field) = resolve_field(base_table, &reference.field)?;
+            (base_field.name.clone(), field.name.clone(), field.unique)
+        } else {
+            let (_, join_field) = resolve_field(join_table, &reference.field)?;
+            (field.name.clone(), join_field.name.clone(), field.unique)
+        };
+        let relation = if !is_forward_join || is_unique {
+            JoinRelation::OneToOne
+        } else {
+            JoinRelation::OneToMany
+        };
+        let limit = if relation == JoinRelation::OneToOne {
+            1
+        } else {
+            option.limit.unwrap_or(default_limit)
+        };
+        resolved.push(NativeJoin {
+            model: join_logical.to_owned(),
+            table: join_table,
+            selection: select_fields(join_table, &[])?,
+            from,
+            to,
+            relation,
+            limit,
+        });
+    }
+    Ok(resolved)
+}
+
+fn internal_base_selection<'a>(
+    table: &'a DbTable,
+    select: &'a [String],
+    joins: &[NativeJoin<'_>],
+) -> Result<Vec<(&'a str, &'a DbField)>, OpenAuthError> {
+    let mut selection = select_fields(table, select)?;
+    add_internal_field(table, &mut selection, "id")?;
+    for join in joins {
+        add_internal_field(table, &mut selection, &join.from)?;
+    }
+    Ok(selection)
+}
+
+fn add_internal_field<'a>(
+    table: &'a DbTable,
+    selection: &mut Vec<(&'a str, &'a DbField)>,
+    field: &str,
+) -> Result<(), OpenAuthError> {
+    let resolved = resolve_field(table, field)?;
+    if !selection
+        .iter()
+        .any(|(_, existing)| existing.name == resolved.1.name)
+    {
+        selection.push(resolved);
+    }
+    Ok(())
+}
+
+fn joined_rows<Row, F>(
+    rows: &[Row],
+    base_selection: &[(&str, &DbField)],
+    output_select: &[String],
+    joins: &[NativeJoin<'_>],
+    mut row_value: F,
+) -> Result<Vec<DbRecord>, OpenAuthError>
+where
+    F: FnMut(&Row, &DbField, &str) -> Result<DbValue, OpenAuthError>,
+{
+    let mut records = Vec::<DbRecord>::new();
+    let mut groups = IndexMap::<String, usize>::new();
+
+    for row in rows {
+        let base_id = row_value(
+            row,
+            resolve_field_from_selection(base_selection, "id")?,
+            "__base_id",
+        )?;
+        let group_key = db_value_key(&base_id).ok_or_else(|| {
+            OpenAuthError::Adapter("joined query base row is missing an id".to_owned())
+        })?;
+        let record_index = if let Some(index) = groups.get(&group_key) {
+            *index
+        } else {
+            let mut record = DbRecord::new();
+            for (index, (logical_name, field)) in base_selection.iter().enumerate() {
+                if !output_select.is_empty()
+                    && !output_select.iter().any(|field| field == logical_name)
+                {
+                    continue;
+                }
+                record.insert(
+                    (*logical_name).to_owned(),
+                    row_value(row, field, &base_alias(index))?,
+                );
+            }
+            for join in joins {
+                let value = if join.relation == JoinRelation::OneToOne {
+                    DbValue::Null
+                } else {
+                    DbValue::RecordArray(Vec::new())
+                };
+                record.insert(join.model.clone(), value);
+            }
+            records.push(record);
+            let index = records.len() - 1;
+            groups.insert(group_key, index);
+            index
+        };
+
+        for (join_index, join) in joins.iter().enumerate() {
+            let joined = joined_record(row, join_index, join, &mut row_value)?;
+            let Some(joined) = joined else {
+                continue;
+            };
+            if join.relation == JoinRelation::OneToOne {
+                records[record_index].insert(join.model.clone(), DbValue::Record(joined));
+            } else if let Some(DbValue::RecordArray(values)) =
+                records[record_index].get_mut(&join.model)
+            {
+                if values.len() < join.limit && !contains_record(values, &joined) {
+                    values.push(joined);
+                }
+            }
+        }
+    }
+
+    Ok(records)
+}
+
+fn joined_record<Row, F>(
+    row: &Row,
+    join_index: usize,
+    join: &NativeJoin<'_>,
+    row_value: &mut F,
+) -> Result<Option<DbRecord>, OpenAuthError>
+where
+    F: FnMut(&Row, &DbField, &str) -> Result<DbValue, OpenAuthError>,
+{
+    let mut record = DbRecord::new();
+    for (field_index, (logical_name, field)) in join.selection.iter().enumerate() {
+        record.insert(
+            (*logical_name).to_owned(),
+            row_value(row, field, &join_field_alias(join_index, field_index))?,
+        );
+    }
+    if record.values().all(|value| *value == DbValue::Null) {
+        Ok(None)
+    } else {
+        Ok(Some(record))
+    }
+}
+
+fn contains_record(records: &[DbRecord], candidate: &DbRecord) -> bool {
+    let candidate_id = candidate.get("id").and_then(db_value_key);
+    records.iter().any(|record| {
+        if let Some(candidate_id) = &candidate_id {
+            record.get("id").and_then(db_value_key).as_ref() == Some(candidate_id)
+        } else {
+            record == candidate
+        }
+    })
+}
+
+fn resolve_field_from_selection<'a>(
+    selection: &'a [(&str, &'a DbField)],
+    field: &str,
+) -> Result<&'a DbField, OpenAuthError> {
+    selection
+        .iter()
+        .find_map(|(logical_name, metadata)| {
+            (*logical_name == field || metadata.name == field).then_some(*metadata)
+        })
+        .ok_or_else(|| OpenAuthError::FieldNotFound {
+            table: "joined base selection".to_owned(),
+            field: field.to_owned(),
+        })
+}
+
+fn foreign_keys_to_table<'a>(
+    table: &'a DbTable,
+    target_table: &str,
+) -> Vec<(&'a str, &'a DbField)> {
+    table
+        .fields
+        .iter()
+        .filter_map(|(logical_name, field)| {
+            field
+                .foreign_key
+                .as_ref()
+                .filter(|foreign_key| foreign_key.table == target_table)
+                .map(|_| (logical_name.as_str(), field))
+        })
+        .collect()
+}
+
+fn db_value_key(value: &DbValue) -> Option<String> {
+    match value {
+        DbValue::String(value) => Some(value.clone()),
+        DbValue::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn base_alias(index: usize) -> String {
+    format!("__base_{index}")
+}
+
+fn join_alias(index: usize) -> String {
+    format!("__join_{index}")
+}
+
+fn join_field_alias(join_index: usize, field_index: usize) -> String {
+    format!("__join_{join_index}_{field_index}")
 }
 
 fn select_fields<'a>(
@@ -868,6 +1223,18 @@ fn resolve_table<'a>(schema: &'a DbSchema, model: &str) -> Result<&'a DbTable, O
         })
 }
 
+fn resolve_table_with_logical<'a>(
+    schema: &'a DbSchema,
+    model: &str,
+) -> Result<(&'a str, &'a DbTable), OpenAuthError> {
+    schema
+        .tables()
+        .find(|(logical_name, table)| *logical_name == model || table.name == model)
+        .ok_or_else(|| OpenAuthError::TableNotFound {
+            table: model.to_owned(),
+        })
+}
+
 fn resolve_field<'a>(
     table: &'a DbTable,
     field: &str,
@@ -883,16 +1250,6 @@ fn resolve_field<'a>(
             table: table.name.clone(),
             field: field.to_owned(),
         })
-}
-
-fn reject_joins<T>(joins: &IndexMap<String, T>) -> Result<(), OpenAuthError> {
-    if joins.is_empty() {
-        Ok(())
-    } else {
-        Err(OpenAuthError::Adapter(
-            "sqlx joins are not implemented".to_owned(),
-        ))
-    }
 }
 
 fn quote_identifier(identifier: &str) -> Result<String, OpenAuthError> {

@@ -397,6 +397,39 @@ async fn postgres_adapter_supports_forward_reverse_and_limited_joins() -> Result
         Some(DbValue::RecordArray(accounts)) if accounts.is_empty()
     ));
 
+    let users_with_sessions = adapter
+        .find_many(
+            FindMany::new("user")
+                .sort_by(Sort::new("id", SortDirection::Asc))
+                .join("session", JoinOption::enabled().limit(1)),
+        )
+        .await?;
+
+    assert_eq!(users_with_sessions.len(), 2);
+    assert!(matches!(
+        users_with_sessions[0].get("session"),
+        Some(DbValue::RecordArray(sessions)) if sessions.len() == 1
+    ));
+
+    let user = adapter
+        .find_one(
+            FindOne::new("user")
+                .where_clause(Where::new("id", DbValue::String("user_1".to_owned())))
+                .join("account", JoinOption::enabled().limit(1))
+                .join("session", JoinOption::enabled()),
+        )
+        .await?
+        .ok_or_else(|| OpenAuthError::Adapter("missing joined user".to_owned()))?;
+
+    assert!(matches!(
+        user.get("account"),
+        Some(DbValue::RecordArray(accounts)) if accounts.len() == 1
+    ));
+    assert!(matches!(
+        user.get("session"),
+        Some(DbValue::RecordArray(sessions)) if sessions.len() == 2
+    ));
+
     let account = adapter
         .find_one(
             FindOne::new("account")
