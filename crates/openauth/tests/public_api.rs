@@ -34,6 +34,28 @@ fn openauth_crate_reexports_core_primitives() {
     assert_eq!(token.len(), 16);
 }
 
+#[test]
+fn openauth_crate_reexports_oauth_and_social_provider_packages() {
+    let provider = openauth::oauth::oauth2::OAuthProviderMetadata::new("example", "Example");
+
+    assert_eq!(provider.id(), "example");
+    assert!(openauth::social_providers::PROVIDER_IDS.contains(&"github"));
+}
+
+#[test]
+fn oauth_public_reexports_include_core_and_oauth_helpers() {
+    let _authentication = openauth::oauth::oauth2::ClientAuthentication::Basic;
+    let user_info = openauth::auth::oauth::OAuthUserInfo {
+        id: "id".to_owned(),
+        name: "name".to_owned(),
+        email: "user@example.com".to_owned(),
+        image: None,
+        email_verified: true,
+    };
+
+    assert_eq!(user_info.email, "user@example.com");
+}
+
 #[tokio::test]
 async fn openauth_instance_exposes_async_handler() -> Result<(), Box<dyn std::error::Error>> {
     let auth = open_auth(OpenAuthOptions {

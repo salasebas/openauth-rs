@@ -7,6 +7,7 @@ use openauth_core::api::{
 use openauth_core::context::{create_auth_context, AuthContext};
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::OpenAuthOptions;
+pub use openauth_core::auth::oauth;
 
 /// Initialized OpenAuth instance.
 #[derive(Clone)]

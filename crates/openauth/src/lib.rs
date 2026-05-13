@@ -47,6 +47,7 @@ pub use openauth_core::{
     api, context, cookies, crypto, db, env, error, options, plugin, rate_limit, session, user,
     utils, verification,
 };
+pub use openauth_core::{oauth, social_providers};
 
 /// Current crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
