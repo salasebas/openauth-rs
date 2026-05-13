@@ -21,3 +21,21 @@ impl OAuthProviderMetadata {
         &self.name
     }
 }
+
+/// Minimal public contract shared by OAuth provider implementations.
+pub trait OAuthProviderContract {
+    fn id(&self) -> &str;
+    fn name(&self) -> &str;
+}
+
+impl OAuthProviderContract for OAuthProviderMetadata {
+    fn id(&self) -> &str {
+        self.id()
+    }
+
+    fn name(&self) -> &str {
+        self.name()
+    }
+}
+
+pub use super::tokens::{OAuth2Tokens, OAuth2UserInfo, ProviderOptions};

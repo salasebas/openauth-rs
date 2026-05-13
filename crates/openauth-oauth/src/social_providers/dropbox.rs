@@ -1,1 +1,0 @@
-//! Dropbox provider placeholder.

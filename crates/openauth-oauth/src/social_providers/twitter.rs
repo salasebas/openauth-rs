@@ -1,1 +1,0 @@
-//! Twitter provider placeholder.

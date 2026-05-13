@@ -1,1 +1,0 @@
-//! WeChat provider placeholder.

@@ -1,1 +1,0 @@
-//! Naver provider placeholder.

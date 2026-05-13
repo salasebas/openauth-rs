@@ -1,4 +1,4 @@
-use openauth_oauth::{oauth2, social_providers};
+use openauth_oauth::oauth2;
 
 #[test]
 fn oauth2_module_exports_placeholder_types() {
@@ -8,8 +8,20 @@ fn oauth2_module_exports_placeholder_types() {
 }
 
 #[test]
-fn social_provider_registry_contains_upstream_provider_names() {
-    assert!(social_providers::PROVIDER_IDS.contains(&"github"));
-    assert!(social_providers::PROVIDER_IDS.contains(&"microsoft"));
-    assert!(social_providers::PROVIDER_IDS.contains(&"wechat"));
+fn oauth_provider_contract_is_public() {
+    fn assert_provider_contract<T: oauth2::OAuthProviderContract>() {}
+
+    struct TestProvider;
+
+    impl oauth2::OAuthProviderContract for TestProvider {
+        fn id(&self) -> &str {
+            "test"
+        }
+
+        fn name(&self) -> &str {
+            "Test"
+        }
+    }
+
+    assert_provider_contract::<TestProvider>();
 }

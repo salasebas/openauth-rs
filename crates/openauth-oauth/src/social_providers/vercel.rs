@@ -1,1 +1,0 @@
-//! Vercel provider placeholder.

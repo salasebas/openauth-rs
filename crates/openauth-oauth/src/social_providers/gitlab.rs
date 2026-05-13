@@ -1,1 +1,0 @@
-//! GitLab provider placeholder.

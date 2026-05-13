@@ -1,1 +1,59 @@
-//! OAuth refresh token placeholders.
+use std::collections::BTreeMap;
+
+use super::error::OAuthError;
+use super::request::{
+    apply_client_authentication, post_form, ClientAuthentication, OAuthFormRequest,
+};
+use super::tokens::{get_oauth2_tokens, OAuth2Tokens, ProviderOptions};
+use super::validate_authorization_code::ClientTokenRequest;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefreshAccessTokenRequest {
+    pub refresh_token: String,
+    pub options: ProviderOptions,
+    pub authentication: ClientAuthentication,
+    pub extra_params: BTreeMap<String, String>,
+    pub resource: Vec<String>,
+}
+
+impl Default for RefreshAccessTokenRequest {
+    fn default() -> Self {
+        Self {
+            refresh_token: String::new(),
+            options: ProviderOptions::default(),
+            authentication: ClientAuthentication::Post,
+            extra_params: BTreeMap::new(),
+            resource: Vec::new(),
+        }
+    }
+}
+
+pub fn create_refresh_access_token_request(
+    input: RefreshAccessTokenRequest,
+) -> Result<OAuthFormRequest, OAuthError> {
+    let mut request = OAuthFormRequest::new();
+    request.set_body("grant_type", "refresh_token");
+    request.set_body("refresh_token", input.refresh_token);
+    apply_client_authentication(&mut request, &input.options, input.authentication, false)?;
+    for resource in input.resource {
+        request.push_body("resource", resource);
+    }
+    for (key, value) in input.extra_params {
+        request.set_body(key, value);
+    }
+    Ok(request)
+}
+
+pub fn refresh_access_token_request(
+    input: RefreshAccessTokenRequest,
+) -> Result<OAuthFormRequest, OAuthError> {
+    create_refresh_access_token_request(input)
+}
+
+pub async fn refresh_access_token(
+    input: ClientTokenRequest<RefreshAccessTokenRequest>,
+) -> Result<OAuth2Tokens, OAuthError> {
+    let request = refresh_access_token_request(input.request)?;
+    let data = post_form(&input.token_endpoint, request).await?;
+    get_oauth2_tokens(data)
+}

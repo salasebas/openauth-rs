@@ -1,1 +1,0 @@
-//! Polar provider placeholder.

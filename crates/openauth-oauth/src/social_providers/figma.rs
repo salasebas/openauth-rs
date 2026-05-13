@@ -1,1 +1,0 @@
-//! Figma provider placeholder.

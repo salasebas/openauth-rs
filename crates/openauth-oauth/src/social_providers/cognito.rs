@@ -1,1 +1,0 @@
-//! Cognito provider placeholder.

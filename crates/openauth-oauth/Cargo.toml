@@ -15,7 +15,16 @@ categories.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+base64.workspace = true
+josekit.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
+url.workspace = true
 
 [lints]
 workspace = true

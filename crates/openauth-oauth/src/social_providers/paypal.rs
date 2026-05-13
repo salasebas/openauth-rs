@@ -1,1 +1,0 @@
-//! PayPal provider placeholder.
