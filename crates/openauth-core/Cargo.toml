@@ -23,6 +23,8 @@ hmac.workspace = true
 http.workspace = true
 indexmap.workspace = true
 josekit.workspace = true
+openauth-oauth = { path = "../openauth-oauth", version = "0.0.1" }
+openauth-social-providers = { path = "../openauth-social-providers", version = "0.0.1" }
 rand.workspace = true
 scrypt.workspace = true
 serde.workspace = true

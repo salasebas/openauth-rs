@@ -3,7 +3,7 @@
 use crate::auth::trusted_origins::{matches_origin_pattern, OriginMatchSettings};
 use crate::cookies::{get_cookies, AuthCookies};
 use crate::crypto::password::{hash_password, verify_password};
-use crate::crypto::{build_secret_config, parse_secrets_env, SecretConfig};
+use crate::crypto::{build_secret_config, parse_secrets_env, JweSecretSource, SecretConfig};
 use crate::env::is_production;
 use crate::env::logger::{create_logger, Logger, LoggerOptions};
 use crate::error::OpenAuthError;
@@ -99,6 +99,22 @@ impl fmt::Debug for SecretMaterial {
                 .field(&"<redacted>")
                 .finish(),
             Self::Rotating(config) => formatter.debug_tuple("Rotating").field(config).finish(),
+        }
+    }
+}
+
+impl JweSecretSource for SecretMaterial {
+    fn current_jwe_secret(&self) -> Result<String, OpenAuthError> {
+        match self {
+            Self::Single(secret) => secret.current_jwe_secret(),
+            Self::Rotating(config) => config.current_jwe_secret(),
+        }
+    }
+
+    fn all_jwe_secrets(&self) -> Result<Vec<crate::crypto::jwe::JweSecret>, OpenAuthError> {
+        match self {
+            Self::Single(secret) => secret.all_jwe_secrets(),
+            Self::Rotating(config) => config.all_jwe_secrets(),
         }
     }
 }

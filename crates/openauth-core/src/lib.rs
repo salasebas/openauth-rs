@@ -16,5 +16,8 @@ pub mod user;
 pub mod utils;
 pub mod verification;
 
+pub use openauth_oauth as oauth;
+pub use openauth_social_providers as social_providers;
+
 /// Current crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -86,6 +86,30 @@ pub struct CreateCredentialAccountInput {
     pub password_hash: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateOAuthAccountInput {
+    pub id: Option<String>,
+    pub provider_id: String,
+    pub account_id: String,
+    pub user_id: String,
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub id_token: Option<String>,
+    pub access_token_expires_at: Option<OffsetDateTime>,
+    pub refresh_token_expires_at: Option<OffsetDateTime>,
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UpdateAccountInput {
+    pub access_token: Option<Option<String>>,
+    pub refresh_token: Option<Option<String>>,
+    pub id_token: Option<Option<String>>,
+    pub access_token_expires_at: Option<Option<OffsetDateTime>>,
+    pub refresh_token_expires_at: Option<Option<OffsetDateTime>>,
+    pub scope: Option<Option<String>>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UpdateUserInput {
     pub name: Option<String>,
@@ -134,6 +158,19 @@ impl CreateCredentialAccountInput {
 pub struct UserWithAccounts {
     pub user: User,
     pub accounts: Vec<Account>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthUserLookup {
+    pub user: User,
+    pub accounts: Vec<Account>,
+    pub linked_account: Option<Account>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateOAuthUserResult {
+    pub user: User,
+    pub account: Account,
 }
 
 #[derive(Clone, Copy)]
@@ -209,6 +246,57 @@ impl<'a> DbUserStore<'a> {
         account_from_record(record)
     }
 
+    pub async fn link_account(
+        &self,
+        input: CreateOAuthAccountInput,
+    ) -> Result<Account, OpenAuthError> {
+        let now = OffsetDateTime::now_utc();
+        let id = input
+            .id
+            .unwrap_or_else(|| generate_random_string(DEFAULT_ID_LENGTH));
+
+        let record = self
+            .adapter
+            .create(
+                Create::new(ACCOUNT_MODEL)
+                    .data("id", DbValue::String(id))
+                    .data("provider_id", DbValue::String(input.provider_id))
+                    .data("account_id", DbValue::String(input.account_id))
+                    .data("user_id", DbValue::String(input.user_id))
+                    .data("access_token", optional_string(input.access_token))
+                    .data("refresh_token", optional_string(input.refresh_token))
+                    .data("id_token", optional_string(input.id_token))
+                    .data(
+                        "access_token_expires_at",
+                        optional_timestamp(input.access_token_expires_at),
+                    )
+                    .data(
+                        "refresh_token_expires_at",
+                        optional_timestamp(input.refresh_token_expires_at),
+                    )
+                    .data("scope", optional_string(input.scope))
+                    .data("password", DbValue::Null)
+                    .data("created_at", DbValue::Timestamp(now))
+                    .data("updated_at", DbValue::Timestamp(now))
+                    .select(ACCOUNT_FIELDS)
+                    .force_allow_id(),
+            )
+            .await?;
+
+        account_from_record(record)
+    }
+
+    pub async fn create_oauth_user(
+        &self,
+        user: CreateUserInput,
+        mut account: CreateOAuthAccountInput,
+    ) -> Result<CreateOAuthUserResult, OpenAuthError> {
+        let user = self.create_user(user).await?;
+        account.user_id = user.id.clone();
+        let account = self.link_account(account).await?;
+        Ok(CreateOAuthUserResult { user, account })
+    }
+
     pub async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, OpenAuthError> {
         let record = self
             .adapter
@@ -246,6 +334,31 @@ impl<'a> DbUserStore<'a> {
         Ok(Some(UserWithAccounts { user, accounts }))
     }
 
+    pub async fn find_oauth_user(
+        &self,
+        email: &str,
+        account_id: &str,
+        provider_id: &str,
+    ) -> Result<Option<OAuthUserLookup>, OpenAuthError> {
+        let linked_account = self
+            .find_account_by_provider_account(account_id, provider_id)
+            .await?;
+        let user = if let Some(account) = &linked_account {
+            self.find_user_by_id(&account.user_id).await?
+        } else {
+            self.find_user_by_email(email).await?
+        };
+        let Some(user) = user else {
+            return Ok(None);
+        };
+        let accounts = self.list_accounts_for_user(&user.id).await?;
+        Ok(Some(OAuthUserLookup {
+            user,
+            accounts,
+            linked_account,
+        }))
+    }
+
     pub async fn list_accounts_for_user(
         &self,
         user_id: &str,
@@ -280,6 +393,64 @@ impl<'a> DbUserStore<'a> {
             .await?;
 
         record.map(account_from_record).transpose()
+    }
+
+    pub async fn find_account_by_provider_account(
+        &self,
+        account_id: &str,
+        provider_id: &str,
+    ) -> Result<Option<Account>, OpenAuthError> {
+        let record = self
+            .adapter
+            .find_one(
+                FindOne::new(ACCOUNT_MODEL)
+                    .where_clause(Where::new(
+                        "account_id",
+                        DbValue::String(account_id.to_owned()),
+                    ))
+                    .where_clause(Where::new(
+                        "provider_id",
+                        DbValue::String(provider_id.to_owned()),
+                    ))
+                    .select(ACCOUNT_FIELDS),
+            )
+            .await?;
+
+        record.map(account_from_record).transpose()
+    }
+
+    pub async fn update_account(
+        &self,
+        account_id: &str,
+        input: UpdateAccountInput,
+    ) -> Result<Option<Account>, OpenAuthError> {
+        let mut query = Update::new(ACCOUNT_MODEL)
+            .where_clause(Where::new("id", DbValue::String(account_id.to_owned())))
+            .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc()));
+        if let Some(value) = input.access_token {
+            query = query.data("access_token", optional_string(value));
+        }
+        if let Some(value) = input.refresh_token {
+            query = query.data("refresh_token", optional_string(value));
+        }
+        if let Some(value) = input.id_token {
+            query = query.data("id_token", optional_string(value));
+        }
+        if let Some(value) = input.access_token_expires_at {
+            query = query.data("access_token_expires_at", optional_timestamp(value));
+        }
+        if let Some(value) = input.refresh_token_expires_at {
+            query = query.data("refresh_token_expires_at", optional_timestamp(value));
+        }
+        if let Some(value) = input.scope {
+            query = query.data("scope", optional_string(value));
+        }
+
+        self.adapter
+            .update(query)
+            .await?
+            .map(account_from_record)
+            .transpose()
     }
 
     pub async fn update_user(
@@ -398,6 +569,10 @@ fn normalize_email(email: &str) -> String {
 
 fn optional_string(value: Option<String>) -> DbValue {
     value.map(DbValue::String).unwrap_or(DbValue::Null)
+}
+
+fn optional_timestamp(value: Option<OffsetDateTime>) -> DbValue {
+    value.map(DbValue::Timestamp).unwrap_or(DbValue::Null)
 }
 
 fn user_from_record(record: DbRecord) -> Result<User, OpenAuthError> {
