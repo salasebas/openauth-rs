@@ -1,7 +1,7 @@
 use http::StatusCode;
 use serde_json::{json, Value};
 
-use crate::context::request_state::run_with_request_state;
+use crate::context::request_state::{run_with_request_state, set_current_request_path};
 use crate::context::AuthContext;
 use crate::error::OpenAuthError;
 use crate::plugin::{PluginBeforeHookAction, PluginRequestAction};
@@ -16,8 +16,8 @@ use super::error::{api_error, rate_limit_response, response, ApiErrorCode};
 use super::openapi::{openapi_model_schemas, openapi_operation_for_endpoint, to_openapi_path};
 use super::path::{match_path_pattern, route_pathname, PathParams};
 use super::plugin_pipeline::{
-    endpoint_operation_id, plugin_async_endpoints, run_after_hooks, run_before_hooks,
-    run_matching_middlewares, run_on_request_plugins, run_on_response_plugins,
+    endpoint_operation_id, plugin_async_endpoints, run_after_hooks, run_after_hooks_async,
+    run_before_hooks, run_matching_middlewares, run_on_request_plugins, run_on_response_plugins,
     validate_endpoint_conflicts,
 };
 use super::security::validate_request_security;
@@ -258,6 +258,7 @@ impl AuthRouter {
             return rate_limit_response(rejection);
         }
         if let Some((endpoint, params)) = async_endpoint {
+            set_current_request_path(path.clone())?;
             request.extensions_mut().insert(PathParams::new(params));
             if let Some(response) = validate_async_endpoint_request(endpoint, &request)? {
                 return Ok(response);
@@ -278,18 +279,20 @@ impl AuthRouter {
                 PluginBeforeHookAction::Respond(response) => return Ok(response),
             };
             let response = (endpoint.handler)(&self.context, request.clone()).await?;
-            let response = run_after_hooks(
+            let response = run_after_hooks_async(
                 &self.context,
                 &request,
                 response,
                 &endpoint.method,
                 &path,
                 endpoint_operation_id(endpoint),
-            )?;
+            )
+            .await?;
             on_response_rate_limit(&self.context, &request)?;
             return run_on_response_plugins(&self.context, &request, response);
         }
         if let Some((endpoint, params)) = sync_endpoint {
+            set_current_request_path(path.clone())?;
             request.extensions_mut().insert(PathParams::new(params));
             request = match run_before_hooks(&self.context, request, &endpoint.method, &path, None)?
             {

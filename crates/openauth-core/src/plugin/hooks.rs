@@ -5,6 +5,8 @@ use crate::context::AuthContext;
 use crate::error::OpenAuthError;
 use http::Method;
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 pub type PluginBeforeHookHandler = Arc<
@@ -12,6 +14,13 @@ pub type PluginBeforeHookHandler = Arc<
 >;
 pub type PluginAfterHookHandler = Arc<
     dyn Fn(&AuthContext, &ApiRequest, ApiResponse) -> Result<PluginAfterHookAction, OpenAuthError>
+        + Send
+        + Sync,
+>;
+pub type PluginAfterHookFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<PluginAfterHookAction, OpenAuthError>> + Send + 'a>>;
+pub type PluginAfterHookAsyncHandler = Arc<
+    dyn for<'a> Fn(&'a AuthContext, &'a ApiRequest, ApiResponse) -> PluginAfterHookFuture<'a>
         + Send
         + Sync,
 >;
@@ -107,10 +116,27 @@ impl fmt::Debug for PluginAfterHook {
     }
 }
 
+#[derive(Clone)]
+pub struct PluginAfterAsyncHook {
+    pub matcher: PluginHookMatcher,
+    pub handler: PluginAfterHookAsyncHandler,
+}
+
+impl fmt::Debug for PluginAfterAsyncHook {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PluginAfterAsyncHook")
+            .field("matcher", &self.matcher)
+            .field("handler", &"<after-async-hook>")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PluginEndpointHooks {
     pub before: Vec<PluginBeforeHook>,
     pub after: Vec<PluginAfterHook>,
+    pub after_async: Vec<PluginAfterAsyncHook>,
 }
 
 fn path_matches(pattern: &str, path: &str) -> bool {
