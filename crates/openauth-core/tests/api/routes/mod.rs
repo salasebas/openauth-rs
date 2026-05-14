@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use http::{header, Method, Request, StatusCode};
-use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
+use openauth_core::api::{core_auth_async_endpoints, ApiErrorResponse, AuthRouter};
 use openauth_core::context::{create_auth_context, create_auth_context_with_adapter};
 use openauth_core::cookies::Cookie;
 use openauth_core::crypto::password::hash_password;
@@ -13,6 +13,7 @@ use openauth_core::db::{
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
+use openauth_core::plugin::{AuthPlugin, PluginPasswordValidationRejection};
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 
@@ -57,6 +58,7 @@ mod get_session;
 mod list_accounts;
 mod list_sessions;
 mod openapi;
+mod password_validators;
 mod request_password_reset;
 mod reset_password;
 mod revoke_other_sessions;
@@ -297,4 +299,18 @@ fn string_field<'a>(record: &'a DbRecord, field: &str) -> Result<&'a str, OpenAu
             "missing string field `{field}`"
         ))),
     }
+}
+
+fn rejecting_password_plugin(path: &'static str) -> AuthPlugin {
+    AuthPlugin::new("password-validator").with_password_validator(move |_context, input| {
+        Box::pin(async move {
+            if input.path == path {
+                return Err(PluginPasswordValidationRejection::bad_request(
+                    "PASSWORD_COMPROMISED",
+                    "compromised",
+                ));
+            }
+            Ok(())
+        })
+    })
 }

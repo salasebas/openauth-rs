@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use super::shared::{
     auth_flow_error_response, auth_session_cookies, email_password_config, json_response,
-    message_openapi_response, sign_up_email_openapi_response, RequestMetadata,
+    message_openapi_response, password_validation_rejection_response,
+    sign_up_email_openapi_response, RequestMetadata,
 };
+use crate::api::plugin_pipeline::run_password_validators;
 use crate::api::{
     create_auth_endpoint, parse_request_body, AsyncAuthEndpoint, AuthEndpointOptions, BodyField,
     BodySchema, JsonSchemaType, OpenApiOperation,
@@ -61,6 +63,11 @@ pub(super) fn sign_up_email_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEn
                     input = input.image(image);
                 }
                 input = input.with_request_metadata(&request);
+                if let Err(rejection) =
+                    run_password_validators(context, "/sign-up/email", &input.password).await
+                {
+                    return password_validation_rejection_response(rejection);
+                }
 
                 let auth = EmailPasswordAuth::new(
                     adapter.as_ref(),

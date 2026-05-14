@@ -45,6 +45,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 scrypt = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha1 = "0.10"
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "time", "json"] }
 subtle = "2"

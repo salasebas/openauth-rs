@@ -5,6 +5,7 @@ mod endpoint;
 mod error;
 mod hooks;
 mod init;
+mod password;
 mod rate_limit;
 mod schema;
 
@@ -20,6 +21,10 @@ pub use hooks::{
     PluginBeforeHookAction, PluginBeforeHookHandler, PluginEndpointHooks, PluginHookMatcher,
 };
 pub use init::{PluginInitHandler, PluginInitOutput};
+pub use password::{
+    PluginPasswordValidationInput, PluginPasswordValidationRejection, PluginPasswordValidator,
+    PluginPasswordValidatorFuture, PluginPasswordValidatorHandler,
+};
 pub use rate_limit::PluginRateLimitRule;
 pub use schema::PluginSchemaContribution;
 
@@ -66,6 +71,7 @@ pub struct AuthPlugin {
     pub database_hooks: Vec<PluginDatabaseHook>,
     pub migrations: Vec<PluginMigration>,
     pub social_providers: Vec<Arc<dyn SocialOAuthProvider>>,
+    pub password_validators: Vec<PluginPasswordValidator>,
 }
 
 impl AuthPlugin {
@@ -86,6 +92,7 @@ impl AuthPlugin {
             database_hooks: Vec::new(),
             migrations: Vec::new(),
             social_providers: Vec::new(),
+            password_validators: Vec::new(),
         }
     }
 
@@ -177,6 +184,22 @@ impl AuthPlugin {
         self
     }
 
+    pub fn with_password_validator<F>(mut self, validator: F) -> Self
+    where
+        F: for<'a> Fn(
+                &'a AuthContext,
+                PluginPasswordValidationInput,
+            ) -> PluginPasswordValidatorFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.password_validators.push(PluginPasswordValidator {
+            handler: Arc::new(validator),
+        });
+        self
+    }
+
     pub fn with_middleware<F>(mut self, path: impl Into<String>, middleware: F) -> Self
     where
         F: Fn(&AuthContext, &PluginRequest) -> Result<Option<PluginResponse>, OpenAuthError>
@@ -244,6 +267,7 @@ impl fmt::Debug for AuthPlugin {
                     .map(|provider| provider.id())
                     .collect::<Vec<_>>(),
             )
+            .field("password_validators", &self.password_validators)
             .finish()
     }
 }

@@ -5,6 +5,7 @@ use http::Method;
 use crate::context::AuthContext;
 use crate::error::OpenAuthError;
 use crate::plugin::{PluginAfterHookAction, PluginBeforeHookAction, PluginRequestAction};
+use crate::plugin::{PluginPasswordValidationInput, PluginPasswordValidationRejection};
 
 use super::endpoint::{ApiRequest, ApiResponse, AsyncAuthEndpoint, AuthEndpoint};
 use super::path::path_matches;
@@ -54,6 +55,20 @@ pub(super) fn run_on_response_plugins(
         }
     }
     Ok(response)
+}
+
+pub(super) async fn run_password_validators(
+    context: &AuthContext,
+    path: &str,
+    password: &str,
+) -> Result<(), PluginPasswordValidationRejection> {
+    for plugin in &context.plugins {
+        for validator in &plugin.password_validators {
+            (validator.handler)(context, PluginPasswordValidationInput::new(path, password))
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn run_before_hooks(
