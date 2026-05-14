@@ -339,6 +339,69 @@ async fn before_and_after_hooks_wrap_plugin_endpoint() -> Result<(), Box<dyn std
     Ok(())
 }
 
+#[tokio::test]
+async fn async_before_and_after_hooks_wrap_plugin_endpoint(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let plugin_endpoint = create_auth_endpoint(
+        "/async-hooked",
+        Method::GET,
+        Default::default(),
+        |_context, request| {
+            Box::pin(async move {
+                if request.headers().get("x-async-before").is_some() {
+                    response(StatusCode::OK, b"async-before".to_vec())
+                } else {
+                    response(StatusCode::BAD_REQUEST, b"missing".to_vec())
+                }
+            })
+        },
+    );
+    let plugin = AuthPlugin::new("async-hook-plugin")
+        .with_endpoint(plugin_endpoint)
+        .with_async_before_hook("/async-hooked", |_context, mut request| {
+            Box::pin(async move {
+                request
+                    .headers_mut()
+                    .insert("x-async-before", http::HeaderValue::from_static("1"));
+                Ok(PluginBeforeHookAction::Continue(request))
+            })
+        })
+        .with_async_after_hook("/async-hooked", |_context, _request, mut response| {
+            Box::pin(async move {
+                response
+                    .headers_mut()
+                    .insert("x-async-after", http::HeaderValue::from_static("1"));
+                Ok(PluginAfterHookAction::Continue(response))
+            })
+        });
+    let context = create_auth_context(OpenAuthOptions {
+        plugins: vec![plugin],
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::with_async_endpoints(context, Vec::new(), Vec::new())?;
+
+    let response = router
+        .handle_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/async-hooked")
+                .body(Vec::new())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.body(), b"async-before");
+    assert_eq!(
+        response
+            .headers()
+            .get("x-async-after")
+            .ok_or("missing async after hook header")?,
+        "1"
+    );
+    Ok(())
+}
+
 #[test]
 fn plugin_error_codes_are_registered_and_validated() -> Result<(), Box<dyn std::error::Error>> {
     let plugin = AuthPlugin::new("errors")

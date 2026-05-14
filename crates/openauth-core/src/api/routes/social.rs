@@ -1,15 +1,16 @@
-use http::{header, HeaderValue, Method, StatusCode};
+mod support;
+
+use http::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
 use super::shared::{
-    auth_session_cookies, current_session, error_response, json_response, query_param,
-    serialize_cookie, unauthorized,
+    auth_session_cookies, current_session, error_response, json_response, query_param, unauthorized,
 };
 use crate::api::{
     create_auth_endpoint, parse_request_body, ApiRequest, ApiResponse, AsyncAuthEndpoint,
-    AuthEndpointOptions, BodyField, BodySchema, JsonSchemaType, OpenApiOperation, PathParams,
+    AuthEndpointOptions, OpenApiOperation,
 };
 use crate::auth::oauth::{
     generate_oauth_state, handle_oauth_user_info, HandleOAuthUserInfoInput, OAuthAccountInput,
@@ -21,6 +22,12 @@ use crate::user::{CreateOAuthAccountInput, DbUserStore};
 use openauth_oauth::oauth2::{
     OAuth2Tokens, OAuth2UserInfo, SocialAuthorizationCodeRequest, SocialAuthorizationUrlRequest,
     SocialIdTokenRequest, SocialOAuthProvider,
+};
+
+use support::{
+    body_string, link_social_body_schema, oauth_user_info_error, path_param, percent_encode,
+    redirect, redirect_json_response, redirect_uri, redirect_with_error,
+    social_sign_in_body_schema,
 };
 
 #[derive(Debug, Deserialize)]
@@ -81,12 +88,6 @@ struct IdTokenBody {
 }
 
 #[derive(Debug, Serialize)]
-struct SocialRedirectBody {
-    url: String,
-    redirect: bool,
-}
-
-#[derive(Debug, Serialize)]
 struct SocialSessionBody {
     redirect: bool,
     token: String,
@@ -137,7 +138,7 @@ pub(super) fn sign_in_social_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthE
                 .await?;
                 let url = provider.create_authorization_url(SocialAuthorizationUrlRequest {
                     state: state.state,
-                    redirect_uri: redirect_uri(context, provider.id()),
+                    redirect_uri: redirect_uri(context, &request, provider.id()),
                     code_verifier: Some(state.data.code_verifier),
                     scopes: body.scopes,
                     login_hint: body.login_hint,
@@ -221,7 +222,7 @@ pub(super) fn link_social_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
                 .await?;
                 let url = provider.create_authorization_url(SocialAuthorizationUrlRequest {
                     state: state.state,
-                    redirect_uri: redirect_uri(context, provider.id()),
+                    redirect_uri: redirect_uri(context, &request, provider.id()),
                     code_verifier: Some(state.data.code_verifier),
                     scopes: body.scopes,
                     login_hint: None,
@@ -325,7 +326,7 @@ async fn callback_get(
         .validate_authorization_code(SocialAuthorizationCodeRequest {
             code,
             code_verifier: Some(state_data.code_verifier),
-            redirect_uri: redirect_uri(context, provider.id()),
+            redirect_uri: redirect_uri(context, &request, provider.id()),
             device_id: query_param(&request, "device_id"),
         })
         .await
@@ -384,17 +385,6 @@ async fn callback_get(
         &state_data.callback_url
     };
     redirect(target, cookies)
-}
-
-fn oauth_user_info_error(error: crate::auth::oauth::OAuthUserInfoError) -> String {
-    match error {
-        crate::auth::oauth::OAuthUserInfoError::AccountNotLinked => "account_not_linked",
-        crate::auth::oauth::OAuthUserInfoError::SignupDisabled => "signup_disabled",
-        crate::auth::oauth::OAuthUserInfoError::UnableToCreateUser => "unable_to_create_user",
-        crate::auth::oauth::OAuthUserInfoError::UnableToCreateSession => "unable_to_create_session",
-        crate::auth::oauth::OAuthUserInfoError::UnableToLinkAccount => "unable_to_link_account",
-    }
-    .to_owned()
 }
 
 fn callback_post_redirect(
@@ -599,105 +589,4 @@ fn tokens_from_id_token(id_token: &IdTokenBody) -> OAuth2Tokens {
         scopes: id_token.scopes.clone(),
         ..OAuth2Tokens::default()
     }
-}
-
-fn path_param<'a>(request: &'a ApiRequest, name: &str) -> Result<&'a str, OpenAuthError> {
-    request
-        .extensions()
-        .get::<PathParams>()
-        .and_then(|params| params.get(name))
-        .ok_or_else(|| OpenAuthError::Api(format!("missing path param `{name}`")))
-}
-
-fn redirect_uri(context: &crate::context::AuthContext, provider_id: &str) -> String {
-    format!(
-        "{}/callback/{provider_id}",
-        context.base_url.trim_end_matches('/')
-    )
-}
-
-fn redirect_json_response(url: String, redirect: bool) -> Result<ApiResponse, OpenAuthError> {
-    let mut response = json_response(
-        StatusCode::OK,
-        &SocialRedirectBody {
-            url: url.clone(),
-            redirect,
-        },
-        Vec::new(),
-    )?;
-    if redirect {
-        response.headers_mut().insert(
-            header::LOCATION,
-            HeaderValue::from_str(&url).map_err(|error| OpenAuthError::Api(error.to_string()))?,
-        );
-    }
-    Ok(response)
-}
-
-fn redirect(
-    location: &str,
-    cookies: Vec<crate::cookies::Cookie>,
-) -> Result<ApiResponse, OpenAuthError> {
-    let mut response = http::Response::builder()
-        .status(StatusCode::FOUND)
-        .header(header::LOCATION, location)
-        .body(Vec::new())
-        .map_err(|error| OpenAuthError::Api(error.to_string()))?;
-    for cookie in cookies {
-        response.headers_mut().append(
-            header::SET_COOKIE,
-            HeaderValue::from_str(&serialize_cookie(&cookie))
-                .map_err(|error| OpenAuthError::Cookie(error.to_string()))?,
-        );
-    }
-    Ok(response)
-}
-
-fn redirect_with_error(location: &str, error: &str) -> Result<ApiResponse, OpenAuthError> {
-    let separator = if location.contains('?') { '&' } else { '?' };
-    redirect(
-        &format!("{location}{separator}error={}", percent_encode(error)),
-        Vec::new(),
-    )
-}
-
-fn body_string(body: &Value, key: &str) -> Option<String> {
-    body.get(key).and_then(|value| match value {
-        Value::String(value) => Some(value.clone()),
-        Value::Number(value) => Some(value.to_string()),
-        Value::Bool(value) => Some(value.to_string()),
-        _ => None,
-    })
-}
-
-fn percent_encode(value: &str) -> String {
-    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
-}
-
-fn social_sign_in_body_schema() -> BodySchema {
-    BodySchema::object([
-        BodyField::new("provider", JsonSchemaType::String),
-        BodyField::optional("callbackURL", JsonSchemaType::String),
-        BodyField::optional("errorCallbackURL", JsonSchemaType::String),
-        BodyField::optional("newUserCallbackURL", JsonSchemaType::String),
-        BodyField::optional("disableRedirect", JsonSchemaType::Boolean),
-        BodyField::optional("scopes", JsonSchemaType::Array),
-        BodyField::optional("loginHint", JsonSchemaType::String),
-        BodyField::optional("requestSignUp", JsonSchemaType::Boolean),
-        BodyField::optional("additionalData", JsonSchemaType::Object),
-        BodyField::optional("idToken", JsonSchemaType::Object),
-    ])
-}
-
-fn link_social_body_schema() -> BodySchema {
-    BodySchema::object([
-        BodyField::new("provider", JsonSchemaType::String),
-        BodyField::optional("callbackURL", JsonSchemaType::String),
-        BodyField::optional("errorCallbackURL", JsonSchemaType::String),
-        BodyField::optional("disableRedirect", JsonSchemaType::Boolean),
-        BodyField::optional("scopes", JsonSchemaType::Array),
-        BodyField::optional("requestSignUp", JsonSchemaType::Boolean),
-        BodyField::optional("additionalData", JsonSchemaType::Object),
-        BodyField::optional("idToken", JsonSchemaType::Object),
-    ])
 }

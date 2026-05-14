@@ -16,6 +16,8 @@ pub use db::{
 pub use endpoint::PluginEndpoint;
 pub use error::PluginErrorCode;
 pub use hooks::{
+    AsyncPluginAfterHook, AsyncPluginAfterHookFuture, AsyncPluginAfterHookHandler,
+    AsyncPluginBeforeHook, AsyncPluginBeforeHookFuture, AsyncPluginBeforeHookHandler,
     PluginAfterHook, PluginAfterHookAction, PluginAfterHookHandler, PluginBeforeHook,
     PluginBeforeHookAction, PluginBeforeHookHandler, PluginEndpointHooks, PluginHookMatcher,
 };
@@ -148,6 +150,38 @@ impl AuthPlugin {
             + 'static,
     {
         self.hooks.after.push(PluginAfterHook {
+            matcher: PluginHookMatcher::path(path),
+            handler: Arc::new(hook),
+        });
+        self
+    }
+
+    pub fn with_async_before_hook<F>(mut self, path: impl Into<String>, hook: F) -> Self
+    where
+        F: for<'a> Fn(&'a AuthContext, PluginRequest) -> AsyncPluginBeforeHookFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.hooks.async_before.push(AsyncPluginBeforeHook {
+            matcher: PluginHookMatcher::path(path),
+            handler: Arc::new(hook),
+        });
+        self
+    }
+
+    pub fn with_async_after_hook<F>(mut self, path: impl Into<String>, hook: F) -> Self
+    where
+        F: for<'a> Fn(
+                &'a AuthContext,
+                &'a PluginRequest,
+                PluginResponse,
+            ) -> AsyncPluginAfterHookFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.hooks.async_after.push(AsyncPluginAfterHook {
             matcher: PluginHookMatcher::path(path),
             handler: Arc::new(hook),
         });

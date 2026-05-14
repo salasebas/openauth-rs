@@ -5,6 +5,8 @@ use crate::context::AuthContext;
 use crate::error::OpenAuthError;
 use http::Method;
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 pub type PluginBeforeHookHandler = Arc<
@@ -12,6 +14,18 @@ pub type PluginBeforeHookHandler = Arc<
 >;
 pub type PluginAfterHookHandler = Arc<
     dyn Fn(&AuthContext, &ApiRequest, ApiResponse) -> Result<PluginAfterHookAction, OpenAuthError>
+        + Send
+        + Sync,
+>;
+pub type AsyncPluginBeforeHookFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<PluginBeforeHookAction, OpenAuthError>> + Send + 'a>>;
+pub type AsyncPluginAfterHookFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<PluginAfterHookAction, OpenAuthError>> + Send + 'a>>;
+pub type AsyncPluginBeforeHookHandler = Arc<
+    dyn for<'a> Fn(&'a AuthContext, ApiRequest) -> AsyncPluginBeforeHookFuture<'a> + Send + Sync,
+>;
+pub type AsyncPluginAfterHookHandler = Arc<
+    dyn for<'a> Fn(&'a AuthContext, &'a ApiRequest, ApiResponse) -> AsyncPluginAfterHookFuture<'a>
         + Send
         + Sync,
 >;
@@ -107,15 +121,57 @@ impl fmt::Debug for PluginAfterHook {
     }
 }
 
+#[derive(Clone)]
+pub struct AsyncPluginBeforeHook {
+    pub matcher: PluginHookMatcher,
+    pub handler: AsyncPluginBeforeHookHandler,
+}
+
+impl fmt::Debug for AsyncPluginBeforeHook {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AsyncPluginBeforeHook")
+            .field("matcher", &self.matcher)
+            .field("handler", &"<async-before-hook>")
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct AsyncPluginAfterHook {
+    pub matcher: PluginHookMatcher,
+    pub handler: AsyncPluginAfterHookHandler,
+}
+
+impl fmt::Debug for AsyncPluginAfterHook {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AsyncPluginAfterHook")
+            .field("matcher", &self.matcher)
+            .field("handler", &"<async-after-hook>")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PluginEndpointHooks {
     pub before: Vec<PluginBeforeHook>,
     pub after: Vec<PluginAfterHook>,
+    pub async_before: Vec<AsyncPluginBeforeHook>,
+    pub async_after: Vec<AsyncPluginAfterHook>,
 }
 
 fn path_matches(pattern: &str, path: &str) -> bool {
     if let Some((prefix, suffix)) = pattern.split_once('*') {
         return path.starts_with(prefix) && path.ends_with(suffix);
     }
-    pattern == path
+    let pattern_segments = pattern.trim_matches('/').split('/').collect::<Vec<_>>();
+    let path_segments = path.trim_matches('/').split('/').collect::<Vec<_>>();
+    if pattern_segments.len() != path_segments.len() {
+        return false;
+    }
+    pattern_segments
+        .iter()
+        .zip(path_segments.iter())
+        .all(|(expected, actual)| expected.starts_with(':') || expected == actual)
 }
