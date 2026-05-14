@@ -19,7 +19,10 @@ pub use client_credentials_token::{
     create_client_credentials_token_request, ClientCredentialsGrant, ClientCredentialsTokenRequest,
 };
 pub use error::OAuthError;
-pub use provider::{OAuthProviderContract, OAuthProviderMetadata};
+pub use provider::{
+    OAuthProviderContract, OAuthProviderMetadata, SocialAuthorizationCodeRequest,
+    SocialAuthorizationUrlRequest, SocialIdTokenRequest, SocialOAuthProvider, SocialProviderFuture,
+};
 pub use refresh_access_token::{
     create_refresh_access_token_request, refresh_access_token, refresh_access_token_request,
     RefreshAccessTokenRequest,
