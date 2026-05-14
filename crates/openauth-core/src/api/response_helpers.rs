@@ -2,6 +2,7 @@ use http::{header, HeaderValue, StatusCode};
 use serde::Serialize;
 use time::OffsetDateTime;
 
+use crate::context::request_state::{has_request_state, set_current_new_session};
 use crate::context::AuthContext;
 use crate::cookies::{
     set_cookie_cache, set_session_cookie, Cookie, CookieCachePayload, CookieOptions,
@@ -63,6 +64,9 @@ pub fn session_cookies(
     user: &User,
     dont_remember: bool,
 ) -> Result<Vec<Cookie>, OpenAuthError> {
+    if has_request_state() {
+        set_current_new_session(session.clone(), user.clone())?;
+    }
     let mut cookies = set_session_cookie(
         &context.auth_cookies,
         &context.secret,

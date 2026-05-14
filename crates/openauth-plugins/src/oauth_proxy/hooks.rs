@@ -7,8 +7,8 @@ use openauth_core::auth::oauth::{
 use openauth_core::context::AuthContext;
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::OAuthStateStoreStrategy;
-use openauth_core::plugin::{AsyncPluginAfterHookFuture, AsyncPluginBeforeHookFuture};
 use openauth_core::plugin::{PluginAfterHookAction, PluginBeforeHookAction};
+use openauth_core::plugin::{PluginAfterHookFuture, PluginBeforeHookFuture};
 use openauth_core::verification::DbVerificationStore;
 use openauth_oauth::oauth2::SocialAuthorizationCodeRequest;
 use time::OffsetDateTime;
@@ -23,10 +23,8 @@ use super::utils::{
 
 pub(crate) fn before_sign_in(
     options: OAuthProxyOptions,
-) -> impl for<'a> Fn(&'a AuthContext, ApiRequest) -> AsyncPluginBeforeHookFuture<'a>
-       + Send
-       + Sync
-       + 'static {
+) -> impl for<'a> Fn(&'a AuthContext, ApiRequest) -> PluginBeforeHookFuture<'a> + Send + Sync + 'static
+{
     move |context, mut request| {
         let options = options.clone();
         Box::pin(async move {
@@ -49,7 +47,7 @@ pub(crate) fn before_sign_in(
 
 pub(crate) fn after_sign_in(
     options: OAuthProxyOptions,
-) -> impl for<'a> Fn(&'a AuthContext, &'a ApiRequest, ApiResponse) -> AsyncPluginAfterHookFuture<'a>
+) -> impl for<'a> Fn(&'a AuthContext, &'a ApiRequest, ApiResponse) -> PluginAfterHookFuture<'a>
        + Send
        + Sync
        + 'static {
@@ -79,9 +77,14 @@ pub(crate) fn after_sign_in(
             let Some(state_data) = load_state_data(context, &state).await? else {
                 return Ok(PluginAfterHookAction::Continue(response));
             };
+            let state_cookie = encrypt(
+                context,
+                &options,
+                &serde_json::to_string(&state_data).map_err(json_error)?,
+            )?;
             let package = OAuthProxyStatePackage {
                 state,
-                state_data,
+                state_cookie,
                 is_oauth_proxy: true,
             };
             let encrypted = encrypt(
@@ -121,10 +124,8 @@ pub(crate) fn after_sign_in(
 
 pub(crate) fn before_callback(
     options: OAuthProxyOptions,
-) -> impl for<'a> Fn(&'a AuthContext, ApiRequest) -> AsyncPluginBeforeHookFuture<'a>
-       + Send
-       + Sync
-       + 'static {
+) -> impl for<'a> Fn(&'a AuthContext, ApiRequest) -> PluginBeforeHookFuture<'a> + Send + Sync + 'static
+{
     move |context, request| {
         let options = options.clone();
         Box::pin(async move {
@@ -137,8 +138,19 @@ pub(crate) fn before_callback(
                 Ok(package) if package.is_oauth_proxy => package,
                 _ => return Ok(PluginBeforeHookAction::Continue(request)),
             };
-            let error_url = package
-                .state_data
+            let state_data = match decrypt(context, &options, &package.state_cookie)
+                .and_then(|json| serde_json::from_str::<OAuthStateData>(&json).map_err(json_error))
+            {
+                Ok(state_data) => state_data,
+                Err(_) => {
+                    return redirect_error(
+                        &format!("{}/error", context.base_url.trim_end_matches('/')),
+                        "invalid_state",
+                    )
+                    .map(PluginBeforeHookAction::Respond)
+                }
+            };
+            let error_url = state_data
                 .error_url
                 .clone()
                 .unwrap_or_else(|| format!("{}/error", context.base_url.trim_end_matches('/')));
@@ -160,7 +172,7 @@ pub(crate) fn before_callback(
             let tokens = match provider
                 .validate_authorization_code(SocialAuthorizationCodeRequest {
                     code,
-                    code_verifier: Some(package.state_data.code_verifier.clone()),
+                    code_verifier: Some(state_data.code_verifier.clone()),
                     redirect_uri: format!(
                         "{}/callback/{}",
                         context.base_url.trim_end_matches('/'),
@@ -189,12 +201,12 @@ pub(crate) fn before_callback(
                 return redirect_error(&error_url, "email_not_found")
                     .map(PluginBeforeHookAction::Respond);
             };
-            let proxy_url = Url::parse(&package.state_data.callback_url)
+            let proxy_url = Url::parse(&state_data.callback_url)
                 .map_err(|error| OpenAuthError::Api(error.to_string()))?;
             let final_callback = proxy_url
                 .query_pairs()
                 .find_map(|(key, value)| (key == "callbackURL").then(|| value.into_owned()))
-                .unwrap_or_else(|| package.state_data.callback_url.clone());
+                .unwrap_or_else(|| state_data.callback_url.clone());
             let payload = PassthroughPayload {
                 user_info: OAuthUserInfo {
                     id: user_info.id.clone(),
@@ -215,10 +227,10 @@ pub(crate) fn before_callback(
                 },
                 state: package.state,
                 callback_url: final_callback,
-                new_user_url: package.state_data.new_user_url,
-                error_url: package.state_data.error_url,
+                new_user_url: state_data.new_user_url,
+                error_url: state_data.error_url,
                 disable_sign_up: (provider.provider_options().disable_implicit_sign_up
-                    && !package.state_data.request_sign_up)
+                    && !state_data.request_sign_up)
                     || provider.provider_options().disable_sign_up,
                 timestamp: OffsetDateTime::now_utc().unix_timestamp(),
             };

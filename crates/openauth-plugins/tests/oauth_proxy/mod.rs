@@ -8,6 +8,7 @@ use openauth_core::db::{Count, DbAdapter, MemoryAdapter};
 use openauth_core::options::{
     AccountOptions, AdvancedOptions, OAuthStateStoreStrategy, OpenAuthOptions,
 };
+use openauth_core::user::{CreateUserInput, DbUserStore};
 use openauth_oauth::oauth2::{
     OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions, SocialAuthorizationCodeRequest,
     SocialAuthorizationUrlRequest, SocialIdTokenRequest, SocialOAuthProvider, SocialProviderFuture,
@@ -200,6 +201,109 @@ async fn rejects_invalid_and_expired_profiles() -> Result<(), Box<dyn std::error
 }
 
 #[tokio::test]
+async fn rejects_missing_malformed_and_future_profiles() -> Result<(), Box<dyn std::error::Error>> {
+    let router = router(
+        Arc::new(MemoryAdapter::default()),
+        "http://preview.example.com/api/auth",
+        OAuthProxyOptions::new(),
+    )?;
+
+    let missing = router
+        .handle_async(json_request(
+            Method::GET,
+            "http://preview.example.com/api/auth/oauth-proxy-callback?callbackURL=/dashboard",
+            "",
+        )?)
+        .await?;
+    assert!(location(&missing)?.contains("error=missing_profile"));
+
+    let malformed = symmetric_encrypt(SECRET, "not-json")?;
+    let malformed_response = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!(
+                "http://preview.example.com/api/auth/oauth-proxy-callback?callbackURL=/dashboard&profile={}",
+                url_encode(&malformed)
+            ),
+            "",
+        )?)
+        .await?;
+    assert!(location(&malformed_response)?.contains("error=invalid_payload"));
+
+    let mut missing_fields = passthrough_payload_json();
+    missing_fields["account"]["account_id"] = Value::String(String::new());
+    let encrypted_missing = symmetric_encrypt(SECRET, &missing_fields.to_string())?;
+    let missing_fields_response = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!(
+                "http://preview.example.com/api/auth/oauth-proxy-callback?callbackURL=/dashboard&profile={}",
+                url_encode(&encrypted_missing)
+            ),
+            "",
+        )?)
+        .await?;
+    assert!(location(&missing_fields_response)?.contains("error=invalid_payload"));
+
+    let mut nonnumeric = passthrough_payload_json();
+    nonnumeric["timestamp"] = Value::String("now".to_owned());
+    let encrypted_nonnumeric = symmetric_encrypt(SECRET, &nonnumeric.to_string())?;
+    let nonnumeric_response = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!(
+                "http://preview.example.com/api/auth/oauth-proxy-callback?callbackURL=/dashboard&profile={}",
+                url_encode(&encrypted_nonnumeric)
+            ),
+            "",
+        )?)
+        .await?;
+    assert!(location(&nonnumeric_response)?.contains("error=invalid_payload"));
+
+    let mut future = passthrough_payload_json();
+    future["timestamp"] =
+        Value::Number((time::OffsetDateTime::now_utc().unix_timestamp() + 11).into());
+    let encrypted_future = symmetric_encrypt(SECRET, &future.to_string())?;
+    let future_response = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!(
+                "http://preview.example.com/api/auth/oauth-proxy-callback?callbackURL=/dashboard&profile={}",
+                url_encode(&encrypted_future)
+            ),
+            "",
+        )?)
+        .await?;
+    assert!(location(&future_response)?.contains("error=payload_expired"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_untrusted_callback_url() -> Result<(), Box<dyn std::error::Error>> {
+    let router = router(
+        Arc::new(MemoryAdapter::default()),
+        "http://preview.example.com/api/auth",
+        OAuthProxyOptions::new(),
+    )?;
+    let mut payload = passthrough_payload_json();
+    payload["callback_url"] = Value::String("https://evil.example/callback".to_owned());
+    let encrypted = symmetric_encrypt(SECRET, &payload.to_string())?;
+    let response = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!(
+                "http://preview.example.com/api/auth/oauth-proxy-callback?callbackURL=https%3A%2F%2Fevil.example%2Fcallback&profile={}",
+                url_encode(&encrypted)
+            ),
+            "",
+        )?)
+        .await?;
+
+    assert!(location(&response)?.contains("error=invalid_callback_url"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn custom_secret_encrypts_profile_payload() -> Result<(), Box<dyn std::error::Error>> {
     let dedicated = "oauth-proxy-dedicated-secret-key";
     let production = router(
@@ -235,6 +339,162 @@ async fn custom_secret_encrypts_profile_payload() -> Result<(), Box<dyn std::err
 }
 
 #[tokio::test]
+async fn skip_header_bypasses_oauth_proxy() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::default());
+    let router = router(
+        adapter.clone(),
+        "https://login.example.com/api/auth",
+        OAuthProxyOptions::new().current_url("http://preview.example.com"),
+    )?;
+    let sign_in = router
+        .handle_async(
+            Request::builder()
+                .method(Method::POST)
+                .uri("http://preview.example.com/api/auth/sign-in/social")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-skip-oauth-proxy", "1")
+                .body(
+                    r#"{"provider":"google","callbackURL":"/dashboard"}"#
+                        .as_bytes()
+                        .to_vec(),
+                )?,
+        )
+        .await?;
+    let body: Value = serde_json::from_slice(sign_in.body())?;
+    let state =
+        query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    assert!(symmetric_decrypt(SECRET, &state).is_ok());
+
+    let callback = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!("https://login.example.com/api/auth/callback/google?code=ok&state={state}"),
+            "",
+        )?)
+        .await?;
+    assert_eq!(location(&callback)?, "/dashboard");
+    assert_eq!(adapter.count(Count::new("user")).await?, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn callback_errors_match_upstream_cases() -> Result<(), Box<dyn std::error::Error>> {
+    let router = router(
+        Arc::new(MemoryAdapter::default()),
+        "https://login.example.com/api/auth",
+        OAuthProxyOptions::new().current_url("http://preview.example.com"),
+    )?;
+    let sign_in = router
+        .handle_async(json_request(
+            Method::POST,
+            "http://preview.example.com/api/auth/sign-in/social",
+            r#"{"provider":"google","callbackURL":"/dashboard"}"#,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(sign_in.body())?;
+    let state =
+        query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+
+    let provider_missing = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!("https://login.example.com/api/auth/callback/github?code=ok&state={state}"),
+            "",
+        )?)
+        .await?;
+    assert!(location(&provider_missing)?.contains("error=oauth_provider_not_found"));
+
+    let no_code = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!("https://login.example.com/api/auth/callback/google?state={state}"),
+            "",
+        )?)
+        .await?;
+    assert!(location(&no_code)?.contains("error=no_code"));
+
+    let invalid_code = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!("https://login.example.com/api/auth/callback/google?code=bad&state={state}"),
+            "",
+        )?)
+        .await?;
+    assert!(location(&invalid_code)?.contains("error=invalid_code"));
+
+    let no_user = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!(
+                "https://login.example.com/api/auth/callback/google?code=no-user&state={state}"
+            ),
+            "",
+        )?)
+        .await?;
+    assert!(location(&no_user)?.contains("error=unable_to_get_user_info"));
+
+    let no_email = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!(
+                "https://login.example.com/api/auth/callback/google?code=no-email&state={state}"
+            ),
+            "",
+        )?)
+        .await?;
+    assert!(location(&no_email)?.contains("error=email_not_found"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn existing_preview_user_links_account_without_duplicate(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let production = router(
+        Arc::new(MemoryAdapter::default()),
+        "https://login.example.com/api/auth",
+        OAuthProxyOptions::new().current_url("http://preview.example.com"),
+    )?;
+    let preview_adapter = Arc::new(MemoryAdapter::default());
+    DbUserStore::new(preview_adapter.as_ref())
+        .create_user(CreateUserInput::new("Existing Ada", "ada@example.com").id("user_1"))
+        .await?;
+    let preview = router(
+        preview_adapter.clone(),
+        "http://preview.example.com/api/auth",
+        OAuthProxyOptions::new(),
+    )?;
+    let sign_in = production
+        .handle_async(json_request(
+            Method::POST,
+            "http://preview.example.com/api/auth/sign-in/social",
+            r#"{"provider":"google","callbackURL":"/dashboard"}"#,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(sign_in.body())?;
+    let state =
+        query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let production_callback = production
+        .handle_async(json_request(
+            Method::GET,
+            &format!("https://login.example.com/api/auth/callback/google?code=ok&state={state}"),
+            "",
+        )?)
+        .await?;
+    let preview_callback = preview
+        .handle_async(json_request(
+            Method::GET,
+            location(&production_callback)?,
+            "",
+        )?)
+        .await?;
+
+    assert_eq!(preview_callback.status(), StatusCode::FOUND);
+    assert_eq!(preview_adapter.count(Count::new("user")).await?, 1);
+    assert_eq!(preview_adapter.count(Count::new("account")).await?, 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn database_state_strategy_packages_proxy_state() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(MemoryAdapter::default());
     let router = router_with_options(
@@ -263,6 +523,15 @@ async fn database_state_strategy_packages_proxy_state() -> Result<(), Box<dyn st
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
 
     assert!(state.len() > 50);
+    let decrypted = symmetric_decrypt(SECRET, &state)?;
+    let package: Value = serde_json::from_str(&decrypted)?;
+    assert_eq!(package["is_oauth_proxy"], Value::Bool(true));
+    assert!(package["state"].as_str().is_some());
+    let state_cookie = package["state_cookie"]
+        .as_str()
+        .ok_or("missing state_cookie")?;
+    let state_data = symmetric_decrypt(SECRET, state_cookie)?;
+    assert!(state_data.contains("code_verifier"));
     Ok(())
 }
 
@@ -368,6 +637,34 @@ fn url_encode(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
+fn passthrough_payload_json() -> Value {
+    serde_json::json!({
+        "user_info": {
+            "id": "google-user-1",
+            "name": "Ada Lovelace",
+            "email": "ada@example.com",
+            "image": null,
+            "email_verified": true
+        },
+        "account": {
+            "provider_id": "google",
+            "account_id": "google-user-1",
+            "access_token": "access-token",
+            "refresh_token": null,
+            "id_token": null,
+            "access_token_expires_at": null,
+            "refresh_token_expires_at": null,
+            "scope": null
+        },
+        "state": "state",
+        "callback_url": "/dashboard",
+        "new_user_url": null,
+        "error_url": null,
+        "disable_sign_up": false,
+        "timestamp": time::OffsetDateTime::now_utc().unix_timestamp()
+    })
+}
+
 #[derive(Debug)]
 struct FakeProvider;
 
@@ -400,11 +697,11 @@ impl SocialOAuthProvider for FakeProvider {
         input: SocialAuthorizationCodeRequest,
     ) -> SocialProviderFuture<'_, OAuth2Tokens> {
         Box::pin(async move {
-            if input.code != "ok" {
+            if !matches!(input.code.as_str(), "ok" | "no-user" | "no-email") {
                 return Err(OAuthError::InvalidResponse("bad code".to_owned()));
             }
             Ok(OAuth2Tokens {
-                access_token: Some("access-token".to_owned()),
+                access_token: Some(input.code),
                 refresh_token: Some("refresh-token".to_owned()),
                 scopes: vec!["profile".to_owned()],
                 ..OAuth2Tokens::default()
@@ -414,14 +711,18 @@ impl SocialOAuthProvider for FakeProvider {
 
     fn get_user_info(
         &self,
-        _tokens: OAuth2Tokens,
+        tokens: OAuth2Tokens,
         _provider_user: Option<Value>,
     ) -> SocialProviderFuture<'_, Option<OAuth2UserInfo>> {
-        Box::pin(async {
+        Box::pin(async move {
+            if tokens.access_token.as_deref() == Some("no-user") {
+                return Ok(None);
+            }
             Ok(Some(OAuth2UserInfo {
                 id: "google-user-1".to_owned(),
                 name: Some("Ada Lovelace".to_owned()),
-                email: Some("ada@example.com".to_owned()),
+                email: (tokens.access_token.as_deref() != Some("no-email"))
+                    .then(|| "ada@example.com".to_owned()),
                 image: None,
                 email_verified: true,
             }))

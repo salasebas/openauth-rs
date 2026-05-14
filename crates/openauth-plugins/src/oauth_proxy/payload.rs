@@ -1,10 +1,10 @@
-use openauth_core::auth::oauth::{OAuthAccountInput, OAuthStateData, OAuthUserInfo};
+use openauth_core::auth::oauth::{OAuthAccountInput, OAuthUserInfo};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct OAuthProxyStatePackage {
     pub state: String,
-    pub state_data: OAuthStateData,
+    pub state_cookie: String,
     pub is_oauth_proxy: bool,
 }
 

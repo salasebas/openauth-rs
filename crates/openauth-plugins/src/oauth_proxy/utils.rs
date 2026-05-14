@@ -25,17 +25,21 @@ pub(crate) fn current_url(
     if let Some(value) = request_origin(request) {
         return Url::parse(&value).ok();
     }
+    if let Some(value) = vendor_current_url() {
+        return Url::parse(&value).ok();
+    }
     (!context.base_url.is_empty())
         .then(|| Url::parse(&context.base_url).ok())
         .flatten()
 }
 
 pub(crate) fn production_url(context: &AuthContext, options: &OAuthProxyOptions) -> Option<Url> {
-    options
+    let value = options
         .production_url
-        .as_deref()
-        .or_else(|| (!context.base_url.is_empty()).then_some(context.base_url.as_str()))
-        .and_then(|value| Url::parse(value).ok())
+        .clone()
+        .or_else(|| std::env::var("BETTER_AUTH_URL").ok())
+        .or_else(|| (!context.base_url.is_empty()).then(|| context.base_url.clone()))?;
+    Url::parse(&value).ok()
 }
 
 pub(crate) fn should_skip_proxy(
@@ -71,10 +75,14 @@ pub(crate) fn proxy_callback_url(
 }
 
 pub(crate) fn production_base_url(context: &AuthContext, options: &OAuthProxyOptions) -> String {
-    options
-        .production_url
-        .as_deref()
-        .map(|url| format!("{}{}", strip_trailing_slash(url), context.base_path))
+    production_url(context, options)
+        .map(|url| {
+            format!(
+                "{}{}",
+                strip_trailing_slash(url.origin().ascii_serialization().as_str()),
+                context.base_path
+            )
+        })
         .unwrap_or_else(|| context.base_url.clone())
 }
 
@@ -168,6 +176,20 @@ pub(crate) fn redirect_error(error_url: &str, error: &str) -> Result<ApiResponse
     redirect_with_error_response(error_url, error)
 }
 
+pub(crate) fn is_trusted_callback_url(
+    context: &AuthContext,
+    request: &ApiRequest,
+    callback_url: &str,
+) -> Result<bool, OpenAuthError> {
+    if callback_url.starts_with('/') && !callback_url.starts_with("//") {
+        return Ok(true);
+    }
+    let Ok(url) = Url::parse(callback_url) else {
+        return Ok(false);
+    };
+    context.is_trusted_origin_for_request(url.as_str(), None, Some(request))
+}
+
 pub(crate) fn percent_encode(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
@@ -177,6 +199,28 @@ fn request_origin(request: &ApiRequest) -> Option<String> {
     let scheme = uri.scheme_str()?;
     let authority = uri.authority()?;
     Some(format!("{scheme}://{authority}"))
+}
+
+fn vendor_current_url() -> Option<String> {
+    [
+        "VERCEL_URL",
+        "NETLIFY_URL",
+        "RENDER_URL",
+        "AWS_LAMBDA_FUNCTION_URL",
+        "AWS_FUNCTION_URL",
+        "GOOGLE_CLOUD_FUNCTION_URL",
+        "AZURE_FUNCTION_URL",
+        "FUNCTIONS_CUSTOMHANDLER_PORT",
+    ]
+    .into_iter()
+    .find_map(|key| std::env::var(key).ok())
+    .map(|value| {
+        if value.starts_with("http://") || value.starts_with("https://") {
+            value
+        } else {
+            format!("https://{value}")
+        }
+    })
 }
 
 fn body_string(body: &Value, key: &str) -> Option<String> {

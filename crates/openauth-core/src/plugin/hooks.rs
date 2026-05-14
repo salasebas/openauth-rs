@@ -17,15 +17,14 @@ pub type PluginAfterHookHandler = Arc<
         + Send
         + Sync,
 >;
-pub type AsyncPluginBeforeHookFuture<'a> =
+pub type PluginBeforeHookFuture<'a> =
     Pin<Box<dyn Future<Output = Result<PluginBeforeHookAction, OpenAuthError>> + Send + 'a>>;
-pub type AsyncPluginAfterHookFuture<'a> =
+pub type PluginAfterHookFuture<'a> =
     Pin<Box<dyn Future<Output = Result<PluginAfterHookAction, OpenAuthError>> + Send + 'a>>;
-pub type AsyncPluginBeforeHookHandler = Arc<
-    dyn for<'a> Fn(&'a AuthContext, ApiRequest) -> AsyncPluginBeforeHookFuture<'a> + Send + Sync,
->;
-pub type AsyncPluginAfterHookHandler = Arc<
-    dyn for<'a> Fn(&'a AuthContext, &'a ApiRequest, ApiResponse) -> AsyncPluginAfterHookFuture<'a>
+pub type PluginAsyncBeforeHookHandler =
+    Arc<dyn for<'a> Fn(&'a AuthContext, ApiRequest) -> PluginBeforeHookFuture<'a> + Send + Sync>;
+pub type PluginAsyncAfterHookHandler = Arc<
+    dyn for<'a> Fn(&'a AuthContext, &'a ApiRequest, ApiResponse) -> PluginAfterHookFuture<'a>
         + Send
         + Sync,
 >;
@@ -122,15 +121,15 @@ impl fmt::Debug for PluginAfterHook {
 }
 
 #[derive(Clone)]
-pub struct AsyncPluginBeforeHook {
+pub struct PluginAsyncBeforeHook {
     pub matcher: PluginHookMatcher,
-    pub handler: AsyncPluginBeforeHookHandler,
+    pub handler: PluginAsyncBeforeHookHandler,
 }
 
-impl fmt::Debug for AsyncPluginBeforeHook {
+impl fmt::Debug for PluginAsyncBeforeHook {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("AsyncPluginBeforeHook")
+            .debug_struct("PluginAsyncBeforeHook")
             .field("matcher", &self.matcher)
             .field("handler", &"<async-before-hook>")
             .finish()
@@ -138,15 +137,15 @@ impl fmt::Debug for AsyncPluginBeforeHook {
 }
 
 #[derive(Clone)]
-pub struct AsyncPluginAfterHook {
+pub struct PluginAsyncAfterHook {
     pub matcher: PluginHookMatcher,
-    pub handler: AsyncPluginAfterHookHandler,
+    pub handler: PluginAsyncAfterHookHandler,
 }
 
-impl fmt::Debug for AsyncPluginAfterHook {
+impl fmt::Debug for PluginAsyncAfterHook {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("AsyncPluginAfterHook")
+            .debug_struct("PluginAsyncAfterHook")
             .field("matcher", &self.matcher)
             .field("handler", &"<async-after-hook>")
             .finish()
@@ -157,8 +156,8 @@ impl fmt::Debug for AsyncPluginAfterHook {
 pub struct PluginEndpointHooks {
     pub before: Vec<PluginBeforeHook>,
     pub after: Vec<PluginAfterHook>,
-    pub async_before: Vec<AsyncPluginBeforeHook>,
-    pub async_after: Vec<AsyncPluginAfterHook>,
+    pub async_before: Vec<PluginAsyncBeforeHook>,
+    pub async_after: Vec<PluginAsyncAfterHook>,
 }
 
 fn path_matches(pattern: &str, path: &str) -> bool {

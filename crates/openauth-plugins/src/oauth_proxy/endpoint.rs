@@ -3,13 +3,15 @@ use openauth_core::api::{
     create_auth_endpoint, redirect_response, session_cookies, ApiRequest, AsyncAuthEndpoint,
     AuthEndpointOptions, OpenApiOperation,
 };
-use openauth_core::auth::oauth::{handle_oauth_user_info, HandleOAuthUserInfoInput};
+use openauth_core::auth::oauth::{
+    handle_oauth_user_info, parse_oauth_state, HandleOAuthUserInfoInput,
+};
 use openauth_core::error::OpenAuthError;
 use time::OffsetDateTime;
 
 use super::options::OAuthProxyOptions;
 use super::payload::PassthroughPayload;
-use super::utils::{decrypt, query_param, redirect_error};
+use super::utils::{decrypt, is_trusted_callback_url, query_param, redirect_error};
 
 pub(crate) fn oauth_proxy_callback_endpoint(options: OAuthProxyOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
@@ -49,9 +51,15 @@ async fn handle_callback(
     if age > options.max_age as i64 || age < -10 {
         return redirect_error(error_url, "payload_expired");
     }
+    let callback_url =
+        query_param(&request, "callbackURL").unwrap_or_else(|| payload.callback_url.clone());
+    if !is_trusted_callback_url(context, &request, &callback_url)? {
+        return redirect_error(error_url, "invalid_callback_url");
+    }
     let Some(adapter) = context.adapter() else {
         return redirect_error(error_url, "user_creation_failed");
     };
+    let _ = parse_oauth_state(context, Some(adapter.as_ref()), &payload.state).await;
     let result = handle_oauth_user_info(
         context,
         adapter.as_ref(),
