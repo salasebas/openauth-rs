@@ -1,6 +1,11 @@
 use serde_json::{json, Value};
 
 use super::hooks::OrganizationHooks;
+use super::{Invitation, Member, Organization};
+use std::sync::Arc;
+
+pub type SendInvitationEmailHook =
+    Arc<dyn Fn(&InvitationEmail) -> Result<(), openauth_core::error::OpenAuthError> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct OrganizationOptions {
@@ -14,6 +19,35 @@ pub struct OrganizationOptions {
     pub require_email_verification_on_invitation: bool,
     pub disable_organization_deletion: bool,
     pub hooks: OrganizationHooks,
+    pub send_invitation_email: Option<SendInvitationEmailHook>,
+    pub teams: TeamOptions,
+    pub dynamic_access_control: DynamicAccessControlOptions,
+    pub custom_roles: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TeamOptions {
+    pub enabled: bool,
+    pub create_default_team: bool,
+    pub maximum_teams: Option<usize>,
+    pub maximum_members_per_team: Option<usize>,
+    pub allow_removing_all_teams: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DynamicAccessControlOptions {
+    pub enabled: bool,
+    pub maximum_roles_per_organization: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InvitationEmail {
+    pub id: String,
+    pub role: String,
+    pub email: String,
+    pub organization: Organization,
+    pub invitation: Invitation,
+    pub inviter: Member,
 }
 
 impl Default for OrganizationOptions {
@@ -29,6 +63,22 @@ impl Default for OrganizationOptions {
             require_email_verification_on_invitation: false,
             disable_organization_deletion: false,
             hooks: OrganizationHooks::default(),
+            send_invitation_email: None,
+            teams: TeamOptions::default(),
+            dynamic_access_control: DynamicAccessControlOptions::default(),
+            custom_roles: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for TeamOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            create_default_team: true,
+            maximum_teams: None,
+            maximum_members_per_team: None,
+            allow_removing_all_teams: false,
         }
     }
 }
@@ -49,6 +99,17 @@ impl OrganizationOptions {
             "cancelPendingInvitationsOnReInvite": self.cancel_pending_invitations_on_re_invite,
             "requireEmailVerificationOnInvitation": self.require_email_verification_on_invitation,
             "disableOrganizationDeletion": self.disable_organization_deletion,
+            "teams": {
+                "enabled": self.teams.enabled,
+                "defaultTeam": { "enabled": self.teams.create_default_team },
+                "maximumTeams": self.teams.maximum_teams,
+                "maximumMembersPerTeam": self.teams.maximum_members_per_team,
+                "allowRemovingAllTeams": self.teams.allow_removing_all_teams,
+            },
+            "dynamicAccessControl": {
+                "enabled": self.dynamic_access_control.enabled,
+                "maximumRolesPerOrganization": self.dynamic_access_control.maximum_roles_per_organization,
+            },
         })
     }
 }
@@ -106,6 +167,26 @@ impl OrganizationOptionsBuilder {
 
     pub fn hooks(mut self, hooks: OrganizationHooks) -> Self {
         self.options.hooks = hooks;
+        self
+    }
+
+    pub fn send_invitation_email(mut self, hook: SendInvitationEmailHook) -> Self {
+        self.options.send_invitation_email = Some(hook);
+        self
+    }
+
+    pub fn teams(mut self, teams: TeamOptions) -> Self {
+        self.options.teams = teams;
+        self
+    }
+
+    pub fn dynamic_access_control(mut self, options: DynamicAccessControlOptions) -> Self {
+        self.options.dynamic_access_control = options;
+        self
+    }
+
+    pub fn custom_role(mut self, role: impl Into<String>, permissions: serde_json::Value) -> Self {
+        self.options.custom_roles.insert(role.into(), permissions);
         self
     }
 

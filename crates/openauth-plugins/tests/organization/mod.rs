@@ -11,6 +11,10 @@ use openauth_plugins::organization::{
 };
 use serde_json::{json, Value};
 
+mod dynamic_access_control;
+mod hooks;
+mod teams;
+
 #[test]
 fn exposes_organization_plugin_surface() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(
@@ -184,6 +188,7 @@ struct TestResponse {
 
 struct SignedUp {
     cookie: String,
+    user_id: String,
 }
 
 async fn sign_up(
@@ -200,8 +205,13 @@ async fn sign_up(
     )
     .await?;
     assert_eq!(response.status, StatusCode::OK);
+    let user_id = response.body["user"]["id"]
+        .as_str()
+        .ok_or("missing user id")?
+        .to_owned();
     Ok(SignedUp {
         cookie: response.set_cookie.ok_or("missing session cookie")?,
+        user_id,
     })
 }
 

@@ -6,11 +6,13 @@ use time::{Duration, OffsetDateTime};
 use crate::organization::hooks::{AfterCreateInvitation, BeforeCreateInvitation};
 use crate::organization::http;
 use crate::organization::models::InvitationStatus;
-use crate::organization::options::OrganizationOptions;
+use crate::organization::options::{InvitationEmail, OrganizationOptions};
 use crate::organization::permissions::{
-    has_permission, is_known_static_role, parse_roles, OrganizationPermission,
+    has_permission, is_known_static_role, OrganizationPermission,
 };
 use crate::organization::store::OrganizationStore;
+
+use super::input::RoleInput;
 
 pub fn endpoints(options: OrganizationOptions) -> Vec<AsyncAuthEndpoint> {
     vec![
@@ -32,23 +34,9 @@ struct InviteBody {
     #[serde(default)]
     organization_id: Option<String>,
     #[serde(default)]
+    team_id: Option<String>,
+    #[serde(default)]
     resend: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RoleInput {
-    One(String),
-    Many(Vec<String>),
-}
-
-impl RoleInput {
-    fn normalized(&self) -> String {
-        match self {
-            Self::One(role) => parse_roles(role),
-            Self::Many(roles) => parse_roles(roles.join(",")),
-        }
-    }
 }
 
 fn create_invitation(options: OrganizationOptions) -> AsyncAuthEndpoint {
@@ -178,10 +166,21 @@ fn create_invitation(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         &organization_id,
                         &email,
                         &role,
+                        input.team_id.as_deref(),
                         &session.user.id,
                         expires_at,
                     )
                     .await?;
+                if let Some(send_email) = &options.send_invitation_email {
+                    send_email(&InvitationEmail {
+                        id: invitation.id.clone(),
+                        role: invitation.role.clone(),
+                        email: invitation.email.clone(),
+                        organization: organization.clone(),
+                        invitation: invitation.clone(),
+                        inviter: actor_member.clone(),
+                    })?;
+                }
                 if let Some(hook) = &options.hooks.after_create_invitation {
                     hook(&AfterCreateInvitation {
                         organization,
@@ -268,6 +267,23 @@ fn accept_invitation(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         &invitation.role,
                     )
                     .await?;
+                if options.teams.enabled {
+                    if let Some(team_ids) = invitation.team_id.as_deref() {
+                        for team_id in team_ids
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|id| !id.is_empty())
+                        {
+                            if store
+                                .team_member(team_id, &session.user.id)
+                                .await?
+                                .is_none()
+                            {
+                                store.create_team_member(team_id, &session.user.id).await?;
+                            }
+                        }
+                    }
+                }
                 store
                     .set_active_organization(
                         &session.session.token,

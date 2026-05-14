@@ -3,7 +3,7 @@ use openauth_core::error::OpenAuthError;
 
 use super::models::{
     optional_json, optional_string, optional_timestamp, required_string, required_timestamp,
-    Invitation, InvitationStatus, Member, Organization,
+    Invitation, InvitationStatus, Member, Organization, OrganizationRoleRecord, Team, TeamMember,
 };
 
 pub fn organization_from_record(record: &DbRecord) -> Result<Organization, OpenAuthError> {
@@ -36,9 +36,42 @@ pub fn invitation_from_record(record: &DbRecord) -> Result<Invitation, OpenAuthE
         email: required_string(record, "email")?,
         role: required_string(record, "role")?,
         status: InvitationStatus::try_from(status.as_str())?,
+        team_id: optional_string(record, "team_id")?,
         expires_at: required_timestamp(record, "expires_at")?,
         created_at: required_timestamp(record, "created_at")?,
         inviter_id: required_string(record, "inviter_id")?,
+    })
+}
+
+pub fn team_from_record(record: &DbRecord) -> Result<Team, OpenAuthError> {
+    Ok(Team {
+        id: required_string(record, "id")?,
+        name: required_string(record, "name")?,
+        organization_id: required_string(record, "organization_id")?,
+        created_at: required_timestamp(record, "created_at")?,
+        updated_at: optional_timestamp(record, "updated_at")?,
+    })
+}
+
+pub fn team_member_from_record(record: &DbRecord) -> Result<TeamMember, OpenAuthError> {
+    Ok(TeamMember {
+        id: required_string(record, "id")?,
+        team_id: required_string(record, "team_id")?,
+        user_id: required_string(record, "user_id")?,
+        created_at: required_timestamp(record, "created_at")?,
+    })
+}
+
+pub fn organization_role_from_record(
+    record: &DbRecord,
+) -> Result<OrganizationRoleRecord, OpenAuthError> {
+    Ok(OrganizationRoleRecord {
+        id: required_string(record, "id")?,
+        organization_id: required_string(record, "organization_id")?,
+        role: required_string(record, "role")?,
+        permission: optional_json(record, "permission")?.unwrap_or(serde_json::Value::Null),
+        created_at: required_timestamp(record, "created_at")?,
+        updated_at: optional_timestamp(record, "updated_at")?,
     })
 }
 

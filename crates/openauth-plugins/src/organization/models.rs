@@ -69,9 +69,51 @@ pub struct Invitation {
     pub email: String,
     pub role: String,
     pub status: InvitationStatus,
+    pub team_id: Option<String>,
     pub expires_at: OffsetDateTime,
     pub created_at: OffsetDateTime,
     pub inviter_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Team {
+    pub id: String,
+    pub name: String,
+    pub organization_id: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamMember {
+    pub id: String,
+    pub team_id: String,
+    pub user_id: String,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationRoleRecord {
+    pub id: String,
+    pub organization_id: String,
+    pub role: String,
+    pub permission: serde_json::Value,
+    pub created_at: OffsetDateTime,
+    pub updated_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FullOrganization {
+    #[serde(flatten)]
+    pub organization: Organization,
+    pub members: Vec<Member>,
+    pub invitations: Vec<Invitation>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub teams: Vec<Team>,
 }
 
 pub(crate) fn required_string(record: &DbRecord, field: &str) -> Result<String, OpenAuthError> {

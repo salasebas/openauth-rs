@@ -5,8 +5,10 @@ use serde::Deserialize;
 use crate::organization::hooks::{AfterAddMember, BeforeAddMember};
 use crate::organization::http;
 use crate::organization::options::OrganizationOptions;
-use crate::organization::permissions::{has_permission, parse_roles, OrganizationPermission};
+use crate::organization::permissions::{has_permission, OrganizationPermission};
 use crate::organization::store::OrganizationStore;
+
+use super::input::RoleInput;
 
 pub fn endpoints(options: OrganizationOptions) -> Vec<AsyncAuthEndpoint> {
     vec![
@@ -27,22 +29,6 @@ struct AddMemberBody {
     role: RoleInput,
     #[serde(default)]
     organization_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RoleInput {
-    One(String),
-    Many(Vec<String>),
-}
-
-impl RoleInput {
-    fn normalized(&self) -> String {
-        match self {
-            Self::One(role) => parse_roles(role),
-            Self::Many(roles) => parse_roles(roles.join(",")),
-        }
-    }
 }
 
 fn add_member(options: OrganizationOptions) -> AsyncAuthEndpoint {
@@ -206,6 +192,11 @@ fn remove_member(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         "YOU_ARE_NOT_ALLOWED_TO_DELETE_THIS_MEMBER",
                     );
                 }
+                if options.teams.enabled {
+                    store
+                        .delete_team_members_for_user(&target.organization_id, &target.user_id)
+                        .await?;
+                }
                 store.delete_member(&target.id).await?;
                 if target.user_id == session.user.id
                     && session.active_organization_id.as_deref() == Some(&target.organization_id)
@@ -356,6 +347,11 @@ fn leave(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         StatusCode::BAD_REQUEST,
                         "YOU_CANNOT_LEAVE_THE_ORGANIZATION_AS_THE_ONLY_OWNER",
                     );
+                }
+                if options.teams.enabled {
+                    store
+                        .delete_team_members_for_user(&organization_id, &session.user.id)
+                        .await?;
                 }
                 store.delete_member(&member.id).await?;
                 store

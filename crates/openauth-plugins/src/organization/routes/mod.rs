@@ -1,7 +1,10 @@
+mod input;
 mod invitations;
 mod members;
 mod org;
 mod permissions;
+mod roles;
+mod teams;
 
 use openauth_core::api::AsyncAuthEndpoint;
 
@@ -12,7 +15,9 @@ pub fn endpoints(options: OrganizationOptions) -> Vec<AsyncAuthEndpoint> {
     endpoints.extend(org::endpoints(options.clone()));
     endpoints.extend(members::endpoints(options.clone()));
     endpoints.extend(invitations::endpoints(options.clone()));
-    endpoints.extend(permissions::endpoints(options));
+    endpoints.extend(permissions::endpoints(options.clone()));
+    endpoints.extend(teams::endpoints(options.clone()));
+    endpoints.extend(roles::endpoints(options));
     endpoints
 }
 

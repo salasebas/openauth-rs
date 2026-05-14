@@ -1,11 +1,12 @@
 use ::http::{Method, StatusCode};
 use openauth_core::api::{create_auth_endpoint, AsyncAuthEndpoint, AuthEndpointOptions};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::organization::hooks::{
     AfterAddMember, AfterCreateOrganization, BeforeAddMember, BeforeCreateOrganization,
 };
 use crate::organization::http;
+use crate::organization::models::FullOrganization;
 use crate::organization::options::OrganizationOptions;
 use crate::organization::permissions::{has_permission, OrganizationPermission};
 use crate::organization::store::{OrganizationStore, OrganizationUpdate};
@@ -35,15 +36,6 @@ struct CreateBody {
     metadata: Option<serde_json::Value>,
     #[serde(default)]
     keep_current_active_organization: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FullOrganization {
-    #[serde(flatten)]
-    organization: crate::organization::Organization,
-    members: Vec<crate::organization::Member>,
-    invitations: Vec<crate::organization::Invitation>,
 }
 
 fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
@@ -129,6 +121,10 @@ fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
                 let member = store
                     .create_member(&organization.id, &user.id, &options.creator_role)
                     .await?;
+                if options.teams.enabled && options.teams.create_default_team {
+                    let team = store.create_team(&organization.id, "Default").await?;
+                    store.create_team_member(&team.id, &user.id).await?;
+                }
                 if let Some(hook) = &options.hooks.after_add_member {
                     hook(&AfterAddMember {
                         organization: organization.clone(),
@@ -157,6 +153,7 @@ fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         organization,
                         members: vec![member],
                         invitations: Vec::new(),
+                        teams: Vec::new(),
                     },
                 )
             })
@@ -453,12 +450,17 @@ fn get_full() -> AsyncAuthEndpoint {
                         "USER_IS_NOT_A_MEMBER_OF_THE_ORGANIZATION",
                     );
                 }
+                let teams = store
+                    .teams_for_organization(&organization_id)
+                    .await
+                    .unwrap_or_default();
                 http::json(
                     StatusCode::OK,
                     &FullOrganization {
                         organization,
                         members: store.members(&organization_id).await?,
                         invitations: store.invitations_for_organization(&organization_id).await?,
+                        teams,
                     },
                 )
             })

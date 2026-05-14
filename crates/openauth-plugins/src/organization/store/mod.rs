@@ -13,7 +13,10 @@ use super::record::{
     invitation_from_record, member_from_record, organization_from_record, user_from_record,
 };
 
-const ID_LENGTH: usize = 32;
+mod roles;
+mod teams;
+
+pub(super) const ID_LENGTH: usize = 32;
 
 pub struct OrganizationStore<'a> {
     adapter: &'a dyn DbAdapter,
@@ -322,6 +325,7 @@ impl<'a> OrganizationStore<'a> {
         organization_id: &str,
         email: &str,
         role: &str,
+        team_id: Option<&str>,
         inviter_id: &str,
         expires_at: OffsetDateTime,
     ) -> Result<Invitation, OpenAuthError> {
@@ -336,6 +340,12 @@ impl<'a> OrganizationStore<'a> {
                     )
                     .data("email", DbValue::String(email.to_owned()))
                     .data("role", DbValue::String(role.to_owned()))
+                    .data(
+                        "team_id",
+                        team_id
+                            .map(|value| DbValue::String(value.to_owned()))
+                            .unwrap_or(DbValue::Null),
+                    )
                     .data(
                         "status",
                         DbValue::String(InvitationStatus::Pending.as_str().to_owned()),
@@ -479,10 +489,10 @@ pub struct OrganizationUpdate {
     pub metadata_set: bool,
 }
 
-fn id_where(id: &str) -> Where {
+pub(super) fn id_where(id: &str) -> Where {
     Where::new("id", DbValue::String(id.to_owned()))
 }
 
-fn option_string(value: Option<String>) -> DbValue {
+pub(super) fn option_string(value: Option<String>) -> DbValue {
     value.map(DbValue::String).unwrap_or(DbValue::Null)
 }

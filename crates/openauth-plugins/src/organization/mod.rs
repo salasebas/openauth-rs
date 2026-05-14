@@ -16,8 +16,13 @@ pub use hooks::{
     AfterAddMember, AfterCreateInvitation, AfterCreateOrganization, BeforeAddMember,
     BeforeCreateInvitation, BeforeCreateOrganization, OrganizationHooks,
 };
-pub use models::{Invitation, InvitationStatus, Member, Organization};
-pub use options::{OrganizationOptions, OrganizationOptionsBuilder};
+pub use models::{
+    Invitation, InvitationStatus, Member, Organization, OrganizationRoleRecord, Team, TeamMember,
+};
+pub use options::{
+    DynamicAccessControlOptions, InvitationEmail, OrganizationOptions, OrganizationOptionsBuilder,
+    SendInvitationEmailHook, TeamOptions,
+};
 pub use permissions::{has_permission, OrganizationPermission, OrganizationRole};
 
 use openauth_core::plugin::AuthPlugin;
@@ -33,7 +38,7 @@ pub fn organization_with_options(options: OrganizationOptions) -> AuthPlugin {
         .with_version(env!("CARGO_PKG_VERSION"))
         .with_options(options.to_metadata());
 
-    for contribution in schema::schema_contributions() {
+    for contribution in schema::schema_contributions(&options) {
         plugin = plugin.with_schema(contribution);
     }
     for error_code in errors::error_codes() {
