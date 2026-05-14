@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
 use http::{header, StatusCode};
 use openauth_core::api::{ApiRequest, ApiResponse};
 use openauth_core::auth::session::{GetSessionInput, SessionAuth};
 use openauth_core::context::AuthContext;
-use openauth_core::db::{DbAdapter, User, Verification};
+use openauth_core::db::{DbAdapter, DbValue, User, Verification};
 use openauth_core::error::OpenAuthError;
 use openauth_core::session::{CreateSessionInput, DbSessionStore};
 use openauth_core::verification::{
@@ -19,6 +17,7 @@ use super::types::{EmailOtpOptions, EmailOtpPayload, EmailOtpType, ResendStrateg
 pub(super) async fn resolve_otp(
     adapter: &dyn DbAdapter,
     options: &EmailOtpOptions,
+    secret: &str,
     email: &str,
     otp_type: EmailOtpType,
     identifier: &str,
@@ -28,7 +27,7 @@ pub(super) async fn resolve_otp(
         if let Some(existing) = store.find_verification(identifier).await? {
             let parts = otp::split_value(&existing.value);
             if parts.attempts < options.allowed_attempts {
-                if let Some(plain) = otp::reusable_plain_otp(options, &parts) {
+                if let Some(plain) = otp::reusable_otp(options, secret, &parts)? {
                     store
                         .update_verification(
                             identifier,
@@ -41,7 +40,7 @@ pub(super) async fn resolve_otp(
         }
     }
     let plain = otp::generate(options, email, otp_type);
-    let stored = otp::store(options, &plain);
+    let stored = otp::store(options, secret, &plain)?;
     let input = CreateVerificationInput::new(
         identifier,
         otp::encode_value(&stored, 0),
@@ -57,6 +56,7 @@ pub(super) async fn resolve_otp(
 pub(super) async fn verify_otp(
     adapter: &dyn DbAdapter,
     options: &EmailOtpOptions,
+    secret: &str,
     identifier: &str,
     provided: &str,
     consume: bool,
@@ -78,10 +78,21 @@ pub(super) async fn verify_otp(
         )
         .map(Some);
     }
-    if !otp::verify(options, &parts.value, provided) {
+    if consume {
+        store.delete_verification(identifier).await?;
+    }
+    if !otp::verify(options, secret, &parts.value, provided)? {
         let attempts = parts.attempts.saturating_add(1);
         if attempts >= options.allowed_attempts {
             store.delete_verification(identifier).await?;
+        } else if consume {
+            store
+                .create_verification(CreateVerificationInput::new(
+                    identifier,
+                    otp::encode_value(&parts.value, attempts),
+                    verification.expires_at,
+                ))
+                .await?;
         } else {
             store
                 .update_verification(
@@ -91,9 +102,6 @@ pub(super) async fn verify_otp(
                 .await?;
         }
         return response::error(StatusCode::BAD_REQUEST, "INVALID_OTP", "Invalid OTP").map(Some);
-    }
-    if consume {
-        store.delete_verification(identifier).await?;
     }
     Ok(None)
 }
@@ -129,6 +137,19 @@ pub(super) async fn create_session(
     let expires_at = OffsetDateTime::now_utc()
         + time::Duration::seconds(context.session_config.expires_in as i64);
     let mut input = CreateSessionInput::new(user_id, expires_at);
+    let additional_session_fields = context
+        .options
+        .session
+        .additional_fields
+        .iter()
+        .map(|(name, field)| {
+            (
+                name.clone(),
+                field.default_value.clone().unwrap_or(DbValue::Null),
+            )
+        })
+        .collect();
+    input = input.additional_fields(additional_session_fields);
     if let Some(user_agent) = request
         .headers()
         .get(header::USER_AGENT)
@@ -163,12 +184,6 @@ pub(super) fn send_email(
         request,
     )?;
     Ok(None)
-}
-
-pub(super) fn adapter(context: &AuthContext) -> Result<Arc<dyn DbAdapter>, OpenAuthError> {
-    context.adapter().ok_or_else(|| {
-        OpenAuthError::InvalidConfig("email OTP requires a database adapter".to_owned())
-    })
 }
 
 pub(super) fn validated_email(email: &str) -> Result<Result<String, ApiResponse>, OpenAuthError> {

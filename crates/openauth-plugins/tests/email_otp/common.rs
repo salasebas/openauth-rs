@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 pub use http::StatusCode;
 use http::{header, Method, Request};
-use openauth_core::api::AuthRouter;
+use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::cookies::{set_session_cookie, Cookie, SessionCookieOptions};
 use openauth_core::crypto::password::hash_password;
@@ -64,12 +64,12 @@ pub fn router(
                 disable_origin_check: true,
                 ..AdvancedOptions::default()
             },
-            plugins: vec![email_otp(options)],
+            plugins: vec![email_otp(adapter.clone(), options)],
             ..OpenAuthOptions::default()
         },
-        adapter,
+        adapter.clone(),
     )?;
-    AuthRouter::with_async_endpoints(context, Vec::new(), Vec::new())
+    AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
 }
 
 pub fn router_with_auth_options(
@@ -87,12 +87,12 @@ pub fn router_with_auth_options(
                 disable_origin_check: true,
                 ..AdvancedOptions::default()
             },
-            plugins: vec![email_otp(options)],
+            plugins: vec![email_otp(adapter.clone(), options)],
             ..auth_options
         },
-        adapter,
+        adapter.clone(),
     )?;
-    AuthRouter::with_async_endpoints(context, Vec::new(), Vec::new())
+    AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
 }
 
 pub fn json_request(
@@ -102,6 +102,21 @@ pub fn json_request(
 ) -> Result<Request<Vec<u8>>, http::Error> {
     let mut builder = Request::builder()
         .method(Method::POST)
+        .uri(format!("http://localhost:3000/api/auth{path}"))
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(cookie) = cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    builder.body(body.as_bytes().to_vec())
+}
+
+pub fn get_json_request(
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+) -> Result<Request<Vec<u8>>, http::Error> {
+    let mut builder = Request::builder()
+        .method(Method::GET)
         .uri(format!("http://localhost:3000/api/auth{path}"))
         .header(header::CONTENT_TYPE, "application/json");
     if let Some(cookie) = cookie {

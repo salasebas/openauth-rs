@@ -38,11 +38,44 @@ impl TryFrom<&str> for EmailOtpType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub trait EmailOtpHasher: Send + Sync + 'static {
+    fn hash_otp(&self, otp: &str) -> Result<String, OpenAuthError>;
+}
+
+impl<F> EmailOtpHasher for F
+where
+    F: Fn(&str) -> Result<String, OpenAuthError> + Send + Sync + 'static,
+{
+    fn hash_otp(&self, otp: &str) -> Result<String, OpenAuthError> {
+        self(otp)
+    }
+}
+
+pub trait EmailOtpEncryptor: Send + Sync + 'static {
+    fn encrypt_otp(&self, otp: &str) -> Result<String, OpenAuthError>;
+    fn decrypt_otp(&self, stored: &str) -> Result<String, OpenAuthError>;
+}
+
+#[derive(Clone, Default)]
 pub enum OtpStorage {
     #[default]
     Plain,
     Hashed,
+    Encrypted,
+    CustomHash(Arc<dyn EmailOtpHasher>),
+    CustomEncrypt(Arc<dyn EmailOtpEncryptor>),
+}
+
+impl fmt::Debug for OtpStorage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Plain => formatter.write_str("Plain"),
+            Self::Hashed => formatter.write_str("Hashed"),
+            Self::Encrypted => formatter.write_str("Encrypted"),
+            Self::CustomHash(_) => formatter.write_str("CustomHash(<hasher>)"),
+            Self::CustomEncrypt(_) => formatter.write_str("CustomEncrypt(<encryptor>)"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -109,6 +142,7 @@ pub struct EmailOtpOptions {
     pub otp_length: usize,
     pub expires_in: u64,
     pub send_verification_on_sign_up: bool,
+    pub override_default_email_verification: bool,
     pub disable_sign_up: bool,
     pub allowed_attempts: u32,
     pub store_otp: OtpStorage,
@@ -125,6 +159,7 @@ impl Default for EmailOtpOptions {
             otp_length: 6,
             expires_in: 5 * 60,
             send_verification_on_sign_up: false,
+            override_default_email_verification: false,
             disable_sign_up: false,
             allowed_attempts: 3,
             store_otp: OtpStorage::Plain,
@@ -146,6 +181,10 @@ impl fmt::Debug for EmailOtpOptions {
             .field(
                 "send_verification_on_sign_up",
                 &self.send_verification_on_sign_up,
+            )
+            .field(
+                "override_default_email_verification",
+                &self.override_default_email_verification,
             )
             .field("disable_sign_up", &self.disable_sign_up)
             .field("allowed_attempts", &self.allowed_attempts)

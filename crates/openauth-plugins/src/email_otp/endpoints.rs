@@ -4,21 +4,22 @@ use http::StatusCode;
 use openauth_core::api::{parse_request_body, ApiRequest};
 use openauth_core::context::AuthContext;
 use openauth_core::cookies::{set_session_cookie, CookieOptions, SessionCookieOptions};
-use openauth_core::crypto::password::hash_password;
-use openauth_core::db::User;
-use openauth_core::user::{CreateCredentialAccountInput, CreateUserInput, DbUserStore};
+use openauth_core::db::{DbAdapter, DbFieldType, DbRecord, DbValue, User};
+use openauth_core::user::{CreateUserInput, DbUserStore};
 use openauth_core::verification::DbVerificationStore;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use super::helpers::{
-    adapter, authenticated_user, create_session, parse_type, resolve_otp, send_email,
-    validated_email, verify_otp,
+    create_session, parse_type, resolve_otp, send_email, validated_email, verify_otp,
 };
 use super::otp;
 use super::response;
 use super::types::{EmailOtpOptions, EmailOtpType};
 
 pub(super) const SEND_PATH: &str = "/email-otp/send-verification-otp";
+pub(super) const CREATE_PATH: &str = "/email-otp/create-verification-otp";
+pub(super) const GET_PATH: &str = "/email-otp/get-verification-otp";
 pub(super) const CHECK_PATH: &str = "/email-otp/check-verification-otp";
 pub(super) const VERIFY_EMAIL_PATH: &str = "/email-otp/verify-email";
 pub(super) const SIGN_IN_PATH: &str = "/sign-in/email-otp";
@@ -59,34 +60,6 @@ struct SignInBody {
     image: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EmailBody {
-    email: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResetPasswordBody {
-    email: String,
-    otp: String,
-    password: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RequestEmailChangeBody {
-    new_email: String,
-    otp: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ChangeEmailBody {
-    new_email: String,
-    otp: String,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TokenUserResponse {
@@ -97,6 +70,7 @@ struct TokenUserResponse {
 pub(super) fn send_otp<'a>(
     context: &'a AuthContext,
     request: ApiRequest,
+    adapter: Arc<dyn DbAdapter>,
     options: Arc<EmailOtpOptions>,
 ) -> openauth_core::api::EndpointFuture<'a> {
     Box::pin(async move {
@@ -116,14 +90,21 @@ pub(super) fn send_otp<'a>(
                 "Invalid OTP type",
             );
         }
-        let adapter = adapter(context)?;
         let user_exists = DbUserStore::new(adapter.as_ref())
             .find_user_by_email(&email)
             .await?
             .is_some();
         let should_send = otp_type == EmailOtpType::SignIn && !options.disable_sign_up;
         let identifier = otp::identifier(otp_type, &email);
-        let otp = resolve_otp(adapter.as_ref(), &options, &email, otp_type, &identifier).await?;
+        let otp = resolve_otp(
+            adapter.as_ref(),
+            &options,
+            &context.secret,
+            &email,
+            otp_type,
+            &identifier,
+        )
+        .await?;
 
         if !user_exists && !should_send {
             DbVerificationStore::new(adapter.as_ref())
@@ -141,6 +122,7 @@ pub(super) fn send_otp<'a>(
 pub(super) fn check_otp<'a>(
     context: &'a AuthContext,
     request: ApiRequest,
+    adapter: Arc<dyn DbAdapter>,
     options: Arc<EmailOtpOptions>,
 ) -> openauth_core::api::EndpointFuture<'a> {
     Box::pin(async move {
@@ -160,7 +142,6 @@ pub(super) fn check_otp<'a>(
                 "Invalid OTP type",
             );
         }
-        let adapter = adapter(context)?;
         if DbUserStore::new(adapter.as_ref())
             .find_user_by_email(&email)
             .await?
@@ -171,6 +152,7 @@ pub(super) fn check_otp<'a>(
         if let Some(response) = verify_otp(
             adapter.as_ref(),
             &options,
+            &context.secret,
             &otp::identifier(otp_type, &email),
             &body.otp,
             false,
@@ -186,6 +168,7 @@ pub(super) fn check_otp<'a>(
 pub(super) fn verify_email<'a>(
     context: &'a AuthContext,
     request: ApiRequest,
+    adapter: Arc<dyn DbAdapter>,
     options: Arc<EmailOtpOptions>,
 ) -> openauth_core::api::EndpointFuture<'a> {
     Box::pin(async move {
@@ -194,10 +177,10 @@ pub(super) fn verify_email<'a>(
             Ok(email) => email,
             Err(response) => return Ok(response),
         };
-        let adapter = adapter(context)?;
         if let Some(response) = verify_otp(
             adapter.as_ref(),
             &options,
+            &context.secret,
             &otp::identifier(EmailOtpType::EmailVerification, &email),
             &body.otp,
             true,
@@ -246,18 +229,31 @@ pub(super) fn verify_email<'a>(
 pub(super) fn sign_in<'a>(
     context: &'a AuthContext,
     request: ApiRequest,
+    adapter: Arc<dyn DbAdapter>,
     options: Arc<EmailOtpOptions>,
 ) -> openauth_core::api::EndpointFuture<'a> {
     Box::pin(async move {
-        let body: SignInBody = parse_request_body(&request)?;
+        let raw_body: Value = parse_request_body(&request)?;
+        let body_object = match raw_body.as_object() {
+            Some(object) => object,
+            None => {
+                return response::error(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_REQUEST_BODY",
+                    "request body must be an object",
+                );
+            }
+        };
+        let body: SignInBody = serde_json::from_value(raw_body.clone())
+            .map_err(|error| openauth_core::error::OpenAuthError::Api(error.to_string()))?;
         let email = match validated_email(&body.email)? {
             Ok(email) => email,
             Err(response) => return Ok(response),
         };
-        let adapter = adapter(context)?;
         if let Some(response) = verify_otp(
             adapter.as_ref(),
             &options,
+            &context.secret,
             &otp::identifier(EmailOtpType::SignIn, &email),
             &body.otp,
             true,
@@ -285,6 +281,18 @@ pub(super) fn sign_in<'a>(
             if let Some(image) = body.image {
                 input = input.image(image);
             }
+            match create_additional_user_fields(context, body_object) {
+                Ok(fields) => {
+                    input = input.additional_fields(fields);
+                }
+                Err(message) => {
+                    return response::error(
+                        StatusCode::BAD_REQUEST,
+                        "INVALID_REQUEST_BODY",
+                        message,
+                    );
+                }
+            }
             users.create_user(input).await?
         };
         let session = create_session(adapter.as_ref(), context, &user.id, &request).await?;
@@ -305,237 +313,68 @@ pub(super) fn sign_in<'a>(
     })
 }
 
-pub(super) fn request_password_reset<'a>(
-    context: &'a AuthContext,
-    request: ApiRequest,
-    options: Arc<EmailOtpOptions>,
-) -> openauth_core::api::EndpointFuture<'a> {
-    Box::pin(async move {
-        let body: EmailBody = parse_request_body(&request)?;
-        let email = match validated_email(&body.email)? {
-            Ok(email) => email,
-            Err(response) => return Ok(response),
-        };
-        let adapter = adapter(context)?;
-        let identifier = otp::identifier(EmailOtpType::ForgetPassword, &email);
-        let otp = resolve_otp(
-            adapter.as_ref(),
-            &options,
-            &email,
-            EmailOtpType::ForgetPassword,
-            &identifier,
-        )
-        .await?;
-        if DbUserStore::new(adapter.as_ref())
-            .find_user_by_email(&email)
-            .await?
-            .is_none()
-        {
-            DbVerificationStore::new(adapter.as_ref())
-                .delete_verification(&identifier)
-                .await?;
-            return response::success();
-        }
-        if let Some(response) = send_email(
-            &options,
-            &email,
-            otp,
-            EmailOtpType::ForgetPassword,
-            Some(&request),
-        )? {
-            return Ok(response);
-        }
-        response::success()
-    })
-}
-
-pub(super) fn reset_password<'a>(
-    context: &'a AuthContext,
-    request: ApiRequest,
-    options: Arc<EmailOtpOptions>,
-) -> openauth_core::api::EndpointFuture<'a> {
-    Box::pin(async move {
-        let body: ResetPasswordBody = parse_request_body(&request)?;
-        let email = match validated_email(&body.email)? {
-            Ok(email) => email,
-            Err(response) => return Ok(response),
-        };
-        if body.password.len() < context.password.config.min_password_length {
-            return response::error(
-                StatusCode::BAD_REQUEST,
-                "PASSWORD_TOO_SHORT",
-                "Password too short",
-            );
-        }
-        if body.password.len() > context.password.config.max_password_length {
-            return response::error(
-                StatusCode::BAD_REQUEST,
-                "PASSWORD_TOO_LONG",
-                "Password too long",
-            );
-        }
-        let adapter = adapter(context)?;
-        if let Some(response) = verify_otp(
-            adapter.as_ref(),
-            &options,
-            &otp::identifier(EmailOtpType::ForgetPassword, &email),
-            &body.otp,
-            true,
-        )
-        .await?
-        {
-            return Ok(response);
-        }
-        let users = DbUserStore::new(adapter.as_ref());
-        let Some(user) = users.find_user_by_email(&email).await? else {
-            return response::error(StatusCode::BAD_REQUEST, "USER_NOT_FOUND", "User not found");
-        };
-        let password_hash = hash_password(&body.password)?;
-        if users.find_credential_account(&user.id).await?.is_some() {
-            users
-                .update_credential_password(&user.id, &password_hash)
-                .await?;
-        } else {
-            users
-                .create_credential_account(CreateCredentialAccountInput::new(
-                    &user.id,
-                    password_hash,
-                ))
-                .await?;
-        }
-        if !user.email_verified {
-            users.update_user_email_verified(&user.id, true).await?;
-        }
-        response::success()
-    })
-}
-
-pub(super) fn request_email_change<'a>(
-    context: &'a AuthContext,
-    request: ApiRequest,
-    options: Arc<EmailOtpOptions>,
-) -> openauth_core::api::EndpointFuture<'a> {
-    Box::pin(async move {
-        if !options.change_email.enabled {
-            return response::error(
-                StatusCode::BAD_REQUEST,
-                "CHANGE_EMAIL_DISABLED",
-                "Change email with OTP is disabled",
-            );
-        }
-        let body: RequestEmailChangeBody = parse_request_body(&request)?;
-        let new_email = match validated_email(&body.new_email)? {
-            Ok(email) => email,
-            Err(response) => return Ok(response),
-        };
-        let adapter = adapter(context)?;
-        let user = match authenticated_user(adapter.as_ref(), context, &request).await? {
-            Ok(user) => user,
-            Err(response) => return Ok(response),
-        };
-        let current_email = otp::normalize_email(&user.email);
-        if new_email == current_email {
-            return response::error(
-                StatusCode::BAD_REQUEST,
-                "EMAIL_IS_THE_SAME",
-                "Email is the same",
-            );
-        }
-        if options.change_email.verify_current_email {
-            let Some(current_otp) = body.otp else {
-                return response::error(
-                    StatusCode::BAD_REQUEST,
-                    "OTP_REQUIRED",
-                    "OTP is required to verify current email",
+fn create_additional_user_fields(
+    context: &AuthContext,
+    body: &Map<String, Value>,
+) -> Result<DbRecord, String> {
+    let mut values = DbRecord::new();
+    for (name, field) in &context.options.user.additional_fields {
+        match body.get(name) {
+            Some(value) => {
+                if !field.input {
+                    return Err(format!(
+                        "additional field `{name}` is not accepted as input"
+                    ));
+                }
+                values.insert(
+                    name.clone(),
+                    json_to_db_value(name, &field.field_type, value)?,
                 );
-            };
-            if let Some(response) = verify_otp(
-                adapter.as_ref(),
-                &options,
-                &otp::identifier(EmailOtpType::EmailVerification, &current_email),
-                &current_otp,
-                true,
-            )
-            .await?
-            {
-                return Ok(response);
+            }
+            None => {
+                if let Some(value) = &field.default_value {
+                    values.insert(name.clone(), value.clone());
+                } else if field.required {
+                    return Err(format!("missing required additional field `{name}`"));
+                } else {
+                    values.insert(name.clone(), DbValue::Null);
+                }
             }
         }
-        let identifier = otp::change_email_identifier(&current_email, &new_email);
-        let generated = resolve_otp(
-            adapter.as_ref(),
-            &options,
-            &new_email,
-            EmailOtpType::ChangeEmail,
-            &identifier,
-        )
-        .await?;
-        if DbUserStore::new(adapter.as_ref())
-            .find_user_by_email(&new_email)
-            .await?
-            .is_some()
-        {
-            DbVerificationStore::new(adapter.as_ref())
-                .delete_verification(&identifier)
-                .await?;
-            return response::success();
-        }
-        if let Some(response) = send_email(
-            &options,
-            &new_email,
-            generated,
-            EmailOtpType::ChangeEmail,
-            Some(&request),
-        )? {
-            return Ok(response);
-        }
-        response::success()
-    })
+    }
+    Ok(values)
 }
 
-pub(super) fn change_email<'a>(
-    context: &'a AuthContext,
-    request: ApiRequest,
-    options: Arc<EmailOtpOptions>,
-) -> openauth_core::api::EndpointFuture<'a> {
-    Box::pin(async move {
-        if !options.change_email.enabled {
-            return response::error(
-                StatusCode::BAD_REQUEST,
-                "CHANGE_EMAIL_DISABLED",
-                "Change email with OTP is disabled",
-            );
-        }
-        let body: ChangeEmailBody = parse_request_body(&request)?;
-        let new_email = match validated_email(&body.new_email)? {
-            Ok(email) => email,
-            Err(response) => return Ok(response),
-        };
-        let adapter = adapter(context)?;
-        let user = match authenticated_user(adapter.as_ref(), context, &request).await? {
-            Ok(user) => user,
-            Err(response) => return Ok(response),
-        };
-        let current_email = otp::normalize_email(&user.email);
-        if let Some(response) = verify_otp(
-            adapter.as_ref(),
-            &options,
-            &otp::change_email_identifier(&current_email, &new_email),
-            &body.otp,
-            true,
-        )
-        .await?
-        {
-            return Ok(response);
-        }
-        let updated = DbUserStore::new(adapter.as_ref())
-            .update_user_email(&user.id, &new_email, true)
-            .await?
-            .unwrap_or(user);
-        response::json(
-            StatusCode::OK,
-            &serde_json::json!({ "success": true, "user": updated }),
-            Vec::new(),
-        )
-    })
+fn json_to_db_value(
+    name: &str,
+    field_type: &DbFieldType,
+    value: &Value,
+) -> Result<DbValue, String> {
+    if value.is_null() {
+        return Ok(DbValue::Null);
+    }
+    match field_type {
+        DbFieldType::String => value
+            .as_str()
+            .map(|value| DbValue::String(value.to_owned())),
+        DbFieldType::Number => value.as_i64().map(DbValue::Number),
+        DbFieldType::Boolean => value.as_bool().map(DbValue::Boolean),
+        DbFieldType::Json => Some(DbValue::Json(value.clone())),
+        DbFieldType::StringArray => value.as_array().and_then(|values| {
+            values
+                .iter()
+                .map(|value| value.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+                .map(DbValue::StringArray)
+        }),
+        DbFieldType::NumberArray => value.as_array().and_then(|values| {
+            values
+                .iter()
+                .map(Value::as_i64)
+                .collect::<Option<Vec<_>>>()
+                .map(DbValue::NumberArray)
+        }),
+        DbFieldType::Timestamp => None,
+    }
+    .ok_or_else(|| format!("invalid value for additional field `{name}`"))
 }

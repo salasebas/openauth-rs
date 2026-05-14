@@ -1,6 +1,10 @@
 #![allow(clippy::unwrap_used)]
 
+mod additional_fields;
 mod common;
+mod hooks;
+mod server;
+mod storage;
 
 use std::sync::Arc;
 
@@ -13,7 +17,7 @@ use openauth_plugins::email_otp::{email_otp, ChangeEmailOptions, EmailOtpOptions
 
 #[test]
 fn exposes_email_otp_plugin_builder() {
-    let plugin = email_otp(EmailOtpOptions::default());
+    let plugin = email_otp(Arc::new(MemoryAdapter::new()), EmailOtpOptions::default());
 
     assert_eq!(openauth_plugins::email_otp::UPSTREAM_PLUGIN_ID, "email-otp");
     assert_eq!(plugin.id, "email-otp");
@@ -21,6 +25,14 @@ fn exposes_email_otp_plugin_builder() {
         .endpoints
         .iter()
         .any(|endpoint| endpoint.path == "/email-otp/send-verification-otp"));
+    assert!(plugin
+        .endpoints
+        .iter()
+        .any(|endpoint| endpoint.path == "/email-otp/create-verification-otp"));
+    assert!(plugin
+        .error_codes
+        .iter()
+        .any(|error| error.code == "INVALID_OTP"));
 }
 
 #[tokio::test]
@@ -55,7 +67,7 @@ async fn send_verification_otp_creates_verification_and_calls_sender() {
 async fn invalid_email_and_change_email_type_are_rejected() {
     let adapter = Arc::new(MemoryAdapter::new());
     let sender = CaptureSender::default();
-    let router = router(adapter, sender, EmailOtpOptions::default()).unwrap();
+    let router = router(adapter.clone(), sender, EmailOtpOptions::default()).unwrap();
 
     let invalid_email = router
         .handle_async(
