@@ -1072,7 +1072,14 @@ dependencies = [
 name = "openauth-plugins"
 version = "0.0.2"
 dependencies = [
+ "http",
  "openauth-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "url",
 ]
 
 [[package]]
