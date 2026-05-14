@@ -402,6 +402,9 @@ impl<'a> DbUserStore<'a> {
         if let Some(display_username) = input.display_username {
             query = query.data("display_username", optional_string(display_username));
         }
+        for (field, value) in input.fields {
+            query = query.data(field, value);
+        }
 
         self.adapter
             .update(query)

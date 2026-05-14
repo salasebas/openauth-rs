@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use http::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::shared::{
     current_session, error_response, json_openapi_response, json_response, unauthorized,
@@ -12,6 +12,8 @@ use crate::api::{
     OpenApiOperation,
 };
 use crate::db::DbAdapter;
+use crate::db::DbValue;
+use crate::error::OpenAuthError;
 use crate::user::{DbUserStore, UpdateUserInput};
 
 #[derive(Debug, Deserialize)]
@@ -26,6 +28,8 @@ struct UpdateUserBody {
     display_username: Option<Value>,
     #[serde(default)]
     email: Option<Value>,
+    #[serde(flatten)]
+    extra: Map<String, Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -121,6 +125,20 @@ pub(super) fn update_user_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
                         }
                     });
                 }
+                for (field, value) in body.extra {
+                    if is_core_field(&field) {
+                        continue;
+                    }
+                    let logical_field = camel_to_snake(&field);
+                    if context.db_schema.field("user", &logical_field).is_err() {
+                        return error_response(
+                            StatusCode::BAD_REQUEST,
+                            "INVALID_REQUEST_BODY",
+                            format!("unknown user field `{field}`"),
+                        );
+                    }
+                    input = input.field(logical_field, json_to_db_value(value)?);
+                }
                 if input.is_empty() {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -140,6 +158,41 @@ pub(super) fn update_user_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
             })
         },
     )
+}
+
+fn is_core_field(field: &str) -> bool {
+    matches!(
+        field,
+        "name" | "image" | "username" | "displayUsername" | "email"
+    )
+}
+
+fn camel_to_snake(field: &str) -> String {
+    let mut output = String::with_capacity(field.len());
+    for (index, ch) in field.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if index > 0 {
+                output.push('_');
+            }
+            output.push(ch.to_ascii_lowercase());
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+fn json_to_db_value(value: Value) -> Result<DbValue, OpenAuthError> {
+    match value {
+        Value::Null => Ok(DbValue::Null),
+        Value::String(value) => Ok(DbValue::String(value)),
+        Value::Bool(value) => Ok(DbValue::Boolean(value)),
+        Value::Number(value) => value
+            .as_i64()
+            .map(DbValue::Number)
+            .ok_or_else(|| OpenAuthError::Api("number must fit in i64".to_owned())),
+        other => Ok(DbValue::Json(other)),
+    }
 }
 
 fn update_user_request_body() -> Value {
