@@ -110,10 +110,11 @@ pub struct UpdateAccountInput {
     pub scope: Option<Option<String>>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct UpdateUserInput {
     pub name: Option<String>,
     pub image: Option<Option<String>>,
+    pub fields: Vec<(String, DbValue)>,
 }
 
 impl UpdateUserInput {
@@ -133,8 +134,14 @@ impl UpdateUserInput {
         self
     }
 
+    #[must_use]
+    pub fn field(mut self, field: impl Into<String>, value: DbValue) -> Self {
+        self.fields.push((field.into(), value));
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.name.is_none() && self.image.is_none()
+        self.name.is_none() && self.image.is_none() && self.fields.is_empty()
     }
 }
 
@@ -493,6 +500,9 @@ impl<'a> DbUserStore<'a> {
         }
         if let Some(image) = input.image {
             query = query.data("image", optional_string(image));
+        }
+        for (field, value) in input.fields {
+            query = query.data(field, value);
         }
 
         self.adapter
