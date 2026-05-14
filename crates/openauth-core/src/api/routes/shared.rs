@@ -3,6 +3,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 
+use crate::api::additional_fields::{insert_returned_fields, AdditionalFieldError};
 use crate::api::{ApiErrorResponse, ApiRequest, ApiResponse};
 use crate::auth::email_password::{
     AuthFlowError, AuthFlowErrorCode, EmailPasswordConfig, SignInInput, SignUpInput,
@@ -14,7 +15,7 @@ use crate::cookies::{
     set_cookie_cache, set_session_cookie, Cookie, CookieCachePayload, CookieOptions,
     SessionCookieOptions,
 };
-use crate::db::{DbAdapter, Session, User};
+use crate::db::{DbAdapter, DbRecord, DbValue, FindOne, Session, User, Where};
 use crate::error::OpenAuthError;
 
 pub(super) trait RequestMetadata {
@@ -120,6 +121,57 @@ pub(super) fn auth_flow_error_response(error: AuthFlowError) -> Result<ApiRespon
         },
         Vec::new(),
     )
+}
+
+pub(super) fn invalid_additional_field_response(
+    error: AdditionalFieldError,
+) -> Result<ApiResponse, OpenAuthError> {
+    error_response(
+        StatusCode::BAD_REQUEST,
+        "INVALID_REQUEST_BODY",
+        error.message(),
+    )
+}
+
+pub(super) fn additional_session_create_values(context: &AuthContext) -> DbRecord {
+    context
+        .options
+        .session
+        .additional_fields
+        .iter()
+        .map(|(name, field)| {
+            (
+                name.clone(),
+                field.default_value.clone().unwrap_or(DbValue::Null),
+            )
+        })
+        .collect()
+}
+
+pub(super) async fn user_response_value(
+    adapter: &dyn DbAdapter,
+    context: &AuthContext,
+    user: &User,
+) -> Result<Value, OpenAuthError> {
+    if context.options.user.additional_fields.is_empty() {
+        return serde_json::to_value(user).map_err(|error| OpenAuthError::Api(error.to_string()));
+    }
+    let record = adapter
+        .find_one(
+            FindOne::new("user").where_clause(Where::new("id", DbValue::String(user.id.clone()))),
+        )
+        .await?;
+    let mut value =
+        serde_json::to_value(user).map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    let Some(object) = value.as_object_mut() else {
+        return Err(OpenAuthError::Api(
+            "could not serialize user as an object".to_owned(),
+        ));
+    };
+    if let Some(record) = record {
+        insert_returned_fields(object, &context.options.user.additional_fields, &record)?;
+    }
+    Ok(value)
 }
 
 pub(super) fn json_response<T>(

@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::shared::{
-    current_session, error_response, json_openapi_response, json_response, unauthorized,
+    current_session, error_response, invalid_additional_field_response, json_openapi_response,
+    json_response, unauthorized,
 };
+use crate::api::additional_fields::update_values;
 use crate::api::{
     create_auth_endpoint, parse_request_body, AsyncAuthEndpoint, AuthEndpointOptions,
     OpenApiOperation,
@@ -49,7 +51,18 @@ pub(super) fn update_user_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
                 else {
                     return unauthorized();
                 };
-                let body: UpdateUserBody = parse_request_body(&request)?;
+                let raw_body: Value = parse_request_body(&request)?;
+                let Some(body_object) = raw_body.as_object() else {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "INVALID_REQUEST_BODY",
+                        "Body must be an object",
+                    );
+                };
+                let body: UpdateUserBody =
+                    serde_json::from_value(raw_body.clone()).map_err(|error| {
+                        crate::error::OpenAuthError::Api(format!("invalid request body: {error}"))
+                    })?;
                 if body.email.is_some() {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -75,6 +88,12 @@ pub(super) fn update_user_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
                         }
                     });
                 }
+                let additional_fields =
+                    match update_values(&context.options.user.additional_fields, body_object) {
+                        Ok(fields) => fields,
+                        Err(error) => return invalid_additional_field_response(error),
+                    };
+                input = input.additional_fields(additional_fields);
                 if input.is_empty() {
                     return error_response(
                         StatusCode::BAD_REQUEST,
