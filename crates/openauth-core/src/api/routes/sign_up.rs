@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::shared::{
     auth_flow_error_response, auth_session_cookies, email_password_config, json_response,
-    message_openapi_response, sign_up_email_openapi_response, RequestMetadata,
+    message_openapi_response, record_new_session, sign_up_email_openapi_response, RequestMetadata,
 };
 use crate::api::{
     create_auth_endpoint, parse_request_body, AsyncAuthEndpoint, AuthEndpointOptions, BodyField,
@@ -72,6 +72,7 @@ pub(super) fn sign_up_email_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEn
                     Ok(result) => result,
                     Err(error) => return auth_flow_error_response(error),
                 };
+                record_new_session(&result.session, &result.user)?;
                 let cookies =
                     auth_session_cookies(context, &result.session, &result.user, !remember_me)?;
                 json_response(
