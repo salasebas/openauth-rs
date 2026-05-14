@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::shared::{
-    current_session, error_response, json_openapi_response, json_response, unauthorized,
+    current_session, error_response, invalid_additional_field_response, json_openapi_response,
+    json_response, unauthorized,
 };
+use crate::api::additional_fields::update_values;
 use crate::api::{
     create_auth_endpoint, parse_request_body, AsyncAuthEndpoint, AuthEndpointOptions,
     OpenApiOperation,
@@ -57,7 +59,18 @@ pub(super) fn update_user_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
                 else {
                     return unauthorized();
                 };
-                let body: UpdateUserBody = parse_request_body(&request)?;
+                let raw_body: Value = parse_request_body(&request)?;
+                let Some(body_object) = raw_body.as_object() else {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "INVALID_REQUEST_BODY",
+                        "Body must be an object",
+                    );
+                };
+                let body: UpdateUserBody =
+                    serde_json::from_value(raw_body.clone()).map_err(|error| {
+                        crate::error::OpenAuthError::Api(format!("invalid request body: {error}"))
+                    })?;
                 if body.email.is_some() {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -125,11 +138,26 @@ pub(super) fn update_user_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
                         }
                     });
                 }
+                let additional_fields =
+                    match update_values(&context.options.user.additional_fields, body_object) {
+                        Ok(fields) => fields,
+                        Err(error) => return invalid_additional_field_response(error),
+                    };
                 for (field, value) in body.extra {
-                    if is_core_field(&field) {
+                    if is_core_field(&field)
+                        || context.options.user.additional_fields.contains_key(&field)
+                    {
                         continue;
                     }
                     let logical_field = camel_to_snake(&field);
+                    if context
+                        .options
+                        .user
+                        .additional_fields
+                        .contains_key(&logical_field)
+                    {
+                        continue;
+                    }
                     if context.db_schema.field("user", &logical_field).is_err() {
                         return error_response(
                             StatusCode::BAD_REQUEST,
@@ -139,6 +167,7 @@ pub(super) fn update_user_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
                     }
                     input = input.field(logical_field, json_to_db_value(value)?);
                 }
+                input = input.additional_fields(additional_fields);
                 if input.is_empty() {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -222,6 +251,7 @@ fn update_user_request_body() -> Value {
                             "nullable": true,
                         },
                     },
+                    "additionalProperties": true,
                 },
             },
         },

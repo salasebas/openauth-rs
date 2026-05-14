@@ -1,8 +1,8 @@
 use time::OffsetDateTime;
 
-use crate::db::DbValue;
+use crate::db::{DbRecord, DbValue};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CreateUserInput {
     pub id: Option<String>,
     pub name: String,
@@ -11,6 +11,7 @@ pub struct CreateUserInput {
     pub image: Option<String>,
     pub username: Option<String>,
     pub display_username: Option<String>,
+    pub additional_fields: DbRecord,
 }
 
 impl CreateUserInput {
@@ -23,6 +24,7 @@ impl CreateUserInput {
             image: None,
             username: None,
             display_username: None,
+            additional_fields: DbRecord::new(),
         }
     }
 
@@ -53,6 +55,12 @@ impl CreateUserInput {
     #[must_use]
     pub fn display_username(mut self, display_username: impl Into<String>) -> Self {
         self.display_username = Some(display_username.into());
+        self
+    }
+
+    #[must_use]
+    pub fn additional_fields(mut self, additional_fields: DbRecord) -> Self {
+        self.additional_fields = additional_fields;
         self
     }
 }
@@ -111,6 +119,7 @@ pub struct UpdateUserInput {
     pub username: Option<Option<String>>,
     pub display_username: Option<Option<String>>,
     pub fields: Vec<(String, DbValue)>,
+    pub additional_fields: DbRecord,
 }
 
 impl UpdateUserInput {
@@ -154,5 +163,12 @@ impl UpdateUserInput {
             && self.username.is_none()
             && self.display_username.is_none()
             && self.fields.is_empty()
+            && self.additional_fields.is_empty()
+    }
+
+    #[must_use]
+    pub fn additional_fields(mut self, additional_fields: DbRecord) -> Self {
+        self.additional_fields = additional_fields;
+        self
     }
 }

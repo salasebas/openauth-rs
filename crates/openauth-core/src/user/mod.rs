@@ -78,6 +78,10 @@ impl<'a> DbUserStore<'a> {
             query = query.select(USER_FIELDS);
         }
 
+        for (field, value) in input.additional_fields {
+            query = query.data(field, value);
+        }
+
         let record = self.adapter.create(query).await?;
 
         user_from_record(record)
@@ -403,6 +407,9 @@ impl<'a> DbUserStore<'a> {
             query = query.data("display_username", optional_string(display_username));
         }
         for (field, value) in input.fields {
+            query = query.data(field, value);
+        }
+        for (field, value) in input.additional_fields {
             query = query.data(field, value);
         }
 
