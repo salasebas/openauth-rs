@@ -15,7 +15,7 @@ categories.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-openauth-core = { path = "../openauth-core", version = "0.0.1" }
+openauth-core.workspace = true
 thiserror.workspace = true
 
 [lints]

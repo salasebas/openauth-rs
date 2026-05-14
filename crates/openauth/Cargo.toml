@@ -16,9 +16,9 @@ path = "src/lib.rs"
 
 [dependencies]
 http.workspace = true
-openauth-core = { path = "../openauth-core", version = "0.0.1" }
-openauth-plugins = { path = "../openauth-plugins", version = "0.0.1", optional = true }
-openauth-telemetry = { path = "../openauth-telemetry", version = "0.0.1" }
+openauth-core.workspace = true
+openauth-plugins = { workspace = true, optional = true }
+openauth-telemetry.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 

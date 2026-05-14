@@ -16,7 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 base64.workspace = true
-openauth-core = { path = "../openauth-core", version = "0.0.1" }
+openauth-core.workspace = true
 rand.workspace = true
 reqwest = { workspace = true, optional = true }
 serde.workspace = true
