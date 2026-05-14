@@ -9,6 +9,7 @@ use openauth_core::auth::oauth::{
     handle_oauth_user_info, HandleOAuthUserInfoInput, OAuthAccountInput, OAuthUserInfo,
     OAuthUserInfoError,
 };
+use openauth_core::context::request_state::{has_request_state, set_current_new_session};
 use openauth_core::context::AuthContext;
 use openauth_core::error::OpenAuthError;
 use openauth_core::oauth::oauth2::{
@@ -110,7 +111,13 @@ async fn handle_one_tap_callback(
             "Email not available in token",
         );
     };
-    let normalized = normalize_user_info(&user_info)?;
+    let Some(normalized) = normalize_user_info(&user_info) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "EMAIL_NOT_AVAILABLE",
+            "Email not available in token",
+        );
+    };
     let result = handle_oauth_user_info(
         context,
         adapter.as_ref(),
@@ -132,7 +139,18 @@ async fn handle_one_tap_callback(
         return oauth_error_response(error);
     };
 
-    session_response(context, data.session, data.user, result.cookies)
+    if has_request_state() {
+        set_current_new_session(data.session.clone(), data.user.clone())?;
+    }
+
+    session_response(
+        context,
+        adapter.as_ref(),
+        data.session,
+        data.user,
+        result.cookies,
+    )
+    .await
 }
 
 fn google_provider(
@@ -158,13 +176,9 @@ fn google_provider(
     })
 }
 
-fn normalize_user_info(info: &OAuth2UserInfo) -> Result<OAuthUserInfo, OpenAuthError> {
-    let Some(email) = info.email.clone() else {
-        return Err(OpenAuthError::Api(
-            "OAuth provider did not return an email".to_owned(),
-        ));
-    };
-    Ok(OAuthUserInfo {
+fn normalize_user_info(info: &OAuth2UserInfo) -> Option<OAuthUserInfo> {
+    let email = info.email.clone()?;
+    Some(OAuthUserInfo {
         id: info.id.clone(),
         name: info.name.clone().unwrap_or_default(),
         email,

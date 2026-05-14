@@ -11,8 +11,14 @@ use openauth_core::oauth::oauth2::{
     OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions, SocialAuthorizationCodeRequest,
     SocialAuthorizationUrlRequest, SocialIdTokenRequest, SocialOAuthProvider, SocialProviderFuture,
 };
-use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
+use openauth_core::options::{
+    AccountLinkingOptions, AccountOptions, AdvancedOptions, OpenAuthOptions,
+};
+use openauth_plugins::additional_fields::{
+    additional_fields, AdditionalField, AdditionalFieldsOptions,
+};
 use openauth_plugins::one_tap::{one_tap, OneTapOptions};
+use openauth_plugins::one_time_token::{one_time_token_with_options, OneTimeTokenOptions};
 use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
@@ -88,6 +94,42 @@ async fn callback_creates_user_account_session_and_sets_cookie(
 }
 
 #[tokio::test]
+async fn callback_accepts_form_encoded_id_token() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router(adapter, OneTapOptions::default())?;
+
+    let response = router
+        .handle_async(form_request(
+            "/api/auth/one-tap/callback",
+            "idToken=valid-id-token",
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body["user"]["email"], "ada@example.com");
+    Ok(())
+}
+
+#[tokio::test]
+async fn callback_rejects_token_without_email() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router(adapter, OneTapOptions::default())?;
+
+    let response = router
+        .handle_async(json_request(
+            "/api/auth/one-tap/callback",
+            r#"{"idToken":"no-email-token"}"#,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "EMAIL_NOT_AVAILABLE");
+    Ok(())
+}
+
+#[tokio::test]
 async fn callback_rejects_new_user_when_signup_is_disabled(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(MemoryAdapter::new());
@@ -110,6 +152,42 @@ async fn callback_rejects_new_user_when_signup_is_disabled(
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(body["code"], "SIGNUP_DISABLED");
     assert_eq!(adapter.len("user").await, 0);
+    assert_eq!(adapter.len("account").await, 0);
+    assert_eq!(adapter.len("session").await, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn callback_rejects_unlinked_existing_user_when_account_linking_is_disabled(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    adapter.insert_user(test_user()).await?;
+    let router = router_with_options(
+        adapter.clone(),
+        OneTapOptions::default(),
+        OpenAuthOptions {
+            account: AccountOptions {
+                account_linking: AccountLinkingOptions {
+                    enabled: false,
+                    ..AccountLinkingOptions::default()
+                },
+                ..AccountOptions::default()
+            },
+            ..OpenAuthOptions::default()
+        },
+        vec![],
+    )?;
+
+    let response = router
+        .handle_async(json_request(
+            "/api/auth/one-tap/callback",
+            r#"{"idToken":"valid-id-token"}"#,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(body["code"], "ACCOUNT_NOT_LINKED");
     assert_eq!(adapter.len("account").await, 0);
     assert_eq!(adapter.len("session").await, 0);
     Ok(())
@@ -171,10 +249,85 @@ async fn callback_signs_in_existing_google_account_without_duplication(
     Ok(())
 }
 
+#[tokio::test]
+async fn callback_sets_one_time_token_header_for_new_session(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router_with_options(
+        adapter,
+        OneTapOptions::default(),
+        OpenAuthOptions::default(),
+        vec![one_time_token_with_options(
+            OneTimeTokenOptions::default()
+                .set_ott_header_on_new_session(true)
+                .generate_token(|_, _| Ok("one-tap-ott".to_owned())),
+        )],
+    )?;
+
+    let response = router
+        .handle_async(json_request(
+            "/api/auth/one-tap/callback",
+            r#"{"idToken":"valid-id-token"}"#,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("set-ott")
+            .and_then(|value| value.to_str().ok()),
+        Some("one-tap-ott")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn callback_returns_configured_additional_user_fields(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router_with_options(
+        adapter,
+        OneTapOptions::default(),
+        OpenAuthOptions::default(),
+        vec![additional_fields(
+            AdditionalFieldsOptions::new().user_field(
+                "role",
+                AdditionalField::new(openauth_core::db::DbFieldType::String)
+                    .default_value(DbValue::String("member".to_owned()))
+                    .generated(),
+            ),
+        )],
+    )?;
+
+    let response = router
+        .handle_async(json_request(
+            "/api/auth/one-tap/callback",
+            r#"{"idToken":"valid-id-token"}"#,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body["user"]["role"], "member");
+    Ok(())
+}
+
 fn router(
     adapter: Arc<MemoryAdapter>,
     options: OneTapOptions,
 ) -> Result<AuthRouter, OpenAuthError> {
+    router_with_options(adapter, options, OpenAuthOptions::default(), vec![])
+}
+
+fn router_with_options(
+    adapter: Arc<MemoryAdapter>,
+    one_tap_options: OneTapOptions,
+    options: OpenAuthOptions,
+    extra_plugins: Vec<openauth_core::plugin::AuthPlugin>,
+) -> Result<AuthRouter, OpenAuthError> {
+    let mut plugins = vec![one_tap(one_tap_options)];
+    plugins.extend(extra_plugins);
     let context = create_auth_context_with_adapter(
         OpenAuthOptions {
             secret: Some(secret().to_owned()),
@@ -183,9 +336,9 @@ fn router(
                 disable_origin_check: true,
                 ..AdvancedOptions::default()
             },
-            plugins: vec![one_tap(options)],
+            plugins,
             social_providers: vec![Arc::new(FakeGoogleProvider)],
-            ..OpenAuthOptions::default()
+            ..options
         },
         adapter.clone(),
     )?;
@@ -197,6 +350,14 @@ fn json_request(path: &str, body: &str) -> Result<Request<Body>, http::Error> {
         .method(Method::POST)
         .uri(format!("http://localhost:3000{path}"))
         .header(header::CONTENT_TYPE, "application/json")
+        .body(body.as_bytes().to_vec())
+}
+
+fn form_request(path: &str, body: &str) -> Result<Request<Body>, http::Error> {
+    Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://localhost:3000{path}"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .body(body.as_bytes().to_vec())
 }
 
@@ -242,6 +403,8 @@ fn test_user() -> openauth_core::db::User {
         email: "ada@example.com".to_owned(),
         email_verified: true,
         image: None,
+        username: None,
+        display_username: None,
         created_at: now,
         updated_at: now,
     }
@@ -259,6 +422,16 @@ fn user_record(user: openauth_core::db::User) -> DbRecord {
     record.insert(
         "image".to_owned(),
         user.image.map(DbValue::String).unwrap_or(DbValue::Null),
+    );
+    record.insert(
+        "username".to_owned(),
+        user.username.map(DbValue::String).unwrap_or(DbValue::Null),
+    );
+    record.insert(
+        "display_username".to_owned(),
+        user.display_username
+            .map(DbValue::String)
+            .unwrap_or(DbValue::Null),
     );
     record.insert("created_at".to_owned(), DbValue::Timestamp(user.created_at));
     record.insert("updated_at".to_owned(), DbValue::Timestamp(user.updated_at));
@@ -363,20 +536,32 @@ impl SocialOAuthProvider for FakeGoogleProvider {
         _provider_user: Option<Value>,
     ) -> SocialProviderFuture<'_, Option<OAuth2UserInfo>> {
         Box::pin(async move {
-            if tokens.id_token.as_deref() != Some("valid-id-token") {
-                return Ok(None);
+            match tokens.id_token.as_deref() {
+                Some("valid-id-token") => Ok(Some(OAuth2UserInfo {
+                    id: "google_ada".to_owned(),
+                    name: Some("Ada Lovelace".to_owned()),
+                    email: Some("ada@example.com".to_owned()),
+                    image: Some("https://example.com/ada.png".to_owned()),
+                    email_verified: true,
+                })),
+                Some("no-email-token") => Ok(Some(OAuth2UserInfo {
+                    id: "google_no_email".to_owned(),
+                    name: Some("No Email".to_owned()),
+                    email: None,
+                    image: None,
+                    email_verified: true,
+                })),
+                _ => Ok(None),
             }
-            Ok(Some(OAuth2UserInfo {
-                id: "google_ada".to_owned(),
-                name: Some("Ada Lovelace".to_owned()),
-                email: Some("ada@example.com".to_owned()),
-                image: Some("https://example.com/ada.png".to_owned()),
-                email_verified: true,
-            }))
         })
     }
 
     fn verify_id_token(&self, input: SocialIdTokenRequest) -> SocialProviderFuture<'_, bool> {
-        Box::pin(async move { Ok(input.token == "valid-id-token") })
+        Box::pin(async move {
+            Ok(matches!(
+                input.token.as_str(),
+                "valid-id-token" | "no-email-token"
+            ))
+        })
     }
 }
