@@ -4,8 +4,8 @@ use http::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::shared::{
-    auth_flow_error_response, auth_session_cookies, email_password_config, json_response,
-    message_openapi_response, sign_up_email_openapi_response, RequestMetadata,
+    auth_flow_error_response, auth_session_cookies, email_password_config, error_response,
+    json_response, message_openapi_response, sign_up_email_openapi_response, RequestMetadata,
 };
 use crate::api::{
     create_auth_endpoint, parse_request_body, AsyncAuthEndpoint, AuthEndpointOptions, BodyField,
@@ -13,6 +13,7 @@ use crate::api::{
 };
 use crate::auth::email_password::{EmailPasswordAuth, SignUpInput};
 use crate::db::{DbAdapter, User};
+use crate::user::DbUserStore;
 
 #[derive(Debug, Deserialize)]
 struct SignUpEmailBody {
@@ -21,6 +22,10 @@ struct SignUpEmailBody {
     password: String,
     #[serde(default)]
     image: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default, alias = "displayUsername")]
+    display_username: Option<String>,
     #[serde(default, alias = "rememberMe")]
     remember_me: Option<bool>,
 }
@@ -60,7 +65,28 @@ pub(super) fn sign_up_email_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEn
                 if let Some(image) = body.image {
                     input = input.image(image);
                 }
+                if let Some(username) = body.username {
+                    input = input.username(username);
+                }
+                if let Some(display_username) = body.display_username {
+                    input = input.display_username(display_username);
+                }
                 input = input.with_request_metadata(&request);
+                if context.has_plugin("username") {
+                    if let Some(username) = input.username.as_deref() {
+                        if DbUserStore::new(adapter.as_ref())
+                            .find_user_by_username(username)
+                            .await?
+                            .is_some()
+                        {
+                            return error_response(
+                                StatusCode::BAD_REQUEST,
+                                "USERNAME_IS_ALREADY_TAKEN",
+                                "Username is already taken. Please try another.",
+                            );
+                        }
+                    }
+                }
 
                 let auth = EmailPasswordAuth::new(
                     adapter.as_ref(),
@@ -96,6 +122,10 @@ fn sign_up_email_body_schema() -> BodySchema {
         BodyField::new("password", JsonSchemaType::String).description("The password of the user"),
         BodyField::optional("image", JsonSchemaType::String)
             .description("The profile image URL of the user"),
+        BodyField::optional("username", JsonSchemaType::String)
+            .description("The username of the user"),
+        BodyField::optional("displayUsername", JsonSchemaType::String)
+            .description("The display username of the user"),
         BodyField::optional("callbackURL", JsonSchemaType::String)
             .description("The URL to use for email verification callback"),
         BodyField::optional("rememberMe", JsonSchemaType::Boolean)

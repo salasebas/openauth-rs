@@ -21,6 +21,10 @@ struct UpdateUserBody {
     #[serde(default)]
     image: Option<Value>,
     #[serde(default)]
+    username: Option<Value>,
+    #[serde(default, alias = "displayUsername")]
+    display_username: Option<Value>,
+    #[serde(default)]
     email: Option<Value>,
 }
 
@@ -75,6 +79,48 @@ pub(super) fn update_user_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
                         }
                     });
                 }
+                if let Some(username) = body.username {
+                    input = input.username(match username {
+                        Value::Null => None,
+                        Value::String(value) => Some(value),
+                        _ => {
+                            return error_response(
+                                StatusCode::BAD_REQUEST,
+                                "INVALID_REQUEST_BODY",
+                                "username must be a string or null",
+                            )
+                        }
+                    });
+                }
+                if context.has_plugin("username") {
+                    if let Some(Some(username)) = input.username.as_ref() {
+                        if let Some(existing_user) = DbUserStore::new(adapter.as_ref())
+                            .find_user_by_username(username)
+                            .await?
+                        {
+                            if existing_user.id != user.id {
+                                return error_response(
+                                    StatusCode::BAD_REQUEST,
+                                    "USERNAME_IS_ALREADY_TAKEN",
+                                    "Username is already taken. Please try another.",
+                                );
+                            }
+                        }
+                    }
+                }
+                if let Some(display_username) = body.display_username {
+                    input = input.display_username(match display_username {
+                        Value::Null => None,
+                        Value::String(value) => Some(value),
+                        _ => {
+                            return error_response(
+                                StatusCode::BAD_REQUEST,
+                                "INVALID_REQUEST_BODY",
+                                "displayUsername must be a string or null",
+                            )
+                        }
+                    });
+                }
                 if input.is_empty() {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -110,6 +156,16 @@ fn update_user_request_body() -> Value {
                         "image": {
                             "type": "string",
                             "description": "The image of the user",
+                            "nullable": true,
+                        },
+                        "username": {
+                            "type": "string",
+                            "description": "The username of the user",
+                            "nullable": true,
+                        },
+                        "displayUsername": {
+                            "type": "string",
+                            "description": "The display username of the user",
                             "nullable": true,
                         },
                     },

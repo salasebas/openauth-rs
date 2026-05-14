@@ -126,6 +126,8 @@ pub struct SignUpInput {
     pub email: String,
     pub password: String,
     pub image: Option<String>,
+    pub username: Option<String>,
+    pub display_username: Option<String>,
     pub remember_me: bool,
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
@@ -142,6 +144,8 @@ impl SignUpInput {
             email: email.into(),
             password: password.into(),
             image: None,
+            username: None,
+            display_username: None,
             remember_me: true,
             ip_address: None,
             user_agent: None,
@@ -151,6 +155,18 @@ impl SignUpInput {
     #[must_use]
     pub fn image(mut self, image: impl Into<String>) -> Self {
         self.image = Some(image.into());
+        self
+    }
+
+    #[must_use]
+    pub fn username(mut self, username: impl Into<String>) -> Self {
+        self.username = Some(username.into());
+        self
+    }
+
+    #[must_use]
+    pub fn display_username(mut self, display_username: impl Into<String>) -> Self {
+        self.display_username = Some(display_username.into());
         self
     }
 
@@ -259,6 +275,12 @@ impl<'a> EmailPasswordAuth<'a> {
         let mut create_user = CreateUserInput::new(input.name, input.email);
         if let Some(image) = input.image {
             create_user = create_user.image(image);
+        }
+        if let Some(username) = input.username {
+            create_user = create_user.username(username);
+        }
+        if let Some(display_username) = input.display_username {
+            create_user = create_user.display_username(display_username);
         }
         let user = users.create_user(create_user).await?;
         users

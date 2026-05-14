@@ -29,3 +29,35 @@ async fn sign_up_email_route_creates_session_and_sets_cookie(
         .any(|cookie| cookie.starts_with("better-auth.session_token=")));
     Ok(())
 }
+
+#[tokio::test]
+async fn sign_up_email_route_accepts_username_fields() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(RouteAdapter::default());
+    let router = router(adapter.clone())?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"ada@example.com","password":"secret123","username":"ada_lovelace","displayUsername":"Ada Lovelace"}"#,
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["user"]["username"], "ada_lovelace");
+    assert_eq!(body["user"]["display_username"], "Ada Lovelace");
+    let created = record_by_string(&adapter, "user", "email", "ada@example.com")
+        .await?
+        .ok_or("missing user")?;
+    assert_eq!(
+        created.get("username"),
+        Some(&DbValue::String("ada_lovelace".to_owned()))
+    );
+    assert_eq!(
+        created.get("display_username"),
+        Some(&DbValue::String("Ada Lovelace".to_owned()))
+    );
+    Ok(())
+}
