@@ -1,0 +1,1 @@
+//! hCaptcha verification handler placeholder.

@@ -997,6 +997,7 @@ version = "0.0.1"
 dependencies = [
  "http",
  "openauth-core",
+ "openauth-plugins",
  "openauth-telemetry",
  "serde_json",
  "tokio",
@@ -1065,6 +1066,13 @@ version = "0.0.1"
 dependencies = [
  "openauth-core",
  "thiserror",
+]
+
+[[package]]
+name = "openauth-plugins"
+version = "0.0.1"
+dependencies = [
+ "openauth-core",
 ]
 
 [[package]]

@@ -60,6 +60,12 @@ fn openauth_crate_reexports_oauth_and_social_provider_packages() {
     assert!(openauth::social_providers::PROVIDER_IDS.contains(&"github"));
 }
 
+#[cfg(feature = "plugins")]
+#[test]
+fn openauth_crate_reexports_plugins_package_behind_feature() {
+    assert!(openauth::plugins::PLUGIN_IDS.contains(&"generic-oauth"));
+}
+
 #[test]
 fn openauth_crate_accepts_social_oauth_runtime_providers() {
     let provider: Arc<dyn SocialOAuthProvider> = Arc::new(

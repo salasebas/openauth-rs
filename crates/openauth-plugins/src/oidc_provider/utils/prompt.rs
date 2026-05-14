@@ -1,0 +1,1 @@
+//! OIDC prompt utility placeholder.

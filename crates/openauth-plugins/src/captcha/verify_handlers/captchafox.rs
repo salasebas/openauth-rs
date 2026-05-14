@@ -1,0 +1,1 @@
+//! CaptchaFox verification handler placeholder.

@@ -1,0 +1,21 @@
+[package]
+name = "openauth-plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/openauth-plugins"
+readme = "../../README.md"
+description = "Official OpenAuth plugin modules."
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+openauth-core = { path = "../openauth-core", version = "0.0.1" }
+
+[lints]
+workspace = true

@@ -63,6 +63,8 @@ pub use openauth_core::{
     utils, verification,
 };
 pub use openauth_core::{oauth, social_providers};
+#[cfg(feature = "plugins")]
+pub use openauth_plugins as plugins;
 pub use openauth_telemetry::{
     create_telemetry, get_telemetry_auth_config, TelemetryContext, TelemetryEvent,
     TelemetryPublisher, TelemetryTestHooks,

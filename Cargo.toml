@@ -6,6 +6,7 @@ members = [
     "crates/openauth-i18n",
     "crates/openauth-oauth",
     "crates/openauth-oauth-provider",
+    "crates/openauth-plugins",
     "crates/openauth-scim",
     "crates/openauth-sqlx",
     "crates/openauth-social-providers",
