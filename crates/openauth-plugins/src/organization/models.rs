@@ -1,0 +1,138 @@
+use openauth_core::db::{DbRecord, DbValue};
+use openauth_core::error::OpenAuthError;
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Organization {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub logo: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Member {
+    pub id: String,
+    pub organization_id: String,
+    pub user_id: String,
+    pub role: String,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InvitationStatus {
+    Pending,
+    Accepted,
+    Rejected,
+    Canceled,
+}
+
+impl InvitationStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+            Self::Canceled => "canceled",
+        }
+    }
+}
+
+impl TryFrom<&str> for InvitationStatus {
+    type Error = OpenAuthError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "accepted" => Ok(Self::Accepted),
+            "rejected" => Ok(Self::Rejected),
+            "canceled" => Ok(Self::Canceled),
+            _ => Err(OpenAuthError::Adapter(format!(
+                "invalid invitation status `{value}`"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Invitation {
+    pub id: String,
+    pub organization_id: String,
+    pub email: String,
+    pub role: String,
+    pub status: InvitationStatus,
+    pub expires_at: OffsetDateTime,
+    pub created_at: OffsetDateTime,
+    pub inviter_id: String,
+}
+
+pub(crate) fn required_string(record: &DbRecord, field: &str) -> Result<String, OpenAuthError> {
+    match record.get(field) {
+        Some(DbValue::String(value)) => Ok(value.clone()),
+        Some(_) => Err(invalid_field(field, "string")),
+        None => Err(missing_field(field)),
+    }
+}
+
+pub(crate) fn optional_string(
+    record: &DbRecord,
+    field: &str,
+) -> Result<Option<String>, OpenAuthError> {
+    match record.get(field) {
+        Some(DbValue::String(value)) => Ok(Some(value.clone())),
+        Some(DbValue::Null) | None => Ok(None),
+        Some(_) => Err(invalid_field(field, "string or null")),
+    }
+}
+
+pub(crate) fn required_timestamp(
+    record: &DbRecord,
+    field: &str,
+) -> Result<OffsetDateTime, OpenAuthError> {
+    match record.get(field) {
+        Some(DbValue::Timestamp(value)) => Ok(*value),
+        Some(_) => Err(invalid_field(field, "timestamp")),
+        None => Err(missing_field(field)),
+    }
+}
+
+pub(crate) fn optional_timestamp(
+    record: &DbRecord,
+    field: &str,
+) -> Result<Option<OffsetDateTime>, OpenAuthError> {
+    match record.get(field) {
+        Some(DbValue::Timestamp(value)) => Ok(Some(*value)),
+        Some(DbValue::Null) | None => Ok(None),
+        Some(_) => Err(invalid_field(field, "timestamp or null")),
+    }
+}
+
+pub(crate) fn optional_json(
+    record: &DbRecord,
+    field: &str,
+) -> Result<Option<serde_json::Value>, OpenAuthError> {
+    match record.get(field) {
+        Some(DbValue::Json(value)) => Ok(Some(value.clone())),
+        Some(DbValue::String(value)) => serde_json::from_str(value)
+            .map(Some)
+            .map_err(|error| OpenAuthError::Adapter(error.to_string())),
+        Some(DbValue::Null) | None => Ok(None),
+        Some(_) => Err(invalid_field(field, "json, string, or null")),
+    }
+}
+
+fn missing_field(field: &str) -> OpenAuthError {
+    OpenAuthError::Adapter(format!("record is missing `{field}`"))
+}
+
+fn invalid_field(field: &str, expected: &str) -> OpenAuthError {
+    OpenAuthError::Adapter(format!("record field `{field}` must be {expected}"))
+}
