@@ -7,8 +7,8 @@ use time::OffsetDateTime;
 
 use super::shared::{
     current_session, error_response, get_session_openapi_response, json_openapi_response,
-    json_response, list_sessions_openapi_response, request_cookie_header, status_openapi_response,
-    unauthorized, user_response_value,
+    json_response, list_sessions_openapi_response, query_param, request_cookie_header,
+    status_openapi_response, unauthorized, user_response_value,
 };
 use crate::api::additional_fields::{insert_returned_fields, json_to_db_value};
 use crate::api::{
@@ -55,8 +55,15 @@ pub(super) fn get_session_endpoint(
             let adapter = Arc::clone(&adapter);
             Box::pin(async move {
                 let cookie_header = request_cookie_header(&request).unwrap_or_default();
+                let mut input = GetSessionInput::new(cookie_header);
+                if query_bool(&request, "disableCookieCache") {
+                    input = input.disable_cookie_cache();
+                }
+                if query_bool(&request, "disableRefresh") {
+                    input = input.disable_refresh();
+                }
                 let Some(result) = SessionAuth::new(adapter.as_ref(), context)
-                    .get_session(GetSessionInput::new(cookie_header))
+                    .get_session(input)
                     .await?
                 else {
                     return json_response(
@@ -91,6 +98,12 @@ pub(super) fn get_session_endpoint(
             })
         },
     )
+}
+
+fn query_bool(request: &crate::api::ApiRequest, name: &str) -> bool {
+    query_param(request, name)
+        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "true" | "1"))
+        .unwrap_or(false)
 }
 
 pub(super) fn list_sessions_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndpoint {
