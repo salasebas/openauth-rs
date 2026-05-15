@@ -3,7 +3,7 @@ use std::sync::{
     Arc, Mutex,
 };
 
-use http::{Method, Request, StatusCode};
+use http::{Method, Request, Response, StatusCode};
 use openauth_core::api::{
     create_auth_endpoint, response, ApiRequest, ApiResponse, AuthEndpoint, AuthEndpointOptions,
     AuthRouter, EndpointMiddleware,
@@ -475,6 +475,69 @@ async fn before_and_after_hooks_wrap_plugin_endpoint() -> Result<(), Box<dyn std
 }
 
 #[tokio::test]
+async fn async_before_and_after_hooks_wrap_plugin_endpoint(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let plugin_endpoint = create_auth_endpoint(
+        "/async-hooked",
+        Method::GET,
+        Default::default(),
+        |_context, request| {
+            Box::pin(async move {
+                if request.headers().get("x-async-before").is_some() {
+                    response(StatusCode::OK, b"async-before".to_vec())
+                } else {
+                    response(StatusCode::BAD_REQUEST, b"missing".to_vec())
+                }
+            })
+        },
+    );
+    let plugin = AuthPlugin::new("async-hook-plugin")
+        .with_endpoint(plugin_endpoint)
+        .with_async_before_hook("/async-hooked", |_context, mut request| {
+            Box::pin(async move {
+                request
+                    .headers_mut()
+                    .insert("x-async-before", http::HeaderValue::from_static("1"));
+                Ok(PluginBeforeHookAction::Continue(request))
+            })
+        })
+        .with_async_after_hook("/async-hooked", |_context, _request, mut response| {
+            Box::pin(async move {
+                response
+                    .headers_mut()
+                    .insert("x-async-after", http::HeaderValue::from_static("1"));
+                Ok(PluginAfterHookAction::Continue(response))
+            })
+        });
+    let context = create_auth_context(OpenAuthOptions {
+        plugins: vec![plugin],
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::with_async_endpoints(context, Vec::new(), Vec::new())?;
+
+    let response = router
+        .handle_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/async-hooked")
+                .body(Vec::new())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.body(), b"async-before");
+    assert_eq!(
+        response
+            .headers()
+            .get("x-async-after")
+            .ok_or("missing async after hook header")?,
+        "1"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn async_after_hook_can_replace_plugin_endpoint_response(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let plugin_endpoint = create_auth_endpoint(
@@ -508,6 +571,71 @@ async fn async_after_hook_can_replace_plugin_endpoint_response(
         .await?;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(response.body(), b"ASYNC");
+    Ok(())
+}
+
+#[tokio::test]
+async fn async_after_hook_preserves_headers() -> Result<(), Box<dyn std::error::Error>> {
+    let plugin_endpoint = create_auth_endpoint(
+        "/async-after-headers",
+        Method::GET,
+        Default::default(),
+        |_context, _request| {
+            Box::pin(async {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("x-original", "1")
+                    .header(http::header::SET_COOKIE, "a=1; Path=/")
+                    .header(http::header::SET_COOKIE, "b=2; Path=/")
+                    .body(b"ORIGINAL".to_vec())
+                    .map_err(|error| OpenAuthError::Api(error.to_string()))
+            })
+        },
+    );
+    let plugin = AuthPlugin::new("async-after-headers")
+        .with_endpoint(plugin_endpoint)
+        .with_async_after_hook("/async-after-headers", |_context, _request, response| {
+            Box::pin(async move {
+                let (parts, _body) = response.into_parts();
+                Ok(PluginAfterHookAction::Continue(Response::from_parts(
+                    parts,
+                    b"ASYNC".to_vec(),
+                )))
+            })
+        });
+    let context = create_auth_context(OpenAuthOptions {
+        plugins: vec![plugin],
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::with_async_endpoints(context, Vec::new(), Vec::new())?;
+
+    let response = router
+        .handle_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/async-after-headers")
+                .body(Vec::new())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-original")
+            .ok_or("missing original header")?,
+        "1"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get_all(http::header::SET_COOKIE)
+            .iter()
+            .count(),
+        2
+    );
     assert_eq!(response.body(), b"ASYNC");
     Ok(())
 }
