@@ -1,8 +1,15 @@
 use http::{header, Method, Request, StatusCode};
-use openauth_plugins::mcp::{mcp, McpOptions};
-use serde_json::{json, Value};
+use openauth_plugins::mcp::{mcp, McpMetadataOverrides, McpOptions};
+use serde_json::{json, Map, Value};
 
+mod client_helpers;
+mod consent;
+mod login_resume;
+mod metadata_userinfo;
+mod options;
+mod registration_validation;
 mod support;
+mod token_hardening;
 
 use support::*;
 
@@ -22,7 +29,8 @@ fn mcp_uses_upstream_defaults_and_schema_contributions() -> Result<(), Box<dyn s
     assert_eq!(plugin.options.access_token_expires_in, 3600);
     assert_eq!(plugin.options.refresh_token_expires_in, 604800);
     assert!(plugin.options.allow_plain_code_challenge_method);
-    assert_eq!(plugin.as_auth_plugin().endpoints.len(), 6);
+    assert_eq!(plugin.options.default_scope, ["openid"]);
+    assert_eq!(plugin.as_auth_plugin().endpoints.len(), 9);
     assert_eq!(plugin.as_auth_plugin().schema.len(), 3);
     Ok(())
 }
@@ -70,6 +78,48 @@ async fn mcp_metadata_endpoints_return_provider_and_resource_metadata(
         json!(["http://localhost:3000"])
     );
     assert_eq!(body["bearer_methods_supported"], json!(["header"]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_metadata_supports_custom_overrides() -> Result<(), Box<dyn std::error::Error>> {
+    let mut auth_metadata = Map::new();
+    auth_metadata.insert(
+        "service_documentation".to_owned(),
+        json!("https://docs.example"),
+    );
+    let mut resource_metadata = Map::new();
+    resource_metadata.insert("resource_name".to_owned(), json!("Example MCP"));
+    let (auth, _) = seeded_router_with_options(McpOptions {
+        login_page: "/login".to_owned(),
+        metadata: McpMetadataOverrides {
+            authorization_server: auth_metadata,
+            protected_resource: resource_metadata,
+        },
+        ..McpOptions::default()
+    })
+    .await?;
+
+    let provider = auth
+        .handle_async(request(
+            Method::GET,
+            "/api/auth/.well-known/oauth-authorization-server",
+            "",
+        )?)
+        .await?;
+    assert_eq!(
+        json_body(&provider)?["service_documentation"],
+        "https://docs.example"
+    );
+
+    let resource = auth
+        .handle_async(request(
+            Method::GET,
+            "/api/auth/.well-known/oauth-protected-resource",
+            "",
+        )?)
+        .await?;
+    assert_eq!(json_body(&resource)?["resource_name"], "Example MCP");
     Ok(())
 }
 
@@ -143,6 +193,69 @@ async fn mcp_register_rejects_invalid_client_metadata() -> Result<(), Box<dyn st
         json_body(&inconsistent)?["error"],
         "invalid_client_metadata"
     );
+
+    let invalid_method = auth
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/mcp/register",
+            json!({
+                "redirect_uris": ["https://client.example/callback"],
+                "token_endpoint_auth_method": "client_secret_jwt"
+            }),
+        )?)
+        .await?;
+    assert_eq!(invalid_method.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(&invalid_method)?["error"],
+        "invalid_client_metadata"
+    );
+
+    let invalid_grant = auth
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/mcp/register",
+            json!({
+                "redirect_uris": ["https://client.example/callback"],
+                "grant_types": ["device_code"]
+            }),
+        )?)
+        .await?;
+    assert_eq!(invalid_grant.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(&invalid_grant)?["error"],
+        "invalid_client_metadata"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_authorize_unauthenticated_sets_login_prompt_cookie(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (auth, adapter) = seeded_router().await?;
+    seed_client(
+        &adapter,
+        "client_1",
+        "secret_1",
+        "https://client.example/callback",
+        "web",
+    )
+    .await?;
+
+    let response = auth
+        .handle_async(request(
+            Method::GET,
+            "/api/auth/mcp/authorize?client_id=client_1&redirect_uri=https%3A%2F%2Fclient.example%2Fcallback&response_type=code&prompt=login",
+            "",
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert!(response.headers()[header::LOCATION]
+        .to_str()?
+        .starts_with("/login?"));
+    assert!(response.headers()[header::SET_COOKIE]
+        .to_str()?
+        .contains("oidc_login_prompt="));
     Ok(())
 }
 
@@ -182,6 +295,65 @@ async fn mcp_authorize_creates_code_and_redirects() -> Result<(), Box<dyn std::e
         .find_map(|(name, value)| (name == "code").then(|| value.into_owned()))
         .ok_or("missing code")?;
     assert!(find_record(&adapter, "verification", "identifier", &code)
+        .await?
+        .is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_authorize_consent_accept_persists_consent() -> Result<(), Box<dyn std::error::Error>> {
+    let (auth, adapter) = seeded_router_with_options(McpOptions {
+        login_page: "/login".to_owned(),
+        consent_page: Some("/consent".to_owned()),
+        ..McpOptions::default()
+    })
+    .await?;
+    seed_client(
+        &adapter,
+        "client_1",
+        "secret_1",
+        "https://client.example/callback",
+        "web",
+    )
+    .await?;
+    let cookie = signed_session_cookie("session_token_1")?;
+
+    let response = auth
+        .handle_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/mcp/authorize?client_id=client_1&redirect_uri=https%3A%2F%2Fclient.example%2Fcallback&response_type=code&scope=openid%20email&prompt=consent")
+                .header(header::COOKIE, cookie.clone())
+                .body(Vec::new())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let location = response.headers()[header::LOCATION].to_str()?;
+    assert!(location.starts_with("/consent?"));
+    let code = url::Url::parse(&format!("http://localhost{location}"))?
+        .query_pairs()
+        .find_map(|(name, value)| (name == "consent_code").then(|| value.into_owned()))
+        .ok_or("missing consent code")?;
+
+    let consent = auth
+        .handle_async(
+            Request::builder()
+                .method(Method::POST)
+                .uri("http://localhost:3000/api/auth/oauth2/consent")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, cookie)
+                .body(serde_json::to_vec(&json!({
+                    "accept": true,
+                    "consent_code": code
+                }))?)?,
+        )
+        .await?;
+    assert_eq!(consent.status(), StatusCode::OK);
+    assert!(json_body(&consent)?["redirectURI"]
+        .as_str()
+        .ok_or("missing redirectURI")?
+        .starts_with("https://client.example/callback?code="));
+    assert!(find_record(&adapter, "oauthConsent", "userId", "user_1")
         .await?
         .is_some());
     Ok(())
@@ -335,6 +507,15 @@ async fn mcp_token_rejects_invalid_code_secret_and_pkce() -> Result<(), Box<dyn 
         )?)
         .await?;
     assert_eq!(invalid_secret.status(), StatusCode::UNAUTHORIZED);
+
+    let consumed = auth
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/mcp/token",
+            &format!("grant_type=authorization_code&client_id=client_1&client_secret=secret_1&redirect_uri=https%3A%2F%2Fclient.example%2Fcallback&code={code}&code_verifier=expected"),
+        )?)
+        .await?;
+    assert_eq!(consumed.status(), StatusCode::UNAUTHORIZED);
 
     let code = seed_code(
         &adapter,

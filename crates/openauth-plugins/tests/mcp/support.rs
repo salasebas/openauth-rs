@@ -4,13 +4,14 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use http::{header, Method, Request};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
-use openauth_core::context::create_auth_context_with_adapter;
+use openauth_core::context::{create_auth_context_with_adapter, AuthContext};
 use openauth_core::cookies::{get_cookies, set_session_cookie, Cookie, SessionCookieOptions};
 use openauth_core::db::{
     Create, DbAdapter, DbRecord, DbValue, FindOne, MemoryAdapter, Session, User, Where,
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
+use openauth_core::plugin::AuthPlugin;
 use openauth_plugins::mcp::{mcp, McpOptions};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -22,16 +23,23 @@ pub async fn router() -> Result<AuthRouter, OpenAuthError> {
 }
 
 pub async fn seeded_router() -> Result<(AuthRouter, Arc<MemoryAdapter>), OpenAuthError> {
+    seeded_router_with_options(McpOptions {
+        login_page: "/login".to_owned(),
+        ..McpOptions::default()
+    })
+    .await
+}
+
+pub async fn seeded_router_with_options(
+    options: McpOptions,
+) -> Result<(AuthRouter, Arc<MemoryAdapter>), OpenAuthError> {
     let adapter = Arc::new(MemoryAdapter::new());
     let now = OffsetDateTime::now_utc();
     seed_user(&adapter, now).await?;
     seed_session(&adapter, now).await?;
-    let plugin = mcp(McpOptions {
-        login_page: "/login".to_owned(),
-        ..McpOptions::default()
-    })
-    .map_err(|error| OpenAuthError::InvalidConfig(error.to_string()))?
-    .into_auth_plugin();
+    let plugin = mcp(options)
+        .map_err(|error| OpenAuthError::InvalidConfig(error.to_string()))?
+        .into_auth_plugin();
     let context = create_auth_context_with_adapter(
         OpenAuthOptions {
             base_url: Some("http://localhost:3000".to_owned()),
@@ -53,6 +61,38 @@ pub async fn seeded_router() -> Result<(AuthRouter, Arc<MemoryAdapter>), OpenAut
         core_auth_async_endpoints(adapter.clone()),
     )?;
     Ok((router, adapter))
+}
+
+pub async fn context_with_plugin(
+    options: McpOptions,
+) -> Result<(AuthContext, AuthPlugin, Arc<MemoryAdapter>), OpenAuthError> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let now = OffsetDateTime::now_utc();
+    seed_user(&adapter, now).await?;
+    seed_session(&adapter, now).await?;
+    let plugin = mcp(options)
+        .map_err(|error| OpenAuthError::InvalidConfig(error.to_string()))?
+        .into_auth_plugin();
+    let context = create_auth_context_with_adapter(
+        OpenAuthOptions {
+            base_url: Some("http://localhost:3000".to_owned()),
+            base_path: Some("/api/auth".to_owned()),
+            secret: Some(secret().to_owned()),
+            plugins: vec![plugin.clone()],
+            advanced: AdvancedOptions {
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            ..OpenAuthOptions::default()
+        },
+        adapter.clone(),
+    )?;
+    Ok((context, plugin, adapter))
+}
+
+pub fn signed_cookie_value(value: &str) -> Result<String, OpenAuthError> {
+    openauth_core::cookies::sign_cookie_value(value, secret())
 }
 
 pub fn request(method: Method, path: &str, body: &str) -> Result<Request<Vec<u8>>, http::Error> {
@@ -181,6 +221,69 @@ pub async fn seed_code(
     record.insert("updated_at".to_owned(), DbValue::Timestamp(now));
     adapter.create(create_query("verification", record)).await?;
     Ok(code)
+}
+
+pub async fn seed_expired_code(
+    adapter: &MemoryAdapter,
+    client_id: &str,
+    user_id: &str,
+    redirect_uri: &str,
+    scope: &str,
+) -> Result<String, OpenAuthError> {
+    let code = seed_code(adapter, client_id, user_id, redirect_uri, scope, None, None).await?;
+    adapter
+        .update(
+            openauth_core::db::Update::new("verification")
+                .where_clause(Where::new("identifier", DbValue::String(code.clone())))
+                .data(
+                    "expires_at",
+                    DbValue::Timestamp(OffsetDateTime::now_utc() - Duration::minutes(1)),
+                ),
+        )
+        .await?;
+    Ok(code)
+}
+
+pub async fn seed_session_for_user(
+    adapter: &MemoryAdapter,
+    token: &str,
+    user_id: &str,
+) -> Result<(), OpenAuthError> {
+    let now = OffsetDateTime::now_utc();
+    let session = Session {
+        id: format!("session_{token}"),
+        user_id: user_id.to_owned(),
+        expires_at: now + Duration::days(1),
+        token: token.to_owned(),
+        ip_address: None,
+        user_agent: None,
+        created_at: now,
+        updated_at: now,
+    };
+    adapter
+        .create(create_query("session", session_record(session)))
+        .await?;
+    Ok(())
+}
+
+pub async fn expire_access_token(
+    adapter: &MemoryAdapter,
+    access_token: &str,
+) -> Result<(), OpenAuthError> {
+    adapter
+        .update(
+            openauth_core::db::Update::new("oauthAccessToken")
+                .where_clause(Where::new(
+                    "accessToken",
+                    DbValue::String(access_token.to_owned()),
+                ))
+                .data(
+                    "accessTokenExpiresAt",
+                    DbValue::Timestamp(OffsetDateTime::now_utc() - Duration::minutes(1)),
+                ),
+        )
+        .await?;
+    Ok(())
 }
 
 pub async fn seed_access_token(
