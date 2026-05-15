@@ -75,23 +75,30 @@ impl AuthRouter {
             operation_id: None,
             allowed_media_types: Vec::new(),
         });
-        let async_endpoints = self.async_endpoints.iter().map(|endpoint| EndpointInfo {
-            path: endpoint.path.clone(),
-            method: endpoint.method.clone(),
-            kind: EndpointKind::Async,
-            operation_id: endpoint
-                .options
-                .operation_id
-                .clone()
-                .or_else(|| endpoint.options.openapi.as_ref()?.operation_id.clone()),
-            allowed_media_types: endpoint.options.allowed_media_types.clone(),
-        });
+        let async_endpoints = self
+            .async_endpoints
+            .iter()
+            .filter(|endpoint| !endpoint.options.server_only)
+            .map(|endpoint| EndpointInfo {
+                path: endpoint.path.clone(),
+                method: endpoint.method.clone(),
+                kind: EndpointKind::Async,
+                operation_id: endpoint
+                    .options
+                    .operation_id
+                    .clone()
+                    .or_else(|| endpoint.options.openapi.as_ref()?.operation_id.clone()),
+                allowed_media_types: endpoint.options.allowed_media_types.clone(),
+            });
         sync_endpoints.chain(async_endpoints).collect()
     }
 
     pub fn openapi_schema(&self) -> Value {
         let mut paths = serde_json::Map::new();
         for endpoint in &self.async_endpoints {
+            if endpoint.options.server_only {
+                continue;
+            }
             let path = paths
                 .entry(to_openapi_path(&endpoint.path))
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
@@ -177,6 +184,7 @@ impl AuthRouter {
         }) else {
             if self.async_endpoints.iter().any(|endpoint| {
                 endpoint.method == *request.method()
+                    && !endpoint.options.server_only
                     && match_path_pattern(&endpoint.path, &path).is_some()
             }) {
                 return Err(OpenAuthError::Api(
@@ -264,6 +272,9 @@ impl AuthRouter {
             return rate_limit_response(rejection);
         }
         if let Some((endpoint, params)) = async_endpoint {
+            if endpoint.options.server_only {
+                return api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound);
+            }
             set_current_request_path(path.clone())?;
             request.extensions_mut().insert(PathParams::new(params));
             if let Some(response) = validate_async_endpoint_request(endpoint, &request)? {
