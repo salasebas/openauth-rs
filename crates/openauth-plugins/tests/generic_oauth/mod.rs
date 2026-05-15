@@ -4,11 +4,17 @@
     reason = "plugin tests intentionally fail fast with contextual setup errors"
 )]
 
-use http::{Method, Request, StatusCode};
+use http::{header, Method, Request, Response, StatusCode};
 use openauth_core::api::AuthRouter;
-use openauth_core::context::create_auth_context_with_adapter;
+use openauth_core::context::{create_auth_context_with_adapter, AuthContext};
+use openauth_core::cookies::{
+    get_session_cookie, set_session_cookie, verify_cookie_value, Cookie, SessionCookieOptions,
+};
 use openauth_core::db::{DbAdapter, MemoryAdapter};
-use openauth_core::options::OpenAuthOptions;
+use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
+use openauth_core::plugin::AuthPlugin;
+use openauth_core::session::{CreateSessionInput, DbSessionStore};
+use openauth_core::user::{CreateOAuthAccountInput, CreateUserInput, DbUserStore};
 use openauth_oauth::oauth2::{
     ClientAuthentication, OAuth2Tokens, OAuth2UserInfo, OAuthError, SocialAuthorizationCodeRequest,
     SocialAuthorizationUrlRequest, SocialOAuthProvider,
@@ -25,6 +31,7 @@ use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
+use time::{Duration, OffsetDateTime};
 
 #[test]
 fn generic_oauth_plugin_exposes_metadata_endpoints_and_errors() {
@@ -358,6 +365,166 @@ async fn sign_in_oauth2_route_rejects_unknown_provider() {
 }
 
 #[tokio::test]
+async fn oauth2_callback_creates_user_account_session_and_cookie() {
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    let context = context_with_plugin(
+        adapter.clone(),
+        oauth_plugin(oauth_flow_config("oauth-user-1")),
+    );
+    let router = AuthRouter::try_new(context.clone(), Vec::new()).unwrap();
+    let state = sign_in_state(&router, "example", "/dashboard", None, false)
+        .await
+        .unwrap();
+
+    let response = oauth_callback(&router, "example", "code-1", &state)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(location(&response), Some("/dashboard"));
+    let user = DbUserStore::new(adapter.as_ref())
+        .find_user_by_email("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(user.name, "Ada Lovelace");
+    assert!(DbUserStore::new(adapter.as_ref())
+        .find_account_by_provider_account("oauth-user-1", "example")
+        .await
+        .unwrap()
+        .is_some());
+    let token = session_token_from_response(&context, &response);
+    assert!(DbSessionStore::new(adapter.as_ref())
+        .find_session(&token)
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn oauth2_callback_redirects_new_user_to_new_user_callback_url() {
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    let context = context_with_plugin(adapter, oauth_plugin(oauth_flow_config("oauth-user-2")));
+    let router = AuthRouter::try_new(context, Vec::new()).unwrap();
+    let state = sign_in_state(&router, "example", "/dashboard", Some("/welcome"), false)
+        .await
+        .unwrap();
+
+    let response = oauth_callback(&router, "example", "code-1", &state)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(location(&response), Some("/welcome"));
+}
+
+#[tokio::test]
+async fn oauth2_callback_redirects_signup_disabled_error() {
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    let mut config = oauth_flow_config("oauth-user-3");
+    config.disable_implicit_sign_up = true;
+    let context = context_with_plugin(adapter, oauth_plugin(config));
+    let router = AuthRouter::try_new(context, Vec::new()).unwrap();
+    let state = sign_in_state(&router, "example", "/dashboard", None, false)
+        .await
+        .unwrap();
+
+    let response = oauth_callback(&router, "example", "code-1", &state)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        location(&response),
+        Some("https://app.example.com/error?error=signup_disabled")
+    );
+}
+
+#[tokio::test]
+async fn oauth2_callback_allows_request_signup_when_implicit_signup_is_disabled() {
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    let mut config = oauth_flow_config("oauth-user-4");
+    config.disable_implicit_sign_up = true;
+    let context = context_with_plugin(adapter, oauth_plugin(config));
+    let router = AuthRouter::try_new(context, Vec::new()).unwrap();
+    let state = sign_in_state(&router, "example", "/dashboard", None, true)
+        .await
+        .unwrap();
+
+    let response = oauth_callback(&router, "example", "code-1", &state)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(location(&response), Some("/dashboard"));
+}
+
+#[tokio::test]
+async fn oauth2_callback_uses_custom_redirect_uri_in_token_exchange() {
+    let seen = Arc::new(std::sync::Mutex::new(String::new()));
+    let mut config = oauth_flow_config("oauth-user-5");
+    config.redirect_uri = Some("https://app.example.com/custom/oauth/callback".to_owned());
+    config.get_token = Some({
+        let seen = Arc::clone(&seen);
+        Arc::new(move |request: GenericOAuthTokenRequest| {
+            let seen = Arc::clone(&seen);
+            Box::pin(async move {
+                *seen.lock().unwrap() = request.redirect_uri;
+                Ok(OAuth2Tokens {
+                    access_token: Some("access-token".to_owned()),
+                    ..OAuth2Tokens::default()
+                })
+            })
+        })
+    });
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    let context = context_with_plugin(adapter, oauth_plugin(config));
+    let router = AuthRouter::try_new(context, Vec::new()).unwrap();
+    let sign_in = sign_in_url(&router, "example", "/dashboard", None, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        query_value(&sign_in, "redirect_uri"),
+        Some("https://app.example.com/custom/oauth/callback".to_owned())
+    );
+    let state = query_value(&sign_in, "state").unwrap();
+
+    let response = oauth_callback(&router, "example", "code-1", &state)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        seen.lock().unwrap().as_str(),
+        "https://app.example.com/custom/oauth/callback"
+    );
+}
+
+#[tokio::test]
+async fn oauth2_callback_rejects_missing_state() {
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    let context = context_with_plugin(adapter, oauth_plugin(oauth_flow_config("oauth-user-6")));
+    let router = AuthRouter::try_new(context, Vec::new()).unwrap();
+
+    let response = router
+        .handle_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("https://app.example.com/api/auth/oauth2/callback/example?code=code-1")
+                .body(Vec::new())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        location(&response),
+        Some("https://app.example.com/error?error=invalid_state")
+    );
+}
+
+#[tokio::test]
 async fn sign_in_oauth2_caches_discovery_by_provider() {
     let hits = Arc::new(AtomicUsize::new(0));
     let discovery_url = discovery_server(Arc::clone(&hits));
@@ -487,6 +654,63 @@ async fn oauth2_link_requires_session() {
     assert_eq!(body["code"], "SESSION_REQUIRED");
 }
 
+#[tokio::test]
+async fn oauth2_link_creates_account_for_current_user() {
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    seed_user(adapter.as_ref(), "user_1", "ada@example.com").await;
+    let context = context_with_plugin(adapter.clone(), oauth_plugin(oauth_flow_config("linked-1")));
+    let cookie = session_cookie_for(adapter.as_ref(), &context, "user_1").await;
+    let router = AuthRouter::try_new(context, Vec::new()).unwrap();
+    let state = link_state(&router, "example", &cookie).await.unwrap();
+
+    let response = oauth_callback(&router, "example", "code-1", &state)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert!(DbUserStore::new(adapter.as_ref())
+        .find_account_by_provider_account("linked-1", "example")
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn oauth2_link_rejects_account_owned_by_different_user() {
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    seed_user(adapter.as_ref(), "user_1", "ada@example.com").await;
+    seed_user(adapter.as_ref(), "user_2", "grace@example.com").await;
+    DbUserStore::new(adapter.as_ref())
+        .link_account(CreateOAuthAccountInput {
+            id: None,
+            provider_id: "example".to_owned(),
+            account_id: "linked-2".to_owned(),
+            user_id: "user_2".to_owned(),
+            access_token: Some("old-token".to_owned()),
+            refresh_token: None,
+            id_token: None,
+            access_token_expires_at: None,
+            refresh_token_expires_at: None,
+            scope: None,
+        })
+        .await
+        .unwrap();
+    let context = context_with_plugin(adapter.clone(), oauth_plugin(oauth_flow_config("linked-2")));
+    let cookie = session_cookie_for(adapter.as_ref(), &context, "user_1").await;
+    let router = AuthRouter::try_new(context, Vec::new()).unwrap();
+    let state = link_state(&router, "example", &cookie).await.unwrap();
+
+    let response = oauth_callback(&router, "example", "code-1", &state)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        location(&response),
+        Some("https://app.example.com/error?error=account_already_linked_to_different_user")
+    );
+}
+
 fn example_config() -> GenericOAuthConfig {
     let mut config = GenericOAuthConfig::new(
         "example",
@@ -542,6 +766,218 @@ fn discovery_server(hits: Arc<AtomicUsize>) -> String {
         }
     });
     format!("http://{address}/.well-known/openid-configuration")
+}
+
+fn oauth_flow_config(user_id: &str) -> GenericOAuthConfig {
+    let mut config = example_config();
+    let user_id = user_id.to_owned();
+    config.get_token = Some(Arc::new(|_request| {
+        Box::pin(async {
+            Ok(OAuth2Tokens {
+                access_token: Some("access-token".to_owned()),
+                refresh_token: Some("refresh-token".to_owned()),
+                scopes: vec!["openid".to_owned(), "email".to_owned()],
+                ..OAuth2Tokens::default()
+            })
+        })
+    }));
+    config.get_user_info = Some(Arc::new(move |_tokens| {
+        let user_id = user_id.clone();
+        Box::pin(async move {
+            Ok(Some(OAuth2UserInfo {
+                id: user_id,
+                name: Some("Ada Lovelace".to_owned()),
+                email: Some("ada@example.com".to_owned()),
+                image: Some("https://img.example.com/ada.png".to_owned()),
+                email_verified: true,
+            }))
+        })
+    }));
+    config
+}
+
+fn oauth_plugin(config: GenericOAuthConfig) -> AuthPlugin {
+    generic_oauth(GenericOAuthOptions {
+        config: vec![config],
+    })
+}
+
+fn context_with_plugin(adapter: Arc<dyn DbAdapter>, plugin: AuthPlugin) -> AuthContext {
+    create_auth_context_with_adapter(
+        OpenAuthOptions {
+            base_url: Some("https://app.example.com".to_owned()),
+            secret: Some(secret().to_owned()),
+            plugins: vec![plugin],
+            advanced: AdvancedOptions {
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            ..OpenAuthOptions::default()
+        },
+        adapter,
+    )
+    .unwrap()
+}
+
+async fn sign_in_url(
+    router: &AuthRouter,
+    provider_id: &str,
+    callback_url: &str,
+    new_user_url: Option<&str>,
+    request_sign_up: bool,
+) -> Result<url::Url, Box<dyn std::error::Error>> {
+    let new_user = new_user_url
+        .map(|url| format!(r#","newUserCallbackURL":"{url}""#))
+        .unwrap_or_default();
+    let request_sign_up = if request_sign_up {
+        r#","requestSignUp":true"#
+    } else {
+        ""
+    };
+    let response = router
+        .handle_async(
+            Request::builder()
+                .method(Method::POST)
+                .uri("https://app.example.com/api/auth/sign-in/oauth2")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(
+                    format!(
+                        r#"{{"providerId":"{provider_id}","callbackURL":"{callback_url}","disableRedirect":true{new_user}{request_sign_up}}}"#
+                    )
+                    .into_bytes(),
+                )?,
+        )
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+    Ok(url::Url::parse(body["url"].as_str().ok_or("missing url")?)?)
+}
+
+async fn sign_in_state(
+    router: &AuthRouter,
+    provider_id: &str,
+    callback_url: &str,
+    new_user_url: Option<&str>,
+    request_sign_up: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let url = sign_in_url(
+        router,
+        provider_id,
+        callback_url,
+        new_user_url,
+        request_sign_up,
+    )
+    .await?;
+    query_value(&url, "state").ok_or_else(|| "missing state".into())
+}
+
+async fn link_state(
+    router: &AuthRouter,
+    provider_id: &str,
+    cookie: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let response = router
+        .handle_async(
+            Request::builder()
+                .method(Method::POST)
+                .uri("https://app.example.com/api/auth/oauth2/link")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, cookie)
+                .body(
+                    format!(r#"{{"providerId":"{provider_id}","callbackURL":"/settings"}}"#)
+                        .into_bytes(),
+                )?,
+        )
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+    let url = url::Url::parse(body["url"].as_str().ok_or_else(|| {
+        format!(
+            "missing url in {} response: {}",
+            response.status(),
+            String::from_utf8_lossy(response.body())
+        )
+    })?)?;
+    query_value(&url, "state").ok_or_else(|| "missing state".into())
+}
+
+async fn oauth_callback(
+    router: &AuthRouter,
+    provider_id: &str,
+    code: &str,
+    state: &str,
+) -> Result<Response<Vec<u8>>, openauth_core::error::OpenAuthError> {
+    router
+        .handle_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "https://app.example.com/api/auth/oauth2/callback/{provider_id}?code={code}&state={state}"
+                ))
+                .body(Vec::new())
+                .unwrap(),
+        )
+        .await
+}
+
+fn location(response: &Response<Vec<u8>>) -> Option<&str> {
+    response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+}
+
+fn session_token_from_response(context: &AuthContext, response: &Response<Vec<u8>>) -> String {
+    let cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap();
+    let signed = get_session_cookie(cookie, None, None).unwrap();
+    verify_cookie_value(&signed, &context.secret)
+        .unwrap()
+        .unwrap()
+}
+
+async fn seed_user(adapter: &dyn DbAdapter, id: &str, email: &str) {
+    DbUserStore::new(adapter)
+        .create_user(CreateUserInput::new("Ada Lovelace", email).id(id))
+        .await
+        .unwrap();
+}
+
+async fn session_cookie_for(
+    adapter: &dyn DbAdapter,
+    context: &AuthContext,
+    user_id: &str,
+) -> String {
+    let session = DbSessionStore::new(adapter)
+        .create_session(CreateSessionInput::new(
+            user_id,
+            OffsetDateTime::now_utc() + Duration::hours(1),
+        ))
+        .await
+        .unwrap();
+    cookie_header(
+        &set_session_cookie(
+            &context.auth_cookies,
+            &context.secret,
+            &session.token,
+            SessionCookieOptions::default(),
+        )
+        .unwrap(),
+    )
+}
+
+fn cookie_header(cookies: &[Cookie]) -> String {
+    cookies
+        .iter()
+        .map(|cookie| format!("{}={}", cookie.name, cookie.value))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn secret() -> &'static str {
+    "test-secret-123456789012345678901234"
 }
 
 fn jwt_with_claims(claims: &str) -> String {

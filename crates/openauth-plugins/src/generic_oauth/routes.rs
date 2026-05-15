@@ -5,7 +5,7 @@ use openauth_core::api::{
 };
 use openauth_core::auth::oauth::{
     generate_oauth_state, handle_oauth_user_info, parse_oauth_state, HandleOAuthUserInfoInput,
-    OAuthStateInput, OAuthStateLink,
+    OAuthStateInput, OAuthStateLink, OAuthUserInfoError,
 };
 use openauth_core::context::AuthContext;
 use openauth_core::cookies::{
@@ -277,7 +277,13 @@ async fn callback_get(
     )
     .await?;
     let Some(data) = result.data else {
-        return redirect_with_error(&error_url, "oauth_sign_in_failed");
+        return redirect_with_error(
+            &error_url,
+            result
+                .error
+                .map(oauth_user_info_error)
+                .unwrap_or("oauth_sign_in_failed"),
+        );
     };
     let mut cookies = set_session_cookie(
         &context.auth_cookies,
@@ -419,4 +425,14 @@ fn redirect_json_response(url: String, redirect: bool) -> Result<ApiResponse, Op
 
 fn api_error_value(code: &str) -> OpenAuthError {
     OpenAuthError::Api(code.to_owned())
+}
+
+fn oauth_user_info_error(error: OAuthUserInfoError) -> &'static str {
+    match error {
+        OAuthUserInfoError::AccountNotLinked => "account_not_linked",
+        OAuthUserInfoError::SignupDisabled => "signup_disabled",
+        OAuthUserInfoError::UnableToCreateUser => "unable_to_create_user",
+        OAuthUserInfoError::UnableToCreateSession => "unable_to_create_session",
+        OAuthUserInfoError::UnableToLinkAccount => "unable_to_link_account",
+    }
 }
