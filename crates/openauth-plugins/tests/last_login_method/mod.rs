@@ -10,6 +10,7 @@ use openauth_plugins::last_login_method::{
 };
 
 mod helpers;
+mod oauth;
 use helpers::{
     find_user_by_email, json_request, request, response_with_set_cookie, router_with_plugin,
     run_last_login_after_hook, secret, set_cookie_values, signed_session_cookie,
@@ -133,6 +134,28 @@ async fn async_after_hook_does_not_set_cookie_without_session_cookie(
 }
 
 #[tokio::test]
+async fn async_after_hook_does_not_set_cookie_when_method_is_unknown(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let plugin = last_login_method(LastLoginMethodOptions::default());
+    let context = create_auth_context(OpenAuthOptions {
+        secret: Some(secret().to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let request = request("/api/auth/not-a-login")?;
+    let response = response_with_set_cookie(&format!(
+        "{}=signed; Path=/; HttpOnly",
+        context.auth_cookies.session_token.name
+    ))?;
+
+    let response = run_last_login_after_hook(&plugin, &context, &request, response).await?;
+
+    assert!(set_cookie_values(&response)
+        .iter()
+        .all(|cookie| !cookie.starts_with(DEFAULT_COOKIE_NAME)));
+    Ok(())
+}
+
+#[tokio::test]
 async fn async_after_hook_uses_custom_cookie_name_max_age_and_session_attributes(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let plugin = last_login_method(
@@ -144,6 +167,7 @@ async fn async_after_hook_uses_custom_cookie_name_max_age_and_session_attributes
         secret: Some(secret().to_owned()),
         advanced: openauth_core::options::AdvancedOptions {
             default_cookie_attributes: openauth_core::options::CookieAttributesOverride {
+                domain: Some(".example.com".to_owned()),
                 same_site: Some("None".to_owned()),
                 secure: Some(true),
                 partitioned: Some(true),
@@ -168,6 +192,7 @@ async fn async_after_hook_uses_custom_cookie_name_max_age_and_session_attributes
 
     assert!(last_method.starts_with("my-app.last_method=email"));
     assert!(last_method.contains("Max-Age=42"));
+    assert!(last_method.contains("Domain=.example.com"));
     assert!(last_method.contains("SameSite=None"));
     assert!(last_method.contains("Secure"));
     assert!(last_method.contains("Partitioned"));
@@ -192,6 +217,28 @@ async fn async_after_hook_handles_multiple_set_cookie_headers(
             context.auth_cookies.session_token.name
         ))?,
     );
+
+    let response = run_last_login_after_hook(&plugin, &context, &request, response).await?;
+
+    assert!(set_cookie_values(&response)
+        .iter()
+        .any(|cookie| cookie.starts_with(DEFAULT_COOKIE_NAME)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn async_after_hook_handles_combined_set_cookie_header(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let plugin = last_login_method(LastLoginMethodOptions::default());
+    let context = create_auth_context(OpenAuthOptions {
+        secret: Some(secret().to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let request = request("/api/auth/sign-in/email")?;
+    let response = response_with_set_cookie(&format!(
+        "unrelated=value; Path=/, {}=signed; Path=/; HttpOnly",
+        context.auth_cookies.session_token.name
+    ))?;
 
     let response = run_last_login_after_hook(&plugin, &context, &request, response).await?;
 

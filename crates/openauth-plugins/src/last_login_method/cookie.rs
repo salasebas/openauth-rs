@@ -1,7 +1,7 @@
 use http::{header, HeaderValue};
 use openauth_core::api::{ApiRequest, ApiResponse};
 use openauth_core::context::AuthContext;
-use openauth_core::cookies::{Cookie, CookieOptions};
+use openauth_core::cookies::{parse_set_cookie_header, Cookie, CookieOptions};
 use openauth_core::error::OpenAuthError;
 
 use super::config::LastLoginMethodOptions;
@@ -45,12 +45,7 @@ fn sets_session_cookie(context: &AuthContext, response: &ApiResponse) -> bool {
         .get_all(header::SET_COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok())
-        .any(|value| {
-            value
-                .split(';')
-                .next()
-                .is_some_and(|name_value| name_value.starts_with(&format!("{session_cookie}=")))
-        })
+        .any(|value| parse_set_cookie_header(value).contains_key(session_cookie))
 }
 
 fn serialize_cookie(cookie: &Cookie) -> String {
