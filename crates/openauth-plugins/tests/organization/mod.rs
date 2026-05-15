@@ -3,16 +3,19 @@ use std::sync::Arc;
 use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
-use openauth_core::db::MemoryAdapter;
+use openauth_core::db::{DbField, DbFieldType, MemoryAdapter, TableOptions};
 use openauth_core::options::OpenAuthOptions;
 use openauth_plugins::organization::{
     has_permission, organization, organization_with_options, OrganizationOptions,
-    OrganizationPermission, OrganizationRole,
+    OrganizationPermission, OrganizationRole, OrganizationSchemaOptions,
 };
 use serde_json::{json, Value};
 
+mod additional_fields;
 mod dynamic_access_control;
 mod hooks;
+mod openapi;
+mod session;
 mod teams;
 
 #[test]
@@ -57,6 +60,44 @@ fn organization_schema_registers_core_tables_and_session_field(
             .field_name("session", "active_organization_id")?,
         "active_organization_id"
     );
+    Ok(())
+}
+
+#[test]
+fn organization_schema_applies_custom_table_field_and_additional_field_metadata(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let schema = OrganizationSchemaOptions {
+        organization: TableOptions::default()
+            .with_name("tenant_orgs")
+            .with_field_name("slug", "tenant_slug")
+            .with_field(
+                "billing_code",
+                DbField::new("billing_code", DbFieldType::String)
+                    .optional()
+                    .hidden(),
+            ),
+        ..OrganizationSchemaOptions::default()
+    };
+    let context = create_auth_context_with_adapter(
+        OpenAuthOptions {
+            plugins: vec![organization_with_options(
+                OrganizationOptions::builder().schema(schema).build(),
+            )],
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            ..OpenAuthOptions::default()
+        },
+        adapter,
+    )?;
+
+    assert_eq!(context.db_schema.table_name("organization")?, "tenant_orgs");
+    assert_eq!(
+        context.db_schema.field_name("organization", "slug")?,
+        "tenant_slug"
+    );
+    let field = context.db_schema.field("organization", "billing_code")?;
+    assert_eq!(field.name, "billing_code");
+    assert!(!field.returned);
     Ok(())
 }
 

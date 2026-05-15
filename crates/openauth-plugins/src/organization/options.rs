@@ -1,3 +1,4 @@
+use openauth_core::db::TableOptions;
 use serde_json::{json, Value};
 
 use super::hooks::OrganizationHooks;
@@ -23,6 +24,7 @@ pub struct OrganizationOptions {
     pub teams: TeamOptions,
     pub dynamic_access_control: DynamicAccessControlOptions,
     pub custom_roles: std::collections::BTreeMap<String, serde_json::Value>,
+    pub schema: OrganizationSchemaOptions,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,6 +40,16 @@ pub struct TeamOptions {
 pub struct DynamicAccessControlOptions {
     pub enabled: bool,
     pub maximum_roles_per_organization: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OrganizationSchemaOptions {
+    pub organization: TableOptions,
+    pub member: TableOptions,
+    pub invitation: TableOptions,
+    pub team: TableOptions,
+    pub team_member: TableOptions,
+    pub organization_role: TableOptions,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +79,7 @@ impl Default for OrganizationOptions {
             teams: TeamOptions::default(),
             dynamic_access_control: DynamicAccessControlOptions::default(),
             custom_roles: std::collections::BTreeMap::new(),
+            schema: OrganizationSchemaOptions::default(),
         }
     }
 }
@@ -187,6 +200,11 @@ impl OrganizationOptionsBuilder {
 
     pub fn custom_role(mut self, role: impl Into<String>, permissions: serde_json::Value) -> Self {
         self.options.custom_roles.insert(role.into(), permissions);
+        self
+    }
+
+    pub fn schema(mut self, schema: OrganizationSchemaOptions) -> Self {
+        self.options.schema = schema;
         self
     }
 

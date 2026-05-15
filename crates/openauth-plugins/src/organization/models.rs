@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use openauth_core::db::{DbRecord, DbValue};
 use openauth_core::error::OpenAuthError;
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,8 @@ pub struct Organization {
     pub metadata: Option<serde_json::Value>,
     pub created_at: OffsetDateTime,
     pub updated_at: Option<OffsetDateTime>,
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +27,8 @@ pub struct Member {
     pub user_id: String,
     pub role: String,
     pub created_at: OffsetDateTime,
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +79,8 @@ pub struct Invitation {
     pub expires_at: OffsetDateTime,
     pub created_at: OffsetDateTime,
     pub inviter_id: String,
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +91,8 @@ pub struct Team {
     pub organization_id: String,
     pub created_at: OffsetDateTime,
     pub updated_at: Option<OffsetDateTime>,
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +102,8 @@ pub struct TeamMember {
     pub team_id: String,
     pub user_id: String,
     pub created_at: OffsetDateTime,
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +115,8 @@ pub struct OrganizationRoleRecord {
     pub permission: serde_json::Value,
     pub created_at: OffsetDateTime,
     pub updated_at: Option<OffsetDateTime>,
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,15 +1,21 @@
 use ::http::{Method, StatusCode};
-use openauth_core::api::{create_auth_endpoint, AsyncAuthEndpoint, AuthEndpointOptions};
+use openauth_core::api::{create_auth_endpoint, AsyncAuthEndpoint};
+use openauth_core::error::OpenAuthError;
 use serde::Deserialize;
 
+use crate::organization::additional_fields;
 use crate::organization::hooks::{
-    AfterAddMember, AfterCreateOrganization, BeforeAddMember, BeforeCreateOrganization,
+    AfterAddMember, AfterCreateOrganization, AfterDeleteOrganization, AfterUpdateOrganization,
+    BeforeAddMember, BeforeCreateOrganization, BeforeDeleteOrganization, BeforeUpdateOrganization,
+    MemberHookData, OrganizationUpdateData,
 };
 use crate::organization::http;
-use crate::organization::models::FullOrganization;
+use crate::organization::models::{FullOrganization, Organization};
 use crate::organization::options::OrganizationOptions;
 use crate::organization::permissions::{has_permission, OrganizationPermission};
 use crate::organization::store::{OrganizationStore, OrganizationUpdate};
+
+use super::validation::invalid_body;
 
 pub fn endpoints(options: OrganizationOptions) -> Vec<AsyncAuthEndpoint> {
     vec![
@@ -17,9 +23,6 @@ pub fn endpoints(options: OrganizationOptions) -> Vec<AsyncAuthEndpoint> {
         check_slug(),
         update(options.clone()),
         delete(options.clone()),
-        set_active(),
-        get_full(),
-        list(),
     ]
 }
 
@@ -42,19 +45,33 @@ fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/create",
         Method::POST,
-        AuthEndpointOptions::new(),
+        super::metadata::options(
+            "organizationCreate",
+            vec![
+                super::metadata::string("name"),
+                super::metadata::string("slug"),
+                super::metadata::optional_string("userId"),
+                super::metadata::optional_string("logo"),
+                super::metadata::optional_object("metadata"),
+                super::metadata::optional_bool("keepCurrentActiveOrganization"),
+            ],
+        ),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {
                 let adapter = http::adapter(context)?;
                 let store = OrganizationStore::new(adapter.as_ref());
-                let input: CreateBody = http::body(&request)?;
+                let body: serde_json::Value = http::body(&request)?;
+                let input: CreateBody =
+                    serde_json::from_value(body.clone()).map_err(json_body_error)?;
+                let additional_fields = additional_fields::create_values(
+                    &options.schema.organization.additional_fields,
+                    body.as_object().ok_or_else(|| {
+                        OpenAuthError::Api("request body must be an object".to_owned())
+                    })?,
+                )?;
                 if input.name.trim().is_empty() || input.slug.trim().is_empty() {
-                    return http::error(
-                        StatusCode::BAD_REQUEST,
-                        "INVALID_REQUEST_BODY",
-                        "Invalid request body",
-                    );
+                    return invalid_body();
                 }
 
                 let session = http::current_session(context, &request, &store).await?;
@@ -108,22 +125,47 @@ fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
                     })?;
                 }
 
-                let organization = store
-                    .create_organization(input.name, input.slug, input.logo, input.metadata)
+                let mut organization = store
+                    .create_organization(
+                        input.name,
+                        input.slug,
+                        input.logo,
+                        input.metadata,
+                        additional_fields,
+                    )
                     .await?;
+                retain_returned_organization_fields(&mut organization, &options);
+                let mut creator_member = MemberHookData {
+                    organization_id: organization.id.clone(),
+                    user_id: user.id.clone(),
+                    role: options.creator_role.clone(),
+                };
                 if let Some(hook) = &options.hooks.before_add_member {
-                    hook(&BeforeAddMember {
+                    creator_member = hook(&BeforeAddMember {
                         organization: organization.clone(),
                         user: user.clone(),
-                        role: options.creator_role.clone(),
+                        member: creator_member,
                     })?;
                 }
                 let member = store
-                    .create_member(&organization.id, &user.id, &options.creator_role)
+                    .create_member(
+                        &creator_member.organization_id,
+                        &creator_member.user_id,
+                        &creator_member.role,
+                        openauth_core::db::DbRecord::new(),
+                    )
                     .await?;
                 if options.teams.enabled && options.teams.create_default_team {
-                    let team = store.create_team(&organization.id, "Default").await?;
-                    store.create_team_member(&team.id, &user.id).await?;
+                    let team = store
+                        .create_team(
+                            &organization.id,
+                            "Default",
+                            openauth_core::db::DbRecord::new(),
+                        )
+                        .await?;
+                    store
+                        .create_team_member(&team.id, &user.id, openauth_core::db::DbRecord::new())
+                        .await?;
                 }
                 if let Some(hook) = &options.hooks.after_add_member {
                     hook(&AfterAddMember {
@@ -139,15 +181,20 @@ fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         user: user.clone(),
                     })?;
                 }
-                if let Some(session) = &session {
+                let cookies = if let Some(session) = &session {
                     if !input.keep_current_active_organization {
                         store
                             .set_active_organization(&session.session.token, Some(&organization.id))
                             .await?;
+                        http::refreshed_session_cookies(context, &session.session, &session.user)?
+                    } else {
+                        Vec::new()
                     }
-                }
+                } else {
+                    Vec::new()
+                };
 
-                http::json(
+                http::json_with_cookies(
                     StatusCode::OK,
                     &FullOrganization {
                         organization,
@@ -155,6 +202,7 @@ fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         invitations: Vec::new(),
                         teams: Vec::new(),
                     },
+                    cookies,
                 )
             })
         },
@@ -170,7 +218,10 @@ fn check_slug() -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/check-slug",
         Method::POST,
-        AuthEndpointOptions::new(),
+        super::metadata::options(
+            "organizationCheckSlug",
+            vec![super::metadata::string("slug")],
+        ),
         |context, request| {
             Box::pin(async move {
                 let adapter = http::adapter(context)?;
@@ -212,7 +263,13 @@ fn update(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/update",
         Method::POST,
-        AuthEndpointOptions::new(),
+        super::metadata::options(
+            "organizationUpdate",
+            vec![
+                super::metadata::object("data"),
+                super::metadata::optional_string("organizationId"),
+            ],
+        ),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {
@@ -228,7 +285,20 @@ fn update(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         )
                     }
                 };
-                let input: UpdateBody = http::body(&request)?;
+                let body: serde_json::Value = http::body(&request)?;
+                let input: UpdateBody =
+                    serde_json::from_value(body.clone()).map_err(json_body_error)?;
+                let additional_fields = body
+                    .get("data")
+                    .and_then(serde_json::Value::as_object)
+                    .map(|data| {
+                        additional_fields::update_values(
+                            &options.schema.organization.additional_fields,
+                            data,
+                        )
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
                 let Some(organization_id) = super::resolve_organization_id(
                     input.organization_id,
                     session.active_organization_id.as_deref(),
@@ -257,7 +327,31 @@ fn update(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         "YOU_ARE_NOT_ALLOWED_TO_UPDATE_THIS_ORGANIZATION",
                     );
                 }
-                if let Some(slug) = &input.data.slug {
+                let Some(existing_organization) =
+                    store.organization_by_id(&organization_id).await?
+                else {
+                    return http::organization_error(
+                        StatusCode::BAD_REQUEST,
+                        "ORGANIZATION_NOT_FOUND",
+                    );
+                };
+                let mut data = OrganizationUpdateData {
+                    name: input.data.name,
+                    slug: input.data.slug,
+                    logo: input.data.logo,
+                    metadata: input.data.metadata,
+                };
+                if let Some(hook) = &options.hooks.before_update_organization {
+                    data = hook(&BeforeUpdateOrganization {
+                        organization: existing_organization.clone(),
+                        user: session.user.clone(),
+                        data,
+                    })?;
+                }
+                if let Some(slug) = &data.slug {
+                    if slug.trim().is_empty() {
+                        return invalid_body();
+                    }
                     if let Some(existing) = store.organization_by_slug(slug).await? {
                         if existing.id != organization_id {
                             return http::organization_error(
@@ -267,16 +361,31 @@ fn update(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         }
                     }
                 }
+                if let Some(name) = &data.name {
+                    if name.trim().is_empty() {
+                        return invalid_body();
+                    }
+                }
                 let update = OrganizationUpdate {
-                    name: input.data.name,
-                    slug: input.data.slug,
-                    logo: input.data.logo,
+                    name: data.name,
+                    slug: data.slug,
+                    logo: data.logo,
                     logo_set: true,
-                    metadata: input.data.metadata,
+                    metadata: data.metadata,
                     metadata_set: true,
+                    additional_fields,
                 };
                 match store.update_organization(&organization_id, update).await? {
-                    Some(organization) => http::json(StatusCode::OK, &organization),
+                    Some(mut organization) => {
+                        retain_returned_organization_fields(&mut organization, &options);
+                        if let Some(hook) = &options.hooks.after_update_organization {
+                            hook(&AfterUpdateOrganization {
+                                organization: organization.clone(),
+                                user: session.user,
+                            })?;
+                        }
+                        http::json(StatusCode::OK, &organization)
+                    }
                     None => {
                         http::organization_error(StatusCode::BAD_REQUEST, "ORGANIZATION_NOT_FOUND")
                     }
@@ -296,7 +405,10 @@ fn delete(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/delete",
         Method::POST,
-        AuthEndpointOptions::new(),
+        super::metadata::options(
+            "organizationDelete",
+            vec![super::metadata::string("organizationId")],
+        ),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {
@@ -346,150 +458,43 @@ fn delete(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         "ORGANIZATION_NOT_FOUND",
                     );
                 };
-                if session.active_organization_id.as_deref() == Some(&input.organization_id) {
-                    store
-                        .set_active_organization(&session.session.token, None)
-                        .await?;
+                if let Some(hook) = &options.hooks.before_delete_organization {
+                    hook(&BeforeDeleteOrganization {
+                        organization: organization.clone(),
+                        user: session.user.clone(),
+                    })?;
                 }
+                let cookies =
+                    if session.active_organization_id.as_deref() == Some(&input.organization_id) {
+                        store
+                            .set_active_organization(&session.session.token, None)
+                            .await?;
+                        store.set_active_team(&session.session.token, None).await?;
+                        http::refreshed_session_cookies(context, &session.session, &session.user)?
+                    } else {
+                        Vec::new()
+                    };
                 store.delete_organization(&input.organization_id).await?;
-                http::json(StatusCode::OK, &organization)
-            })
-        },
-    )
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SetActiveBody {
-    #[serde(default)]
-    organization_id: Option<String>,
-}
-
-fn set_active() -> AsyncAuthEndpoint {
-    create_auth_endpoint(
-        "/organization/set-active",
-        Method::POST,
-        AuthEndpointOptions::new(),
-        |context, request| {
-            Box::pin(async move {
-                let adapter = http::adapter(context)?;
-                let store = OrganizationStore::new(adapter.as_ref());
-                let session = match http::current_session(context, &request, &store).await? {
-                    Some(session) => session,
-                    None => {
-                        return http::error(
-                            StatusCode::UNAUTHORIZED,
-                            "UNAUTHORIZED",
-                            "Unauthorized",
-                        )
-                    }
-                };
-                let input: SetActiveBody = http::body(&request)?;
-                if let Some(organization_id) = &input.organization_id {
-                    if store
-                        .member_by_org_user(organization_id, &session.user.id)
-                        .await?
-                        .is_none()
-                    {
-                        return http::organization_error(
-                            StatusCode::BAD_REQUEST,
-                            "USER_IS_NOT_A_MEMBER_OF_THE_ORGANIZATION",
-                        );
-                    }
+                if let Some(hook) = &options.hooks.after_delete_organization {
+                    hook(&AfterDeleteOrganization {
+                        organization: organization.clone(),
+                        user: session.user,
+                    })?;
                 }
-                store
-                    .set_active_organization(
-                        &session.session.token,
-                        input.organization_id.as_deref(),
-                    )
-                    .await?;
-                http::json(StatusCode::OK, &serde_json::json!({ "success": true }))
+                http::json_with_cookies(StatusCode::OK, &organization, cookies)
             })
         },
     )
 }
 
-fn get_full() -> AsyncAuthEndpoint {
-    create_auth_endpoint(
-        "/organization/get-full-organization",
-        Method::GET,
-        AuthEndpointOptions::new(),
-        |context, request| {
-            Box::pin(async move {
-                let adapter = http::adapter(context)?;
-                let store = OrganizationStore::new(adapter.as_ref());
-                let session = match http::current_session(context, &request, &store).await? {
-                    Some(session) => session,
-                    None => {
-                        return http::error(
-                            StatusCode::UNAUTHORIZED,
-                            "UNAUTHORIZED",
-                            "Unauthorized",
-                        )
-                    }
-                };
-                let Some(organization_id) = session.active_organization_id else {
-                    return http::organization_error(
-                        StatusCode::BAD_REQUEST,
-                        "NO_ACTIVE_ORGANIZATION",
-                    );
-                };
-                let Some(organization) = store.organization_by_id(&organization_id).await? else {
-                    return http::organization_error(
-                        StatusCode::BAD_REQUEST,
-                        "ORGANIZATION_NOT_FOUND",
-                    );
-                };
-                if store
-                    .member_by_org_user(&organization_id, &session.user.id)
-                    .await?
-                    .is_none()
-                {
-                    return http::organization_error(
-                        StatusCode::BAD_REQUEST,
-                        "USER_IS_NOT_A_MEMBER_OF_THE_ORGANIZATION",
-                    );
-                }
-                let teams = store
-                    .teams_for_organization(&organization_id)
-                    .await
-                    .unwrap_or_default();
-                http::json(
-                    StatusCode::OK,
-                    &FullOrganization {
-                        organization,
-                        members: store.members(&organization_id).await?,
-                        invitations: store.invitations_for_organization(&organization_id).await?,
-                        teams,
-                    },
-                )
-            })
-        },
-    )
+fn retain_returned_organization_fields(
+    organization: &mut Organization,
+    options: &OrganizationOptions,
+) {
+    let fields = &options.schema.organization.additional_fields;
+    additional_fields::retain_returned(&mut organization.additional_fields, fields);
 }
 
-fn list() -> AsyncAuthEndpoint {
-    create_auth_endpoint(
-        "/organization/list",
-        Method::GET,
-        AuthEndpointOptions::new(),
-        |context, request| {
-            Box::pin(async move {
-                let adapter = http::adapter(context)?;
-                let store = OrganizationStore::new(adapter.as_ref());
-                let session = match http::current_session(context, &request, &store).await? {
-                    Some(session) => session,
-                    None => {
-                        return http::error(
-                            StatusCode::UNAUTHORIZED,
-                            "UNAUTHORIZED",
-                            "Unauthorized",
-                        )
-                    }
-                };
-                let organizations = store.organizations_for_user(&session.user.id).await?;
-                http::json(StatusCode::OK, &organizations)
-            })
-        },
-    )
+fn json_body_error(error: serde_json::Error) -> OpenAuthError {
+    OpenAuthError::Api(error.to_string())
 }

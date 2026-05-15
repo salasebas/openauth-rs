@@ -1,5 +1,5 @@
 use indexmap::IndexMap;
-use openauth_core::db::{DbField, DbFieldType, DbTable, ForeignKey, OnDelete};
+use openauth_core::db::{DbField, DbFieldType, DbTable, ForeignKey, OnDelete, TableOptions};
 use openauth_core::plugin::PluginSchemaContribution;
 
 use super::OrganizationOptions;
@@ -9,6 +9,7 @@ pub fn schema_contributions(options: &OrganizationOptions) -> Vec<PluginSchemaCo
         PluginSchemaContribution::table(
             "organization",
             table(
+                &options.schema.organization,
                 "organizations",
                 Some(20),
                 [
@@ -37,6 +38,7 @@ pub fn schema_contributions(options: &OrganizationOptions) -> Vec<PluginSchemaCo
         PluginSchemaContribution::table(
             "member",
             table(
+                &options.schema.member,
                 "members",
                 Some(21),
                 [
@@ -45,7 +47,11 @@ pub fn schema_contributions(options: &OrganizationOptions) -> Vec<PluginSchemaCo
                         "organization_id",
                         DbField::new("organization_id", DbFieldType::String)
                             .indexed()
-                            .references(ForeignKey::new("organizations", "id", OnDelete::Cascade)),
+                            .references(ForeignKey::new(
+                                table_name(&options.schema.organization, "organizations"),
+                                "id",
+                                OnDelete::Cascade,
+                            )),
                     ),
                     (
                         "user_id",
@@ -64,6 +70,7 @@ pub fn schema_contributions(options: &OrganizationOptions) -> Vec<PluginSchemaCo
         PluginSchemaContribution::table(
             "invitation",
             table(
+                &options.schema.invitation,
                 "invitations",
                 Some(22),
                 [
@@ -72,7 +79,11 @@ pub fn schema_contributions(options: &OrganizationOptions) -> Vec<PluginSchemaCo
                         "organization_id",
                         DbField::new("organization_id", DbFieldType::String)
                             .indexed()
-                            .references(ForeignKey::new("organizations", "id", OnDelete::Cascade)),
+                            .references(ForeignKey::new(
+                                table_name(&options.schema.organization, "organizations"),
+                                "id",
+                                OnDelete::Cascade,
+                            )),
                     ),
                     (
                         "email",
@@ -106,24 +117,25 @@ pub fn schema_contributions(options: &OrganizationOptions) -> Vec<PluginSchemaCo
         ),
         PluginSchemaContribution::field(
             "session",
-            "active_organization_id",
+            "activeOrganizationId",
             DbField::new("active_organization_id", DbFieldType::String).optional(),
         ),
     ];
     if options.teams.enabled {
-        contributions.extend(team_schema_contributions());
+        contributions.extend(team_schema_contributions(options));
     }
     if options.dynamic_access_control.enabled {
-        contributions.push(organization_role_schema_contribution());
+        contributions.push(organization_role_schema_contribution(options));
     }
     contributions
 }
 
-fn team_schema_contributions() -> Vec<PluginSchemaContribution> {
+fn team_schema_contributions(options: &OrganizationOptions) -> Vec<PluginSchemaContribution> {
     vec![
         PluginSchemaContribution::table(
             "team",
             table(
+                &options.schema.team,
                 "teams",
                 Some(23),
                 [
@@ -133,7 +145,11 @@ fn team_schema_contributions() -> Vec<PluginSchemaContribution> {
                         "organization_id",
                         DbField::new("organization_id", DbFieldType::String)
                             .indexed()
-                            .references(ForeignKey::new("organizations", "id", OnDelete::Cascade)),
+                            .references(ForeignKey::new(
+                                table_name(&options.schema.organization, "organizations"),
+                                "id",
+                                OnDelete::Cascade,
+                            )),
                     ),
                     (
                         "created_at",
@@ -149,6 +165,7 @@ fn team_schema_contributions() -> Vec<PluginSchemaContribution> {
         PluginSchemaContribution::table(
             "team_member",
             table(
+                &options.schema.team_member,
                 "team_members",
                 Some(24),
                 [
@@ -157,7 +174,11 @@ fn team_schema_contributions() -> Vec<PluginSchemaContribution> {
                         "team_id",
                         DbField::new("team_id", DbFieldType::String)
                             .indexed()
-                            .references(ForeignKey::new("teams", "id", OnDelete::Cascade)),
+                            .references(ForeignKey::new(
+                                table_name(&options.schema.team, "teams"),
+                                "id",
+                                OnDelete::Cascade,
+                            )),
                     ),
                     (
                         "user_id",
@@ -174,16 +195,19 @@ fn team_schema_contributions() -> Vec<PluginSchemaContribution> {
         ),
         PluginSchemaContribution::field(
             "session",
-            "active_team_id",
+            "activeTeamId",
             DbField::new("active_team_id", DbFieldType::String).optional(),
         ),
     ]
 }
 
-fn organization_role_schema_contribution() -> PluginSchemaContribution {
+fn organization_role_schema_contribution(
+    options: &OrganizationOptions,
+) -> PluginSchemaContribution {
     PluginSchemaContribution::table(
         "organization_role",
         table(
+            &options.schema.organization_role,
             "organization_roles",
             Some(25),
             [
@@ -192,7 +216,11 @@ fn organization_role_schema_contribution() -> PluginSchemaContribution {
                     "organization_id",
                     DbField::new("organization_id", DbFieldType::String)
                         .indexed()
-                        .references(ForeignKey::new("organizations", "id", OnDelete::Cascade)),
+                        .references(ForeignKey::new(
+                            table_name(&options.schema.organization, "organizations"),
+                            "id",
+                            OnDelete::Cascade,
+                        )),
                 ),
                 ("role", DbField::new("role", DbFieldType::String).indexed()),
                 ("permission", DbField::new("permission", DbFieldType::Json)),
@@ -209,13 +237,32 @@ fn organization_role_schema_contribution() -> PluginSchemaContribution {
     )
 }
 
-fn table<const N: usize>(name: &str, order: Option<u16>, fields: [(&str, DbField); N]) -> DbTable {
+fn table<const N: usize>(
+    options: &TableOptions,
+    name: &str,
+    order: Option<u16>,
+    fields: [(&str, DbField); N],
+) -> DbTable {
+    let mut fields = fields
+        .into_iter()
+        .map(|(logical_name, mut field)| {
+            if let Some(db_name) = options.field_names.get(logical_name) {
+                field.name = db_name.clone();
+            }
+            (logical_name.to_owned(), field)
+        })
+        .collect::<IndexMap<_, _>>();
+    fields.extend(options.additional_fields.clone());
     DbTable {
-        name: name.to_owned(),
-        fields: fields
-            .into_iter()
-            .map(|(logical_name, field)| (logical_name.to_owned(), field))
-            .collect::<IndexMap<_, _>>(),
+        name: table_name(options, name),
+        fields,
         order,
     }
+}
+
+fn table_name(options: &TableOptions, default_name: &str) -> String {
+    options
+        .name
+        .clone()
+        .unwrap_or_else(|| default_name.to_owned())
 }

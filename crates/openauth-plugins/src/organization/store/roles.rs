@@ -1,5 +1,7 @@
 use openauth_core::crypto::random::generate_random_string;
-use openauth_core::db::{Count, Create, DbValue, Delete, FindMany, FindOne, Update, Where};
+use openauth_core::db::{
+    Count, Create, DbRecord, DbValue, Delete, FindMany, FindOne, Update, Where,
+};
 use openauth_core::error::OpenAuthError;
 use time::OffsetDateTime;
 
@@ -13,24 +15,24 @@ impl<'a> OrganizationStore<'a> {
         organization_id: &str,
         role: &str,
         permission: serde_json::Value,
+        additional_fields: DbRecord,
     ) -> Result<OrganizationRoleRecord, OpenAuthError> {
         let now = OffsetDateTime::now_utc();
-        let record = self
-            .adapter()
-            .create(
-                Create::new("organization_role")
-                    .data("id", DbValue::String(generate_random_string(ID_LENGTH)))
-                    .data(
-                        "organization_id",
-                        DbValue::String(organization_id.to_owned()),
-                    )
-                    .data("role", DbValue::String(role.to_owned()))
-                    .data("permission", DbValue::Json(permission))
-                    .data("created_at", DbValue::Timestamp(now))
-                    .data("updated_at", DbValue::Timestamp(now))
-                    .force_allow_id(),
+        let mut create = Create::new("organization_role")
+            .data("id", DbValue::String(generate_random_string(ID_LENGTH)))
+            .data(
+                "organization_id",
+                DbValue::String(organization_id.to_owned()),
             )
-            .await?;
+            .data("role", DbValue::String(role.to_owned()))
+            .data("permission", DbValue::Json(permission))
+            .data("created_at", DbValue::Timestamp(now))
+            .data("updated_at", DbValue::Timestamp(now))
+            .force_allow_id();
+        for (field, value) in additional_fields {
+            create = create.data(field, value);
+        }
+        let record = self.adapter().create(create).await?;
         organization_role_from_record(&record)
     }
 
@@ -96,6 +98,7 @@ impl<'a> OrganizationStore<'a> {
         id: &str,
         role: Option<&str>,
         permission: Option<serde_json::Value>,
+        additional_fields: DbRecord,
     ) -> Result<Option<OrganizationRoleRecord>, OpenAuthError> {
         let mut update = Update::new("organization_role")
             .where_clause(id_where(id))
@@ -105,6 +108,9 @@ impl<'a> OrganizationStore<'a> {
         }
         if let Some(permission) = permission {
             update = update.data("permission", DbValue::Json(permission));
+        }
+        for (field, value) in additional_fields {
+            update = update.data(field, value);
         }
         self.adapter()
             .update(update)

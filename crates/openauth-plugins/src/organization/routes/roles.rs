@@ -1,11 +1,14 @@
 use ::http::{Method, StatusCode};
 use openauth_core::api::{create_auth_endpoint, AsyncAuthEndpoint, AuthEndpointOptions};
+use openauth_core::error::OpenAuthError;
 use serde::Deserialize;
 
+use crate::organization::additional_fields;
 use crate::organization::http;
 use crate::organization::options::OrganizationOptions;
 use crate::organization::permissions::{has_permission, OrganizationPermission};
 use crate::organization::store::OrganizationStore;
+use crate::organization::OrganizationRoleRecord;
 
 pub fn endpoints(options: OrganizationOptions) -> Vec<AsyncAuthEndpoint> {
     if !options.dynamic_access_control.enabled {
@@ -33,14 +36,29 @@ fn create_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/create-role",
         Method::POST,
-        AuthEndpointOptions::new(),
+        super::metadata::options(
+            "organizationCreateRole",
+            vec![
+                super::metadata::string("role"),
+                super::metadata::object("permission"),
+                super::metadata::optional_string("organizationId"),
+            ],
+        ),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {
                 let adapter = http::adapter(context)?;
                 let store = OrganizationStore::new(adapter.as_ref());
                 let session = require_session(context, &request, &store).await?;
-                let input: RoleBody = http::body(&request)?;
+                let body: serde_json::Value = http::body(&request)?;
+                let input: RoleBody =
+                    serde_json::from_value(body.clone()).map_err(json_body_error)?;
+                let additional_fields = additional_fields::create_values(
+                    &options.schema.organization_role.additional_fields,
+                    body.as_object().ok_or_else(|| {
+                        OpenAuthError::Api("request body must be an object".to_owned())
+                    })?,
+                )?;
                 let Some(organization_id) = super::resolve_organization_id(
                     input.organization_id,
                     session.active_organization_id.as_deref(),
@@ -85,9 +103,15 @@ fn create_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         return http::organization_error(StatusCode::BAD_REQUEST, "TOO_MANY_ROLES");
                     }
                 }
-                let role = store
-                    .create_organization_role(&organization_id, &role, input.permission)
+                let mut role = store
+                    .create_organization_role(
+                        &organization_id,
+                        &role,
+                        input.permission,
+                        additional_fields,
+                    )
                     .await?;
+                retain_returned_role_fields(&mut role, &options);
                 http::json(StatusCode::OK, &role)
             })
         },
@@ -109,7 +133,14 @@ fn delete_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/delete-role",
         Method::POST,
-        AuthEndpointOptions::new(),
+        super::metadata::options(
+            "organizationDeleteRole",
+            vec![
+                super::metadata::optional_string("organizationId"),
+                super::metadata::optional_string("roleId"),
+                super::metadata::optional_string("role"),
+            ],
+        ),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {
@@ -167,7 +198,7 @@ fn list_roles(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/list-roles",
         Method::GET,
-        AuthEndpointOptions::new(),
+        AuthEndpointOptions::new().operation_id("organizationListRoles"),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {
@@ -189,10 +220,11 @@ fn list_roles(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         "YOU_ARE_NOT_ALLOWED_TO_LIST_A_ROLE",
                     );
                 }
-                http::json(
-                    StatusCode::OK,
-                    &store.organization_roles(&organization_id).await?,
-                )
+                let mut roles = store.organization_roles(&organization_id).await?;
+                for role in &mut roles {
+                    retain_returned_role_fields(role, &options);
+                }
+                http::json(StatusCode::OK, &roles)
             })
         },
     )
@@ -202,7 +234,7 @@ fn get_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/get-role",
         Method::GET,
-        AuthEndpointOptions::new(),
+        AuthEndpointOptions::new().operation_id("organizationGetRole"),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {
@@ -226,10 +258,12 @@ fn get_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                 }
                 let role_id = query_param(&request, "roleId");
                 let role_name = query_param(&request, "role");
-                let Some(role) = resolve_role(&store, &organization_id, role_id, role_name).await?
+                let Some(mut role) =
+                    resolve_role(&store, &organization_id, role_id, role_name).await?
                 else {
                     return http::organization_error(StatusCode::BAD_REQUEST, "ROLE_NOT_FOUND");
                 };
+                retain_returned_role_fields(&mut role, &options);
                 http::json(StatusCode::OK, &role)
             })
         },
@@ -255,14 +289,31 @@ fn update_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/update-role",
         Method::POST,
-        AuthEndpointOptions::new(),
+        super::metadata::options(
+            "organizationUpdateRole",
+            vec![
+                super::metadata::optional_string("organizationId"),
+                super::metadata::optional_string("roleId"),
+                super::metadata::optional_string("role"),
+                super::metadata::optional_string("newRole"),
+                super::metadata::optional_object("permission"),
+            ],
+        ),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {
                 let adapter = http::adapter(context)?;
                 let store = OrganizationStore::new(adapter.as_ref());
                 let session = require_session(context, &request, &store).await?;
-                let input: UpdateRoleBody = http::body(&request)?;
+                let body: serde_json::Value = http::body(&request)?;
+                let input: UpdateRoleBody =
+                    serde_json::from_value(body.clone()).map_err(json_body_error)?;
+                let additional_fields = additional_fields::update_values(
+                    &options.schema.organization_role.additional_fields,
+                    body.as_object().ok_or_else(|| {
+                        OpenAuthError::Api("request body must be an object".to_owned())
+                    })?,
+                )?;
                 let Some(organization_id) = super::resolve_organization_id(
                     input.organization_id,
                     session.active_organization_id.as_deref(),
@@ -302,9 +353,30 @@ fn update_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         "ROLE_NAME_IS_ALREADY_TAKEN",
                     );
                 }
+                if let Some(new_role) = new_role.as_deref() {
+                    if store
+                        .organization_role_by_name(&organization_id, new_role)
+                        .await?
+                        .is_some_and(|existing| existing.id != role.id)
+                    {
+                        return http::organization_error(
+                            StatusCode::BAD_REQUEST,
+                            "ROLE_NAME_IS_ALREADY_TAKEN",
+                        );
+                    }
+                }
                 let updated = store
-                    .update_organization_role(&role.id, new_role.as_deref(), input.permission)
+                    .update_organization_role(
+                        &role.id,
+                        new_role.as_deref(),
+                        input.permission,
+                        additional_fields,
+                    )
                     .await?;
+                let mut updated = updated;
+                if let Some(role) = &mut updated {
+                    retain_returned_role_fields(role, &options);
+                }
                 http::json(StatusCode::OK, &updated)
             })
         },
@@ -316,10 +388,12 @@ async fn resolve_role(
     organization_id: &str,
     role_id: Option<String>,
     role: Option<String>,
-) -> Result<Option<crate::organization::OrganizationRoleRecord>, openauth_core::error::OpenAuthError>
-{
+) -> Result<Option<OrganizationRoleRecord>, openauth_core::error::OpenAuthError> {
     if let Some(role_id) = role_id {
-        return store.organization_role_by_id(&role_id).await;
+        return store
+            .organization_role_by_id(&role_id)
+            .await
+            .map(|role| role.filter(|role| role.organization_id == organization_id));
     }
     if let Some(role) = role {
         return store
@@ -327,6 +401,17 @@ async fn resolve_role(
             .await;
     }
     Ok(None)
+}
+
+fn retain_returned_role_fields(role: &mut OrganizationRoleRecord, options: &OrganizationOptions) {
+    additional_fields::retain_returned(
+        &mut role.additional_fields,
+        &options.schema.organization_role.additional_fields,
+    );
+}
+
+fn json_body_error(error: serde_json::Error) -> OpenAuthError {
+    OpenAuthError::Api(error.to_string())
 }
 
 fn normalize_role(role: &str) -> String {

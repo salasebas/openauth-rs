@@ -15,6 +15,18 @@ pub fn organization_from_record(record: &DbRecord) -> Result<Organization, OpenA
         metadata: optional_json(record, "metadata")?,
         created_at: required_timestamp(record, "created_at")?,
         updated_at: optional_timestamp(record, "updated_at")?,
+        additional_fields: crate::organization::additional_fields::extract_record_fields(
+            record,
+            &[
+                "id",
+                "name",
+                "slug",
+                "logo",
+                "metadata",
+                "created_at",
+                "updated_at",
+            ],
+        )?,
     })
 }
 
@@ -25,6 +37,10 @@ pub fn member_from_record(record: &DbRecord) -> Result<Member, OpenAuthError> {
         user_id: required_string(record, "user_id")?,
         role: required_string(record, "role")?,
         created_at: required_timestamp(record, "created_at")?,
+        additional_fields: crate::organization::additional_fields::extract_record_fields(
+            record,
+            &["id", "organization_id", "user_id", "role", "created_at"],
+        )?,
     })
 }
 
@@ -40,6 +56,20 @@ pub fn invitation_from_record(record: &DbRecord) -> Result<Invitation, OpenAuthE
         expires_at: required_timestamp(record, "expires_at")?,
         created_at: required_timestamp(record, "created_at")?,
         inviter_id: required_string(record, "inviter_id")?,
+        additional_fields: crate::organization::additional_fields::extract_record_fields(
+            record,
+            &[
+                "id",
+                "organization_id",
+                "email",
+                "role",
+                "status",
+                "team_id",
+                "expires_at",
+                "created_at",
+                "inviter_id",
+            ],
+        )?,
     })
 }
 
@@ -50,6 +80,10 @@ pub fn team_from_record(record: &DbRecord) -> Result<Team, OpenAuthError> {
         organization_id: required_string(record, "organization_id")?,
         created_at: required_timestamp(record, "created_at")?,
         updated_at: optional_timestamp(record, "updated_at")?,
+        additional_fields: crate::organization::additional_fields::extract_record_fields(
+            record,
+            &["id", "name", "organization_id", "created_at", "updated_at"],
+        )?,
     })
 }
 
@@ -59,6 +93,10 @@ pub fn team_member_from_record(record: &DbRecord) -> Result<TeamMember, OpenAuth
         team_id: required_string(record, "team_id")?,
         user_id: required_string(record, "user_id")?,
         created_at: required_timestamp(record, "created_at")?,
+        additional_fields: crate::organization::additional_fields::extract_record_fields(
+            record,
+            &["id", "team_id", "user_id", "created_at"],
+        )?,
     })
 }
 
@@ -72,6 +110,17 @@ pub fn organization_role_from_record(
         permission: optional_json(record, "permission")?.unwrap_or(serde_json::Value::Null),
         created_at: required_timestamp(record, "created_at")?,
         updated_at: optional_timestamp(record, "updated_at")?,
+        additional_fields: crate::organization::additional_fields::extract_record_fields(
+            record,
+            &[
+                "id",
+                "organization_id",
+                "role",
+                "permission",
+                "created_at",
+                "updated_at",
+            ],
+        )?,
     })
 }
 

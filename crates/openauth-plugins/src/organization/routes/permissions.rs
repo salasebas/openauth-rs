@@ -1,5 +1,5 @@
 use ::http::{Method, StatusCode};
-use openauth_core::api::{create_auth_endpoint, AsyncAuthEndpoint, AuthEndpointOptions};
+use openauth_core::api::{create_auth_endpoint, AsyncAuthEndpoint};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -29,7 +29,14 @@ fn has_permission_endpoint(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/has-permission",
         Method::POST,
-        AuthEndpointOptions::new(),
+        super::metadata::options(
+            "organizationHasPermission",
+            vec![
+                super::metadata::optional_object("permission"),
+                super::metadata::optional_object("permissions"),
+                super::metadata::optional_string("organizationId"),
+            ],
+        ),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {

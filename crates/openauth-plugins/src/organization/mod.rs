@@ -1,5 +1,6 @@
 //! Organization plugin.
 
+mod additional_fields;
 mod errors;
 mod hooks;
 mod http;
@@ -13,19 +14,29 @@ mod store;
 
 pub use errors::ORGANIZATION_ERROR_CODES;
 pub use hooks::{
-    AfterAddMember, AfterCreateInvitation, AfterCreateOrganization, BeforeAddMember,
-    BeforeCreateInvitation, BeforeCreateOrganization, OrganizationHooks,
+    AfterAcceptInvitation, AfterAddMember, AfterAddTeamMember, AfterCancelInvitation,
+    AfterCreateInvitation, AfterCreateOrganization, AfterCreateTeam, AfterDeleteOrganization,
+    AfterDeleteTeam, AfterRejectInvitation, AfterRemoveMember, AfterRemoveTeamMember,
+    AfterUpdateMemberRole, AfterUpdateOrganization, AfterUpdateTeam, BeforeAcceptInvitation,
+    BeforeAddMember, BeforeAddTeamMember, BeforeCancelInvitation, BeforeCreateInvitation,
+    BeforeCreateOrganization, BeforeCreateTeam, BeforeDeleteOrganization, BeforeDeleteTeam,
+    BeforeRejectInvitation, BeforeRemoveMember, BeforeRemoveTeamMember, BeforeUpdateMemberRole,
+    BeforeUpdateOrganization, BeforeUpdateTeam, InvitationHookData, MemberHookData,
+    MemberRoleUpdateData, OrganizationHooks, OrganizationUpdateData, TeamHookData,
+    TeamMemberHookData,
 };
 pub use models::{
     Invitation, InvitationStatus, Member, Organization, OrganizationRoleRecord, Team, TeamMember,
 };
 pub use options::{
     DynamicAccessControlOptions, InvitationEmail, OrganizationOptions, OrganizationOptionsBuilder,
-    SendInvitationEmailHook, TeamOptions,
+    OrganizationSchemaOptions, SendInvitationEmailHook, TeamOptions,
 };
 pub use permissions::{has_permission, OrganizationPermission, OrganizationRole};
 
-use openauth_core::plugin::AuthPlugin;
+use openauth_core::db::{DbFieldType, DbValue};
+use openauth_core::options::SessionAdditionalField;
+use openauth_core::plugin::{AuthPlugin, PluginInitOutput};
 
 pub const UPSTREAM_PLUGIN_ID: &str = "organization";
 
@@ -44,8 +55,26 @@ pub fn organization_with_options(options: OrganizationOptions) -> AuthPlugin {
     for error_code in errors::error_codes() {
         plugin = plugin.with_error_code(error_code);
     }
-    for endpoint in routes::endpoints(options) {
+    for endpoint in routes::endpoints(options.clone()) {
         plugin = plugin.with_endpoint(endpoint);
     }
-    plugin
+    plugin.with_init(move |_context| {
+        let mut output = PluginInitOutput::new().session_additional_field(
+            "activeOrganizationId",
+            SessionAdditionalField::new(DbFieldType::String)
+                .optional()
+                .generated()
+                .default_value(DbValue::Null),
+        );
+        if options.teams.enabled {
+            output = output.session_additional_field(
+                "activeTeamId",
+                SessionAdditionalField::new(DbFieldType::String)
+                    .optional()
+                    .generated()
+                    .default_value(DbValue::Null),
+            );
+        }
+        Ok(output)
+    })
 }

@@ -1,19 +1,18 @@
 use openauth_core::crypto::random::generate_random_string;
 use openauth_core::db::{
-    Count, Create, DbAdapter, DbValue, Delete, DeleteMany, FindMany, FindOne, Sort, SortDirection,
-    Update, Where,
+    Count, Create, DbAdapter, DbRecord, DbValue, Delete, DeleteMany, FindMany, FindOne, Sort,
+    SortDirection, Update, Where,
 };
 use openauth_core::error::OpenAuthError;
 use time::OffsetDateTime;
 
-use super::models::{
-    optional_string, required_string, Invitation, InvitationStatus, Member, Organization,
-};
+use super::models::{required_string, Invitation, InvitationStatus, Member, Organization};
 use super::record::{
     invitation_from_record, member_from_record, organization_from_record, user_from_record,
 };
 
 mod roles;
+mod session;
 mod teams;
 
 pub(super) const ID_LENGTH: usize = 32;
@@ -37,6 +36,7 @@ impl<'a> OrganizationStore<'a> {
         slug: String,
         logo: Option<String>,
         metadata: Option<serde_json::Value>,
+        additional_fields: DbRecord,
     ) -> Result<Organization, OpenAuthError> {
         let now = OffsetDateTime::now_utc();
         let mut query = Create::new("organization")
@@ -51,6 +51,9 @@ impl<'a> OrganizationStore<'a> {
             "metadata",
             metadata.map(DbValue::Json).unwrap_or(DbValue::Null),
         );
+        for (field, value) in additional_fields {
+            query = query.data(field, value);
+        }
         organization_from_record(&self.adapter.create(query).await?)
     }
 
@@ -102,6 +105,9 @@ impl<'a> OrganizationStore<'a> {
                 data.metadata.map(DbValue::Json).unwrap_or(DbValue::Null),
             );
         }
+        for (field, value) in data.additional_fields {
+            query = query.data(field, value);
+        }
         self.adapter
             .update(query)
             .await?
@@ -132,22 +138,22 @@ impl<'a> OrganizationStore<'a> {
         organization_id: &str,
         user_id: &str,
         role: &str,
+        additional_fields: DbRecord,
     ) -> Result<Member, OpenAuthError> {
-        let record = self
-            .adapter
-            .create(
-                Create::new("member")
-                    .data("id", DbValue::String(generate_random_string(ID_LENGTH)))
-                    .data(
-                        "organization_id",
-                        DbValue::String(organization_id.to_owned()),
-                    )
-                    .data("user_id", DbValue::String(user_id.to_owned()))
-                    .data("role", DbValue::String(role.to_owned()))
-                    .data("created_at", DbValue::Timestamp(OffsetDateTime::now_utc()))
-                    .force_allow_id(),
+        let mut create = Create::new("member")
+            .data("id", DbValue::String(generate_random_string(ID_LENGTH)))
+            .data(
+                "organization_id",
+                DbValue::String(organization_id.to_owned()),
             )
-            .await?;
+            .data("user_id", DbValue::String(user_id.to_owned()))
+            .data("role", DbValue::String(role.to_owned()))
+            .data("created_at", DbValue::Timestamp(OffsetDateTime::now_utc()))
+            .force_allow_id();
+        for (field, value) in additional_fields {
+            create = create.data(field, value);
+        }
+        let record = self.adapter.create(create).await?;
         member_from_record(&record)
     }
 
@@ -218,13 +224,16 @@ impl<'a> OrganizationStore<'a> {
         &self,
         member_id: &str,
         role: &str,
+        additional_fields: DbRecord,
     ) -> Result<Option<Member>, OpenAuthError> {
+        let mut update = Update::new("member")
+            .where_clause(id_where(member_id))
+            .data("role", DbValue::String(role.to_owned()));
+        for (field, value) in additional_fields {
+            update = update.data(field, value);
+        }
         self.adapter
-            .update(
-                Update::new("member")
-                    .where_clause(id_where(member_id))
-                    .data("role", DbValue::String(role.to_owned())),
-            )
+            .update(update)
             .await?
             .map(|record| member_from_record(&record))
             .transpose()
@@ -283,79 +292,37 @@ impl<'a> OrganizationStore<'a> {
         Ok(organizations)
     }
 
-    pub async fn set_active_organization(
-        &self,
-        token: &str,
-        organization_id: Option<&str>,
-    ) -> Result<(), OpenAuthError> {
-        self.adapter
-            .update(
-                Update::new("session")
-                    .where_clause(Where::new("token", DbValue::String(token.to_owned())))
-                    .data(
-                        "active_organization_id",
-                        organization_id
-                            .map(|value| DbValue::String(value.to_owned()))
-                            .unwrap_or(DbValue::Null),
-                    ),
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn active_organization_id(
-        &self,
-        token: &str,
-    ) -> Result<Option<String>, OpenAuthError> {
-        let Some(record) = self
-            .adapter
-            .find_one(
-                FindOne::new("session")
-                    .where_clause(Where::new("token", DbValue::String(token.to_owned()))),
-            )
-            .await?
-        else {
-            return Ok(None);
-        };
-        optional_string(&record, "active_organization_id")
-    }
-
     pub async fn create_invitation(
         &self,
-        organization_id: &str,
-        email: &str,
-        role: &str,
-        team_id: Option<&str>,
-        inviter_id: &str,
-        expires_at: OffsetDateTime,
+        input: CreateInvitationInput<'_>,
     ) -> Result<Invitation, OpenAuthError> {
-        let record = self
-            .adapter
-            .create(
-                Create::new("invitation")
-                    .data("id", DbValue::String(generate_random_string(ID_LENGTH)))
-                    .data(
-                        "organization_id",
-                        DbValue::String(organization_id.to_owned()),
-                    )
-                    .data("email", DbValue::String(email.to_owned()))
-                    .data("role", DbValue::String(role.to_owned()))
-                    .data(
-                        "team_id",
-                        team_id
-                            .map(|value| DbValue::String(value.to_owned()))
-                            .unwrap_or(DbValue::Null),
-                    )
-                    .data(
-                        "status",
-                        DbValue::String(InvitationStatus::Pending.as_str().to_owned()),
-                    )
-                    .data("expires_at", DbValue::Timestamp(expires_at))
-                    .data("created_at", DbValue::Timestamp(OffsetDateTime::now_utc()))
-                    .data("inviter_id", DbValue::String(inviter_id.to_owned()))
-                    .force_allow_id(),
+        let mut create = Create::new("invitation")
+            .data("id", DbValue::String(generate_random_string(ID_LENGTH)))
+            .data(
+                "organization_id",
+                DbValue::String(input.organization_id.to_owned()),
             )
-            .await?;
+            .data("email", DbValue::String(input.email.to_owned()))
+            .data("role", DbValue::String(input.role.to_owned()))
+            .data(
+                "team_id",
+                input
+                    .team_id
+                    .map(|value| DbValue::String(value.to_owned()))
+                    .unwrap_or(DbValue::Null),
+            )
+            .data(
+                "status",
+                DbValue::String(InvitationStatus::Pending.as_str().to_owned()),
+            )
+            .data("expires_at", DbValue::Timestamp(input.expires_at))
+            .data("created_at", DbValue::Timestamp(OffsetDateTime::now_utc()))
+            .data("inviter_id", DbValue::String(input.inviter_id.to_owned()))
+            .force_allow_id();
+        for (field, value) in input.additional_fields {
+            create = create.data(field, value);
+        }
+        let record = self.adapter.create(create).await?;
         invitation_from_record(&record)
     }
 
@@ -487,6 +454,17 @@ pub struct OrganizationUpdate {
     pub logo_set: bool,
     pub metadata: Option<serde_json::Value>,
     pub metadata_set: bool,
+    pub additional_fields: DbRecord,
+}
+
+pub struct CreateInvitationInput<'a> {
+    pub organization_id: &'a str,
+    pub email: &'a str,
+    pub role: &'a str,
+    pub team_id: Option<&'a str>,
+    pub inviter_id: &'a str,
+    pub expires_at: OffsetDateTime,
+    pub additional_fields: DbRecord,
 }
 
 pub(super) fn id_where(id: &str) -> Where {

@@ -1,7 +1,7 @@
 use openauth_core::crypto::random::generate_random_string;
 use openauth_core::db::{
-    Count, Create, DbValue, Delete, DeleteMany, FindMany, FindOne, Sort, SortDirection, Update,
-    Where,
+    Count, Create, DbRecord, DbValue, Delete, DeleteMany, FindMany, FindOne, Sort, SortDirection,
+    Update, Where,
 };
 use openauth_core::error::OpenAuthError;
 use time::OffsetDateTime;
@@ -15,23 +15,23 @@ impl<'a> OrganizationStore<'a> {
         &self,
         organization_id: &str,
         name: &str,
+        additional_fields: DbRecord,
     ) -> Result<Team, OpenAuthError> {
         let now = OffsetDateTime::now_utc();
-        let record = self
-            .adapter()
-            .create(
-                Create::new("team")
-                    .data("id", DbValue::String(generate_random_string(ID_LENGTH)))
-                    .data("name", DbValue::String(name.to_owned()))
-                    .data(
-                        "organization_id",
-                        DbValue::String(organization_id.to_owned()),
-                    )
-                    .data("created_at", DbValue::Timestamp(now))
-                    .data("updated_at", DbValue::Timestamp(now))
-                    .force_allow_id(),
+        let mut create = Create::new("team")
+            .data("id", DbValue::String(generate_random_string(ID_LENGTH)))
+            .data("name", DbValue::String(name.to_owned()))
+            .data(
+                "organization_id",
+                DbValue::String(organization_id.to_owned()),
             )
-            .await?;
+            .data("created_at", DbValue::Timestamp(now))
+            .data("updated_at", DbValue::Timestamp(now))
+            .force_allow_id();
+        for (field, value) in additional_fields {
+            create = create.data(field, value);
+        }
+        let record = self.adapter().create(create).await?;
         team_from_record(&record)
     }
 
@@ -39,14 +39,17 @@ impl<'a> OrganizationStore<'a> {
         &self,
         team_id: &str,
         name: &str,
+        additional_fields: DbRecord,
     ) -> Result<Option<Team>, OpenAuthError> {
+        let mut update = Update::new("team")
+            .where_clause(id_where(team_id))
+            .data("name", DbValue::String(name.to_owned()))
+            .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc()));
+        for (field, value) in additional_fields {
+            update = update.data(field, value);
+        }
         self.adapter()
-            .update(
-                Update::new("team")
-                    .where_clause(id_where(team_id))
-                    .data("name", DbValue::String(name.to_owned()))
-                    .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc())),
-            )
+            .update(update)
             .await?
             .map(|record| team_from_record(&record))
             .transpose()
@@ -95,18 +98,18 @@ impl<'a> OrganizationStore<'a> {
         &self,
         team_id: &str,
         user_id: &str,
+        additional_fields: DbRecord,
     ) -> Result<TeamMember, OpenAuthError> {
-        let record = self
-            .adapter()
-            .create(
-                Create::new("team_member")
-                    .data("id", DbValue::String(generate_random_string(ID_LENGTH)))
-                    .data("team_id", DbValue::String(team_id.to_owned()))
-                    .data("user_id", DbValue::String(user_id.to_owned()))
-                    .data("created_at", DbValue::Timestamp(OffsetDateTime::now_utc()))
-                    .force_allow_id(),
-            )
-            .await?;
+        let mut create = Create::new("team_member")
+            .data("id", DbValue::String(generate_random_string(ID_LENGTH)))
+            .data("team_id", DbValue::String(team_id.to_owned()))
+            .data("user_id", DbValue::String(user_id.to_owned()))
+            .data("created_at", DbValue::Timestamp(OffsetDateTime::now_utc()))
+            .force_allow_id();
+        for (field, value) in additional_fields {
+            create = create.data(field, value);
+        }
+        let record = self.adapter().create(create).await?;
         team_member_from_record(&record)
     }
 
@@ -184,7 +187,7 @@ impl<'a> OrganizationStore<'a> {
                 Update::new("session")
                     .where_clause(Where::new("token", DbValue::String(token.to_owned())))
                     .data(
-                        "active_team_id",
+                        "activeTeamId",
                         team_id
                             .map(|value| DbValue::String(value.to_owned()))
                             .unwrap_or(DbValue::Null),
@@ -192,5 +195,24 @@ impl<'a> OrganizationStore<'a> {
             )
             .await?;
         Ok(())
+    }
+
+    pub async fn active_team_id(&self, token: &str) -> Result<Option<String>, OpenAuthError> {
+        let Some(record) = self
+            .adapter()
+            .find_one(
+                FindOne::new("session")
+                    .where_clause(Where::new("token", DbValue::String(token.to_owned()))),
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        crate::organization::models::optional_string(&record, "active_team_id").and_then(|value| {
+            match value {
+                Some(value) => Ok(Some(value)),
+                None => crate::organization::models::optional_string(&record, "activeTeamId"),
+            }
+        })
     }
 }

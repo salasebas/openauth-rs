@@ -1,8 +1,15 @@
 use ::http::{Method, StatusCode};
-use openauth_core::api::{create_auth_endpoint, AsyncAuthEndpoint, AuthEndpointOptions};
+use openauth_core::api::{create_auth_endpoint, AsyncAuthEndpoint};
+use openauth_core::error::OpenAuthError;
 use serde::Deserialize;
 
+use crate::organization::additional_fields;
+use crate::organization::hooks::{
+    AfterCreateTeam, AfterDeleteTeam, AfterUpdateTeam, BeforeCreateTeam, BeforeDeleteTeam,
+    BeforeUpdateTeam, TeamHookData,
+};
 use crate::organization::http;
+use crate::organization::models::Team;
 use crate::organization::options::OrganizationOptions;
 use crate::organization::permissions::{has_permission, OrganizationPermission};
 use crate::organization::store::OrganizationStore;
@@ -13,14 +20,11 @@ pub fn endpoints(options: OrganizationOptions) -> Vec<AsyncAuthEndpoint> {
     }
     vec![
         create_team(options.clone()),
-        list_teams(),
         remove_team(options.clone()),
         update_team(options.clone()),
-        set_active_team(),
-        list_user_teams(),
-        list_team_members(),
-        add_team_member(options.clone()),
-        remove_team_member(options),
+        set_active_team(options.clone()),
+        super::team_members::add_team_member(options.clone()),
+        super::team_members::remove_team_member(options),
     ]
 }
 
@@ -36,14 +40,28 @@ fn create_team(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/create-team",
         Method::POST,
-        AuthEndpointOptions::new(),
+        super::metadata::options(
+            "organizationCreateTeam",
+            vec![
+                super::metadata::string("name"),
+                super::metadata::optional_string("organizationId"),
+            ],
+        ),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {
                 let adapter = http::adapter(context)?;
                 let store = OrganizationStore::new(adapter.as_ref());
                 let session = require_session(context, &request, &store).await?;
-                let input: TeamBody = http::body(&request)?;
+                let body: serde_json::Value = http::body(&request)?;
+                let input: TeamBody =
+                    serde_json::from_value(body.clone()).map_err(json_body_error)?;
+                let additional_fields = additional_fields::create_values(
+                    &options.schema.team.additional_fields,
+                    body.as_object().ok_or_else(|| {
+                        OpenAuthError::Api("request body must be an object".to_owned())
+                    })?,
+                )?;
                 if input.name.trim().is_empty() {
                     return http::error(
                         StatusCode::BAD_REQUEST,
@@ -75,37 +93,50 @@ fn create_team(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         );
                     }
                 }
-                let team = store
-                    .create_team(&organization_id, input.name.trim())
-                    .await?;
-                store.create_team_member(&team.id, &session.user.id).await?;
-                http::json(StatusCode::OK, &team)
-            })
-        },
-    )
-}
-
-fn list_teams() -> AsyncAuthEndpoint {
-    create_auth_endpoint(
-        "/organization/list-teams",
-        Method::GET,
-        AuthEndpointOptions::new(),
-        |context, request| {
-            Box::pin(async move {
-                let adapter = http::adapter(context)?;
-                let store = OrganizationStore::new(adapter.as_ref());
-                let session = require_session(context, &request, &store).await?;
-                let Some(organization_id) = session.active_organization_id else {
+                let Some(organization) = store.organization_by_id(&organization_id).await? else {
                     return http::organization_error(
                         StatusCode::BAD_REQUEST,
-                        "NO_ACTIVE_ORGANIZATION",
+                        "ORGANIZATION_NOT_FOUND",
                     );
                 };
-                require_member(&store, &organization_id, &session.user.id).await?;
-                http::json(
-                    StatusCode::OK,
-                    &store.teams_for_organization(&organization_id).await?,
-                )
+                let mut team_data = TeamHookData {
+                    organization_id: organization_id.clone(),
+                    name: input.name.trim().to_owned(),
+                };
+                if let Some(hook) = &options.hooks.before_create_team {
+                    team_data = hook(&BeforeCreateTeam {
+                        organization: organization.clone(),
+                        team: team_data,
+                        user: session.user.clone(),
+                    })?;
+                }
+                if team_data.organization_id != organization_id || team_data.name.trim().is_empty()
+                {
+                    return http::error(
+                        StatusCode::BAD_REQUEST,
+                        "INVALID_REQUEST_BODY",
+                        "Invalid request body",
+                    );
+                }
+                let mut team = store
+                    .create_team(&organization_id, team_data.name.trim(), additional_fields)
+                    .await?;
+                retain_returned_team_fields(&mut team, &options);
+                store
+                    .create_team_member(
+                        &team.id,
+                        &session.user.id,
+                        openauth_core::db::DbRecord::new(),
+                    )
+                    .await?;
+                if let Some(hook) = &options.hooks.after_create_team {
+                    hook(&AfterCreateTeam {
+                        organization,
+                        team: team.clone(),
+                        user: session.user,
+                    })?;
+                }
+                http::json(StatusCode::OK, &team)
             })
         },
     )
@@ -123,7 +154,13 @@ fn remove_team(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/remove-team",
         Method::POST,
-        AuthEndpointOptions::new(),
+        super::metadata::options(
+            "organizationRemoveTeam",
+            vec![
+                super::metadata::string("teamId"),
+                super::metadata::optional_string("organizationId"),
+            ],
+        ),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {
@@ -155,8 +192,38 @@ fn remove_team(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         "UNABLE_TO_REMOVE_LAST_TEAM",
                     );
                 }
+                let Some(organization) = store.organization_by_id(&organization_id).await? else {
+                    return http::organization_error(
+                        StatusCode::BAD_REQUEST,
+                        "ORGANIZATION_NOT_FOUND",
+                    );
+                };
+                if let Some(hook) = &options.hooks.before_delete_team {
+                    hook(&BeforeDeleteTeam {
+                        organization: organization.clone(),
+                        team: team.clone(),
+                        user: session.user.clone(),
+                    })?;
+                }
+                let cookies = if session.active_team_id.as_deref() == Some(&team.id) {
+                    store.set_active_team(&session.session.token, None).await?;
+                    http::refreshed_session_cookies(context, &session.session, &session.user)?
+                } else {
+                    Vec::new()
+                };
                 store.delete_team(&team.id).await?;
-                http::json(StatusCode::OK, &serde_json::json!({ "team": team }))
+                if let Some(hook) = &options.hooks.after_delete_team {
+                    hook(&AfterDeleteTeam {
+                        organization,
+                        team: team.clone(),
+                        user: session.user,
+                    })?;
+                }
+                http::json_with_cookies(
+                    StatusCode::OK,
+                    &serde_json::json!({ "team": team }),
+                    cookies,
+                )
             })
         },
     )
@@ -173,14 +240,28 @@ fn update_team(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/update-team",
         Method::POST,
-        AuthEndpointOptions::new(),
+        super::metadata::options(
+            "organizationUpdateTeam",
+            vec![
+                super::metadata::string("teamId"),
+                super::metadata::string("name"),
+            ],
+        ),
         move |context, request| {
             let options = options.clone();
             Box::pin(async move {
                 let adapter = http::adapter(context)?;
                 let store = OrganizationStore::new(adapter.as_ref());
                 let session = require_session(context, &request, &store).await?;
-                let input: UpdateTeamBody = http::body(&request)?;
+                let body: serde_json::Value = http::body(&request)?;
+                let input: UpdateTeamBody =
+                    serde_json::from_value(body.clone()).map_err(json_body_error)?;
+                let additional_fields = additional_fields::update_values(
+                    &options.schema.team.additional_fields,
+                    body.as_object().ok_or_else(|| {
+                        OpenAuthError::Api("request body must be an object".to_owned())
+                    })?,
+                )?;
                 let Some(team) = store.team_by_id(&input.team_id).await? else {
                     return http::organization_error(StatusCode::BAD_REQUEST, "TEAM_NOT_FOUND");
                 };
@@ -191,19 +272,62 @@ fn update_team(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         "YOU_ARE_NOT_ALLOWED_TO_UPDATE_THIS_TEAM",
                     );
                 }
-                let updated = store.update_team(&team.id, input.name.trim()).await?;
+                let Some(organization) = store.organization_by_id(&team.organization_id).await?
+                else {
+                    return http::organization_error(
+                        StatusCode::BAD_REQUEST,
+                        "ORGANIZATION_NOT_FOUND",
+                    );
+                };
+                let mut updates = TeamHookData {
+                    organization_id: team.organization_id.clone(),
+                    name: input.name.trim().to_owned(),
+                };
+                if let Some(hook) = &options.hooks.before_update_team {
+                    updates = hook(&BeforeUpdateTeam {
+                        organization: organization.clone(),
+                        team: team.clone(),
+                        updates,
+                        user: session.user.clone(),
+                    })?;
+                }
+                if updates.organization_id != team.organization_id || updates.name.trim().is_empty()
+                {
+                    return http::error(
+                        StatusCode::BAD_REQUEST,
+                        "INVALID_REQUEST_BODY",
+                        "Invalid request body",
+                    );
+                }
+                let mut updated = store
+                    .update_team(&team.id, updates.name.trim(), additional_fields)
+                    .await?;
+                if let Some(team) = &mut updated {
+                    retain_returned_team_fields(team, &options);
+                }
+                if let Some(hook) = &options.hooks.after_update_team {
+                    hook(&AfterUpdateTeam {
+                        organization,
+                        team: updated.clone(),
+                        user: session.user,
+                    })?;
+                }
                 http::json(StatusCode::OK, &updated)
             })
         },
     )
 }
 
-fn set_active_team() -> AsyncAuthEndpoint {
+fn set_active_team(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/organization/set-active-team",
         Method::POST,
-        AuthEndpointOptions::new(),
-        |context, request| {
+        super::metadata::options(
+            "organizationSetActiveTeam",
+            vec![super::metadata::string("teamId")],
+        ),
+        move |context, request| {
+            let options = options.clone();
             Box::pin(async move {
                 let adapter = http::adapter(context)?;
                 let store = OrganizationStore::new(adapter.as_ref());
@@ -226,142 +350,27 @@ fn set_active_team() -> AsyncAuthEndpoint {
                 store
                     .set_active_team(&session.session.token, Some(&team.id))
                     .await?;
-                http::json(StatusCode::OK, &team)
-            })
-        },
-    )
-}
-
-fn list_user_teams() -> AsyncAuthEndpoint {
-    create_auth_endpoint(
-        "/organization/list-user-teams",
-        Method::GET,
-        AuthEndpointOptions::new(),
-        |context, request| {
-            Box::pin(async move {
-                let adapter = http::adapter(context)?;
-                let store = OrganizationStore::new(adapter.as_ref());
-                let session = require_session(context, &request, &store).await?;
-                let mut teams = Vec::new();
-                for organization in store.organizations_for_user(&session.user.id).await? {
-                    for team in store.teams_for_organization(&organization.id).await? {
-                        if store
-                            .team_member(&team.id, &session.user.id)
-                            .await?
-                            .is_some()
-                        {
-                            teams.push(team);
-                        }
-                    }
-                }
-                http::json(StatusCode::OK, &teams)
-            })
-        },
-    )
-}
-
-fn list_team_members() -> AsyncAuthEndpoint {
-    create_auth_endpoint(
-        "/organization/list-team-members",
-        Method::GET,
-        AuthEndpointOptions::new(),
-        |context, request| {
-            Box::pin(async move {
-                let adapter = http::adapter(context)?;
-                let store = OrganizationStore::new(adapter.as_ref());
-                let session = require_session(context, &request, &store).await?;
-                let Some(team_id) =
-                    query_param(&request, "teamId").or_else(|| query_param(&request, "team_id"))
-                else {
-                    return http::organization_error(StatusCode::BAD_REQUEST, "TEAM_NOT_FOUND");
-                };
-                let Some(team) = store.team_by_id(&team_id).await? else {
-                    return http::organization_error(StatusCode::BAD_REQUEST, "TEAM_NOT_FOUND");
-                };
-                require_member(&store, &team.organization_id, &session.user.id).await?;
-                http::json(StatusCode::OK, &store.team_members(&team.id).await?)
-            })
-        },
-    )
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TeamMemberBody {
-    team_id: String,
-    user_id: String,
-}
-
-fn add_team_member(options: OrganizationOptions) -> AsyncAuthEndpoint {
-    create_auth_endpoint(
-        "/organization/add-team-member",
-        Method::POST,
-        AuthEndpointOptions::new(),
-        move |context, request| {
-            let options = options.clone();
-            Box::pin(async move {
-                let adapter = http::adapter(context)?;
-                let store = OrganizationStore::new(adapter.as_ref());
-                let session = require_session(context, &request, &store).await?;
-                let input: TeamMemberBody = http::body(&request)?;
-                let Some(team) = store.team_by_id(&input.team_id).await? else {
-                    return http::organization_error(StatusCode::BAD_REQUEST, "TEAM_NOT_FOUND");
-                };
-                let actor = require_member(&store, &team.organization_id, &session.user.id).await?;
-                if !has_permission(&actor.role, &options, OrganizationPermission::TeamUpdate) {
-                    return http::organization_error(
-                        StatusCode::FORBIDDEN,
-                        "YOU_ARE_NOT_ALLOWED_TO_CREATE_A_NEW_TEAM_MEMBER",
-                    );
-                }
-                require_member(&store, &team.organization_id, &input.user_id).await?;
-                if let Some(max) = options.teams.maximum_members_per_team {
-                    if store.count_team_members(&team.id).await? as usize >= max {
-                        return http::organization_error(
-                            StatusCode::FORBIDDEN,
-                            "TEAM_MEMBER_LIMIT_REACHED",
-                        );
-                    }
-                }
-                if let Some(existing) = store.team_member(&team.id, &input.user_id).await? {
-                    return http::json(StatusCode::OK, &existing);
-                }
-                http::json(
+                let mut team = team;
+                retain_returned_team_fields(&mut team, &options);
+                http::json_with_cookies(
                     StatusCode::OK,
-                    &store.create_team_member(&team.id, &input.user_id).await?,
+                    &team,
+                    http::refreshed_session_cookies(context, &session.session, &session.user)?,
                 )
             })
         },
     )
 }
 
-fn remove_team_member(options: OrganizationOptions) -> AsyncAuthEndpoint {
-    create_auth_endpoint(
-        "/organization/remove-team-member",
-        Method::POST,
-        AuthEndpointOptions::new(),
-        move |context, request| {
-            let options = options.clone();
-            Box::pin(async move {
-                let adapter = http::adapter(context)?;
-                let store = OrganizationStore::new(adapter.as_ref());
-                let session = require_session(context, &request, &store).await?;
-                let input: TeamMemberBody = http::body(&request)?;
-                let Some(team) = store.team_by_id(&input.team_id).await? else {
-                    return http::organization_error(StatusCode::BAD_REQUEST, "TEAM_NOT_FOUND");
-                };
-                let actor = require_member(&store, &team.organization_id, &session.user.id).await?;
-                if !has_permission(&actor.role, &options, OrganizationPermission::TeamUpdate) {
-                    return http::organization_error(
-                        StatusCode::FORBIDDEN,
-                        "YOU_ARE_NOT_ALLOWED_TO_REMOVE_A_TEAM_MEMBER",
-                    );
-                }
-                store.delete_team_member(&team.id, &input.user_id).await?;
-                http::json(StatusCode::OK, &serde_json::json!({ "status": true }))
-            })
-        },
-    )
+pub(super) fn retain_returned_team_fields(team: &mut Team, options: &OrganizationOptions) {
+    additional_fields::retain_returned(
+        &mut team.additional_fields,
+        &options.schema.team.additional_fields,
+    );
+}
+
+fn json_body_error(error: serde_json::Error) -> OpenAuthError {
+    OpenAuthError::Api(error.to_string())
 }
 
 async fn require_session(
@@ -372,15 +381,6 @@ async fn require_session(
     http::current_session(context, request, store)
         .await?
         .ok_or_else(|| openauth_core::error::OpenAuthError::Api("Unauthorized".to_owned()))
-}
-
-fn query_param(request: &openauth_core::api::ApiRequest, name: &str) -> Option<String> {
-    request.uri().query().and_then(|query| {
-        query.split('&').find_map(|pair| {
-            let (key, value) = pair.split_once('=')?;
-            (key == name).then(|| value.to_owned())
-        })
-    })
 }
 
 async fn require_member(
