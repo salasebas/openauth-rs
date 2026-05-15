@@ -1093,6 +1093,7 @@ dependencies = [
  "http",
  "indexmap",
  "openauth-core",
+ "openauth-oauth",
  "openauth-social-providers",
  "rand 0.8.6",
  "reqwest",
