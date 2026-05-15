@@ -15,10 +15,11 @@ pub const UPSTREAM_PLUGIN_ID: &str = "haveibeenpwned";
 pub const RUNTIME_PLUGIN_ID: &str = "have-i-been-pwned";
 
 pub fn have_i_been_pwned() -> AuthPlugin {
-    have_i_been_pwned_with_checker(
-        HaveIBeenPwnedOptions::default(),
-        Arc::new(ReqwestHaveIBeenPwnedChecker::new()),
-    )
+    have_i_been_pwned_with_options(HaveIBeenPwnedOptions::default())
+}
+
+pub fn have_i_been_pwned_with_options(options: HaveIBeenPwnedOptions) -> AuthPlugin {
+    have_i_been_pwned_with_checker(options, Arc::new(ReqwestHaveIBeenPwnedChecker::new()))
 }
 
 pub fn have_i_been_pwned_with_checker(

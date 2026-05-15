@@ -16,7 +16,9 @@ use crate::api::{
     create_auth_endpoint, parse_request_body, AsyncAuthEndpoint, AuthEndpointOptions, BodyField,
     BodySchema, JsonSchemaType, OpenApiOperation,
 };
-use crate::auth::email_password::{EmailPasswordAuth, SignUpInput};
+use crate::auth::email_password::{
+    AuthFlowError, AuthFlowErrorCode, EmailPasswordAuth, SignUpInput,
+};
 use crate::db::DbAdapter;
 use crate::error::OpenAuthError;
 use crate::user::DbUserStore;
@@ -110,6 +112,15 @@ pub(super) fn sign_up_email_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEn
                             );
                         }
                     }
+                }
+                if DbUserStore::new(adapter.as_ref())
+                    .find_user_by_email(&input.email)
+                    .await?
+                    .is_some()
+                {
+                    return auth_flow_error_response(AuthFlowError::new(
+                        AuthFlowErrorCode::UserAlreadyExists,
+                    ));
                 }
                 if let Err(rejection) =
                     run_password_validators(context, "/sign-up/email", &input.password).await

@@ -9,13 +9,35 @@ use openauth_core::error::OpenAuthError;
 use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
 use openauth_core::plugin::PluginPasswordValidationInput;
 use openauth_plugins::haveibeenpwned::{
-    have_i_been_pwned_with_checker, HaveIBeenPwnedCheckError, HaveIBeenPwnedChecker,
-    HaveIBeenPwnedOptions, UPSTREAM_PLUGIN_ID,
+    have_i_been_pwned_with_checker, have_i_been_pwned_with_options, HaveIBeenPwnedCheckError,
+    HaveIBeenPwnedChecker, HaveIBeenPwnedOptions, UPSTREAM_PLUGIN_ID,
 };
 
 #[test]
 fn exposes_haveibeenpwned_upstream_id() {
     assert_eq!(UPSTREAM_PLUGIN_ID, "haveibeenpwned");
+}
+
+#[test]
+fn options_constructor_preserves_upstream_options_shape() -> Result<(), Box<dyn std::error::Error>>
+{
+    let plugin = have_i_been_pwned_with_options(HaveIBeenPwnedOptions {
+        enabled: false,
+        paths: vec!["/change-password".to_owned()],
+        custom_password_compromised_message: Some("Use another password.".to_owned()),
+    });
+
+    assert_eq!(plugin.id, "have-i-been-pwned");
+    let Some(options) = plugin.options else {
+        return Err("plugin options should be serialized".into());
+    };
+    assert_eq!(options["enabled"], false);
+    assert_eq!(options["paths"], serde_json::json!(["/change-password"]));
+    assert_eq!(
+        options["customPasswordCompromisedMessage"],
+        "Use another password."
+    );
+    Ok(())
 }
 
 #[tokio::test]

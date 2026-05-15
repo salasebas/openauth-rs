@@ -31,6 +31,43 @@ async fn password_validator_rejects_sign_up_before_user_creation(
 }
 
 #[tokio::test]
+async fn sign_up_duplicate_email_is_rejected_before_password_validator(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(RouteAdapter::default());
+    let initial_router = router(adapter.clone())?;
+    let first = initial_router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"ada@example.com","password":"secret123"}"#,
+            None,
+        )?)
+        .await?;
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let rejecting_router = router_with_options(
+        adapter,
+        OpenAuthOptions {
+            plugins: vec![rejecting_password_plugin("/sign-up/email")],
+            ..OpenAuthOptions::default()
+        },
+    )?;
+    let duplicate = rejecting_router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"ada@example.com","password":"secret123"}"#,
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    let body: ApiErrorResponse = serde_json::from_slice(duplicate.body())?;
+    assert_eq!(body.code, "USER_ALREADY_EXISTS");
+    Ok(())
+}
+
+#[tokio::test]
 async fn password_validator_rejects_change_password_before_credential_update(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(RouteAdapter::default());
