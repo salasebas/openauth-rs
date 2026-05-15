@@ -1,6 +1,7 @@
 //! Framework-neutral API contracts.
 
 pub mod body;
+pub mod output;
 pub mod routes;
 
 pub(crate) mod additional_fields;
