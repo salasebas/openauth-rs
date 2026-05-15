@@ -35,6 +35,12 @@ async fn handle_callback(
     options: &OAuthProxyOptions,
 ) -> Result<openauth_core::api::ApiResponse, OpenAuthError> {
     let default_error_url = format!("{}/error", context.base_url.trim_end_matches('/'));
+    let Some(callback_url) = query_param(&request, "callbackURL") else {
+        return redirect_error(&default_error_url, "missing_callback_url");
+    };
+    if !is_trusted_callback_url(context, &request, &callback_url)? {
+        return redirect_error(&default_error_url, "invalid_callback_url");
+    }
     let Some(encrypted_profile) = query_param(&request, "profile") else {
         return redirect_error(&default_error_url, "missing_profile");
     };
@@ -50,11 +56,6 @@ async fn handle_callback(
     let age = OffsetDateTime::now_utc().unix_timestamp() - payload.timestamp;
     if age > options.max_age as i64 || age < -10 {
         return redirect_error(error_url, "payload_expired");
-    }
-    let callback_url =
-        query_param(&request, "callbackURL").unwrap_or_else(|| payload.callback_url.clone());
-    if !is_trusted_callback_url(context, &request, &callback_url)? {
-        return redirect_error(error_url, "invalid_callback_url");
     }
     let Some(adapter) = context.adapter() else {
         return redirect_error(error_url, "user_creation_failed");

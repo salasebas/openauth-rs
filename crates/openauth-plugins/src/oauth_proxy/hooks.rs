@@ -11,15 +11,22 @@ use openauth_core::plugin::{PluginAfterHookAction, PluginBeforeHookAction};
 use openauth_core::plugin::{PluginAfterHookFuture, PluginBeforeHookFuture};
 use openauth_core::verification::DbVerificationStore;
 use openauth_oauth::oauth2::SocialAuthorizationCodeRequest;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use url::Url;
 
 use super::options::OAuthProxyOptions;
 use super::payload::{OAuthProxyStatePackage, PassthroughPayload};
 use super::utils::{
-    decrypt, encrypt, production_base_url, proxy_callback_url, query_or_body_param, query_param,
-    redirect_error, rewrite_callback_body, should_skip_proxy,
+    decrypt, encrypt, production_base_url, proxy_callback_url, query_or_body_param, redirect_error,
+    rewrite_callback_body, should_skip_proxy,
 };
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StateCookiePackage {
+    state: String,
+    data: OAuthStateData,
+}
 
 pub(crate) fn before_sign_in(
     options: OAuthProxyOptions,
@@ -80,7 +87,11 @@ pub(crate) fn after_sign_in(
             let state_cookie = encrypt(
                 context,
                 &options,
-                &serde_json::to_string(&state_data).map_err(json_error)?,
+                &serde_json::to_string(&StateCookiePackage {
+                    state: state.clone(),
+                    data: state_data,
+                })
+                .map_err(json_error)?,
             )?;
             let package = OAuthProxyStatePackage {
                 state,
@@ -138,18 +149,29 @@ pub(crate) fn before_callback(
                 Ok(package) if package.is_oauth_proxy => package,
                 _ => return Ok(PluginBeforeHookAction::Continue(request)),
             };
-            let state_data = match decrypt(context, &options, &package.state_cookie)
-                .and_then(|json| serde_json::from_str::<OAuthStateData>(&json).map_err(json_error))
-            {
-                Ok(state_data) => state_data,
-                Err(_) => {
-                    return redirect_error(
-                        &format!("{}/error", context.base_url.trim_end_matches('/')),
-                        "invalid_state",
-                    )
-                    .map(PluginBeforeHookAction::Respond)
-                }
-            };
+            let state_cookie =
+                match decrypt(context, &options, &package.state_cookie).and_then(|json| {
+                    serde_json::from_str::<StateCookiePackage>(&json).map_err(json_error)
+                }) {
+                    Ok(state_cookie) => state_cookie,
+                    Err(_) => {
+                        return redirect_error(
+                            &format!("{}/error", context.base_url.trim_end_matches('/')),
+                            "invalid_state",
+                        )
+                        .map(PluginBeforeHookAction::Respond)
+                    }
+                };
+            let error_url = state_cookie
+                .data
+                .error_url
+                .clone()
+                .unwrap_or_else(|| format!("{}/error", context.base_url.trim_end_matches('/')));
+            if state_cookie.state != package.state {
+                return redirect_error(&error_url, "state_mismatch")
+                    .map(PluginBeforeHookAction::Respond);
+            }
+            let state_data = state_cookie.data;
             let error_url = state_data
                 .error_url
                 .clone()
@@ -175,7 +197,7 @@ pub(crate) fn before_callback(
                     code_verifier: Some(state_data.code_verifier.clone()),
                     redirect_uri: format!(
                         "{}/callback/{}",
-                        context.base_url.trim_end_matches('/'),
+                        production_base_url(context, &options).trim_end_matches('/'),
                         provider.id()
                     ),
                     device_id: query_or_body_param(&request, "device_id"),
@@ -188,7 +210,7 @@ pub(crate) fn before_callback(
                         .map(PluginBeforeHookAction::Respond)
                 }
             };
-            let provider_user = query_param(&request, "user")
+            let provider_user = query_or_body_param(&request, "user")
                 .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok());
             let Some(user_info) = provider
                 .get_user_info(tokens.clone(), provider_user)

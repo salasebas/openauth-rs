@@ -207,9 +207,12 @@ fn vendor_current_url() -> Option<String> {
         "NETLIFY_URL",
         "RENDER_URL",
         "AWS_LAMBDA_FUNCTION_URL",
+        "AWS_LAMBDA_FUNCTION_NAME",
         "AWS_FUNCTION_URL",
         "GOOGLE_CLOUD_FUNCTION_URL",
+        "GOOGLE_CLOUD_FUNCTION_NAME",
         "AZURE_FUNCTION_URL",
+        "AZURE_FUNCTION_NAME",
         "FUNCTIONS_CUSTOMHANDLER_PORT",
     ]
     .into_iter()
