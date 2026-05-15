@@ -16,6 +16,7 @@ use crate::context::AuthContext;
 use crate::cookies::Cookie;
 use crate::db::{DbAdapter, DbRecord, DbValue, Session, User};
 use crate::error::OpenAuthError;
+use crate::plugin::PluginPasswordValidationRejection;
 
 pub(super) trait RequestMetadata {
     fn with_request_metadata(self, request: &ApiRequest) -> Self;
@@ -208,6 +209,12 @@ pub(super) fn error_response(
         },
         Vec::new(),
     )
+}
+
+pub(super) fn password_validation_rejection_response(
+    rejection: PluginPasswordValidationRejection,
+) -> Result<ApiResponse, OpenAuthError> {
+    error_response(rejection.status, rejection.code, rejection.message)
 }
 
 pub(super) fn unauthorized() -> Result<ApiResponse, OpenAuthError> {

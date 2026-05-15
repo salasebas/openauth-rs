@@ -1,3 +1,14 @@
-//! Have I Been Pwned password check plugin placeholder.
+//! Have I Been Pwned password check plugin.
 
-pub const UPSTREAM_PLUGIN_ID: &str = "haveibeenpwned";
+mod checker;
+mod error;
+mod options;
+mod plugin;
+
+pub use checker::{HaveIBeenPwnedCheckError, HaveIBeenPwnedChecker, ReqwestHaveIBeenPwnedChecker};
+pub use error::{PASSWORD_COMPROMISED_CODE, PASSWORD_COMPROMISED_MESSAGE};
+pub use options::HaveIBeenPwnedOptions;
+pub use plugin::{
+    have_i_been_pwned, have_i_been_pwned_with_checker, have_i_been_pwned_with_options,
+    RUNTIME_PLUGIN_ID, UPSTREAM_PLUGIN_ID,
+};

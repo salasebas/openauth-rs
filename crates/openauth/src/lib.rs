@@ -51,7 +51,9 @@ pub use openauth_core::plugin::{
     PluginDatabaseAfterInput, PluginDatabaseBeforeAction, PluginDatabaseBeforeInput,
     PluginDatabaseHook, PluginDatabaseHookContext, PluginDatabaseOperation, PluginEndpoint,
     PluginEndpointHooks, PluginErrorCode, PluginHookMatcher, PluginInitOutput, PluginMiddleware,
-    PluginMigration, PluginRateLimitRule, PluginRequestAction, PluginSchemaContribution,
+    PluginMigration, PluginPasswordValidationInput, PluginPasswordValidationRejection,
+    PluginPasswordValidator, PluginPasswordValidatorFuture, PluginPasswordValidatorHandler,
+    PluginRateLimitRule, PluginRequestAction, PluginSchemaContribution,
 };
 pub use openauth_core::session::{CreateSessionInput, DbSessionStore};
 pub use openauth_core::user::{

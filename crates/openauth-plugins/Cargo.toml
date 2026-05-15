@@ -17,6 +17,7 @@ path = "src/lib.rs"
 [dependencies]
 base64.workspace = true
 data-encoding.workspace = true
+hex.workspace = true
 hmac.workspace = true
 http.workspace = true
 indexmap.workspace = true
