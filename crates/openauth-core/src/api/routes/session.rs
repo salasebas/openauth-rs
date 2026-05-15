@@ -16,6 +16,9 @@ use crate::api::{
     BodySchema, JsonSchemaType, OpenApiOperation,
 };
 use crate::auth::session::{GetSessionInput, SessionAuth};
+use crate::context::request_state::{
+    has_request_state, set_current_session, set_current_session_user,
+};
 use crate::context::AuthContext;
 use crate::db::{DbAdapter, DbRecord, DbValue, FindOne, Session, Update, Where};
 use crate::error::OpenAuthError;
@@ -79,6 +82,13 @@ pub(super) fn get_session_endpoint(
                         result.cookies,
                     );
                 };
+                if has_request_state() {
+                    set_current_session(session.clone(), user.clone())?;
+                    set_current_session_user(
+                        serde_json::to_value(&user)
+                            .map_err(|error| OpenAuthError::Api(error.to_string()))?,
+                    )?;
+                }
                 json_response(
                     StatusCode::OK,
                     &SessionUserBody {

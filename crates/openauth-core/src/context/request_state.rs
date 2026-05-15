@@ -97,10 +97,17 @@ where
 }
 
 static CURRENT_SESSION_USER: OnceLock<RequestState<Option<Value>>> = OnceLock::new();
+static CURRENT_SESSION: OnceLock<RequestState<Option<CurrentSession>>> = OnceLock::new();
 static CURRENT_NEW_SESSION: OnceLock<RequestState<Option<NewSession>>> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewSession {
+    pub session: Session,
+    pub user: User,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentSession {
     pub session: Session,
     pub user: User,
 }
@@ -117,6 +124,18 @@ pub fn set_current_session_user(user: Value) -> Result<(), OpenAuthError> {
 /// Read the current session user JSON for this request, when an endpoint resolved one.
 pub fn current_session_user() -> Result<Option<Value>, OpenAuthError> {
     current_session_user_state().get()
+}
+
+fn current_session_state() -> &'static RequestState<Option<CurrentSession>> {
+    CURRENT_SESSION.get_or_init(|| define_request_state(|| None))
+}
+
+pub fn set_current_session(session: Session, user: User) -> Result<(), OpenAuthError> {
+    current_session_state().set(Some(CurrentSession { session, user }))
+}
+
+pub fn current_session() -> Result<Option<CurrentSession>, OpenAuthError> {
+    current_session_state().get()
 }
 
 fn current_new_session_state() -> &'static RequestState<Option<NewSession>> {
