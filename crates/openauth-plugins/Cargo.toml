@@ -21,6 +21,7 @@ hmac.workspace = true
 http.workspace = true
 indexmap.workspace = true
 openauth-core.workspace = true
+openauth-social-providers.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
