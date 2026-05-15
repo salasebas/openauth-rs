@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  crates-io:
+    name: Publish crates
+    runs-on: ubuntu-latest
+    environment: crates-io
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Rust toolchain
+        run: rustup show
+
+      - name: Validate tag matches workspace version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.workspace_members[0] as $first | .packages[] | select(.id == $first) | .version')"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$version" ]; then
+            echo "Tag v$tag does not match workspace version $version"
+            exit 1
+          fi
+
+      - name: Verify formatting
+        run: cargo fmt --all --check
+
+      - name: Verify lints
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Verify tests
+        run: cargo test --workspace --all-features
+
+      - name: Publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.workspace_members[0] as $first | .packages[] | select(.id == $first) | .version')"
+          crates=(
+            openauth-oauth
+            openauth-social-providers
+            openauth-core
+            openauth-i18n
+            openauth-oauth-provider
+            openauth-plugins
+            openauth-scim
+            openauth-sqlx
+            openauth-sso
+            openauth-stripe
+            openauth-telemetry
+            openauth
+          )
+
+          crate_version_exists() {
+            local crate="$1"
+            local status
+
+            status="$(curl --silent --output /dev/null --write-out "%{http_code}" "https://crates.io/api/v1/crates/${crate}/${version}")"
+            [ "$status" = "200" ]
+          }
+
+          wait_for_crate_version() {
+            local crate="$1"
+
+            for attempt in {1..20}; do
+              if crate_version_exists "$crate"; then
+                return 0
+              fi
+
+              echo "Waiting for ${crate} ${version} to be available on crates.io (${attempt}/20)"
+              sleep 15
+            done
+
+            echo "${crate} ${version} was not visible on crates.io after publishing"
+            return 1
+          }
+
+          for crate in "${crates[@]}"; do
+            if crate_version_exists "$crate"; then
+              echo "Skipping ${crate} ${version}; it already exists on crates.io"
+              continue
+            fi
+
+            cargo publish -p "$crate" --dry-run
+            cargo publish -p "$crate"
+            wait_for_crate_version "$crate"
+          done
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
