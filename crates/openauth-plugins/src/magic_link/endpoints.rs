@@ -9,7 +9,7 @@ use openauth_core::auth::trusted_origins::OriginMatchSettings;
 use openauth_core::context::AuthContext;
 use openauth_core::db::{DbAdapter, DbRecord, DbValue, FindOne, User, Verification, Where};
 use openauth_core::error::OpenAuthError;
-use openauth_core::session::{CreateSessionInput, DbSessionStore};
+use openauth_core::session::DbSessionStore;
 use openauth_core::user::{CreateUserInput, DbUserStore};
 use openauth_core::verification::{
     CreateVerificationInput, DbVerificationStore, UpdateVerificationInput,
@@ -24,7 +24,9 @@ use super::payload::{
     parse_verify_query, SignInMagicLinkBody, VerificationPayload, VerifyMagicLinkQuery,
 };
 use super::response;
-use super::session_response::{record_new_session, session_cookies};
+use super::session_response::{
+    record_new_session, session_cookies, session_create_input, session_response_value,
+};
 use super::token::generate_magic_link_token;
 use super::user_response::{additional_user_create_values, user_response_value};
 
@@ -208,8 +210,9 @@ pub(crate) fn verify_magic_link_endpoint(options: MagicLinkOptions) -> AsyncAuth
                 let expires_at = OffsetDateTime::now_utc()
                     .checked_add(Duration::seconds(context.session_config.expires_in as i64))
                     .ok_or_else(|| OpenAuthError::Api("session expiry overflow".to_owned()))?;
+                let input = session_create_input(context, &request, user.id.clone(), expires_at);
                 let session = match DbSessionStore::new(adapter.as_ref())
-                    .create_session(CreateSessionInput::new(user.id.clone(), expires_at))
+                    .create_session(input)
                     .await
                 {
                     Ok(session) => session,
@@ -224,11 +227,14 @@ pub(crate) fn verify_magic_link_endpoint(options: MagicLinkOptions) -> AsyncAuth
                 let cookies = session_cookies(context, &session, &user)?;
 
                 if query.callback_url.is_none() {
+                    let token = session.token.clone();
+                    let session =
+                        session_response_value(adapter.as_ref(), context, &session).await?;
                     let user = user_response_value(adapter.as_ref(), context, &user).await?;
                     return response::json(
                         StatusCode::OK,
                         &VerifyResponse {
-                            token: session.token.clone(),
+                            token,
                             user,
                             session,
                         },
@@ -248,7 +254,7 @@ pub(crate) fn verify_magic_link_endpoint(options: MagicLinkOptions) -> AsyncAuth
 struct VerifyResponse {
     token: String,
     user: Value,
-    session: openauth_core::db::Session,
+    session: Value,
 }
 
 fn required_adapter(context: &AuthContext) -> Result<Arc<dyn DbAdapter>, OpenAuthError> {

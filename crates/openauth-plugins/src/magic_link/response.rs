@@ -3,6 +3,7 @@ use openauth_core::api::{ApiErrorResponse, ApiResponse};
 use openauth_core::cookies::Cookie;
 use openauth_core::error::OpenAuthError;
 use serde::Serialize;
+use url::Url;
 
 pub(crate) fn json<T: Serialize>(
     status: StatusCode,
@@ -33,11 +34,24 @@ pub(crate) fn redirect_with_error(
     location: &str,
     error: &str,
 ) -> Result<ApiResponse, OpenAuthError> {
+    if let Ok(mut url) = Url::parse(location) {
+        let mut pairs = url
+            .query_pairs()
+            .filter(|(key, _)| key != "error")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        pairs.push(("error".to_owned(), error.to_owned()));
+        url.set_query(None);
+        {
+            let mut query = url.query_pairs_mut();
+            for (key, value) in pairs {
+                query.append_pair(&key, &value);
+            }
+        }
+        return redirect(url.as_str(), Vec::new());
+    }
     let separator = if location.contains('?') { '&' } else { '?' };
-    redirect(
-        &format!("{location}{separator}error={}", percent_encode(error)),
-        Vec::new(),
-    )
+    redirect(&format!("{location}{separator}error={error}"), Vec::new())
 }
 
 pub(crate) fn error(
@@ -94,8 +108,4 @@ fn serialize_cookie(cookie: &Cookie) -> String {
         parts.push("Partitioned".to_owned());
     }
     parts.join("; ")
-}
-
-fn percent_encode(value: &str) -> String {
-    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
