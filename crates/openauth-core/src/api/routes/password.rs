@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 
 use super::shared::{
-    current_session, error_response, json_response, status_openapi_response, unauthorized,
+    current_session, error_response, json_response, password_validation_rejection_response,
+    status_openapi_response, unauthorized,
 };
+use crate::api::plugin_pipeline::run_password_validators;
 use crate::api::{
     create_auth_endpoint, parse_request_body, AsyncAuthEndpoint, AuthEndpointOptions, BodyField,
     BodySchema, JsonSchemaType, OpenApiOperation,
@@ -117,7 +119,6 @@ pub(super) fn change_password_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuth
                 if let Some(response) = validate_password_length(context, &body.new_password)? {
                     return Ok(response);
                 }
-
                 let users = DbUserStore::new(adapter.as_ref());
                 let Some(account) = users.find_credential_account(&user.id).await? else {
                     return error_response(
@@ -135,6 +136,11 @@ pub(super) fn change_password_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuth
                 };
                 if !(context.password.verify)(password_hash, &body.current_password)? {
                     return invalid_password();
+                }
+                if let Err(rejection) =
+                    run_password_validators(context, "/change-password", &body.new_password).await
+                {
+                    return password_validation_rejection_response(rejection);
                 }
 
                 let new_hash = (context.password.hash)(&body.new_password)?;
@@ -320,7 +326,6 @@ pub(super) fn reset_password_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthE
                 if let Some(response) = validate_password_length(context, &body.new_password)? {
                     return Ok(response);
                 }
-
                 let identifier = format!("reset-password:{token}");
                 let verifications = DbVerificationStore::new(adapter.as_ref());
                 let Some(verification) = verifications.find_verification(&identifier).await? else {
@@ -328,6 +333,11 @@ pub(super) fn reset_password_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthE
                 };
                 if verification.expires_at <= OffsetDateTime::now_utc() {
                     return invalid_token();
+                }
+                if let Err(rejection) =
+                    run_password_validators(context, "/reset-password", &body.new_password).await
+                {
+                    return password_validation_rejection_response(rejection);
                 }
                 let user_id = verification.value;
                 let users = DbUserStore::new(adapter.as_ref());

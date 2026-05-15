@@ -10,7 +10,8 @@ use super::shared::{
     json_response, list_sessions_openapi_response, query_param, request_cookie_header,
     status_openapi_response, unauthorized, user_response_value,
 };
-use crate::api::additional_fields::{insert_returned_fields, json_to_db_value};
+use crate::api::additional_fields::json_to_db_value;
+use crate::api::output::{session_output_value, session_value_from_record};
 use crate::api::{
     create_auth_endpoint, parse_request_body, AsyncAuthEndpoint, AuthEndpointOptions, BodyField,
     BodySchema, JsonSchemaType, OpenApiOperation,
@@ -19,8 +20,7 @@ use crate::auth::session::{GetSessionInput, SessionAuth};
 use crate::context::request_state::{
     has_request_state, set_current_session, set_current_session_user,
 };
-use crate::context::AuthContext;
-use crate::db::{DbAdapter, DbRecord, DbValue, FindOne, Session, Update, Where};
+use crate::db::{DbAdapter, DbValue, Update, Where};
 use crate::error::OpenAuthError;
 use crate::session::DbSessionStore;
 
@@ -99,8 +99,7 @@ pub(super) fn get_session_endpoint(
                 json_response(
                     StatusCode::OK,
                     &SessionUserBody {
-                        session: session_response_value(adapter.as_ref(), context, &session)
-                            .await?,
+                        session: session_output_value(adapter.as_ref(), context, &session).await?,
                         user: user_response_value(adapter.as_ref(), context, &user).await?,
                     },
                     result.cookies,
@@ -327,45 +326,6 @@ fn revoke_session_body_schema() -> BodySchema {
     BodySchema::object([
         BodyField::new("token", JsonSchemaType::String).description("The token to revoke")
     ])
-}
-
-async fn session_response_value(
-    adapter: &dyn DbAdapter,
-    context: &AuthContext,
-    session: &Session,
-) -> Result<Value, OpenAuthError> {
-    if context.options.session.additional_fields.is_empty() {
-        return serde_json::to_value(session)
-            .map_err(|error| OpenAuthError::Api(error.to_string()));
-    }
-    let record = adapter
-        .find_one(
-            FindOne::new("session")
-                .where_clause(Where::new("token", DbValue::String(session.token.clone()))),
-        )
-        .await?;
-    match record {
-        Some(record) => session_value_from_record(context, &record, session),
-        None => {
-            serde_json::to_value(session).map_err(|error| OpenAuthError::Api(error.to_string()))
-        }
-    }
-}
-
-fn session_value_from_record(
-    context: &AuthContext,
-    record: &DbRecord,
-    session: &Session,
-) -> Result<Value, OpenAuthError> {
-    let mut value =
-        serde_json::to_value(session).map_err(|error| OpenAuthError::Api(error.to_string()))?;
-    let Some(object) = value.as_object_mut() else {
-        return Err(OpenAuthError::Api(
-            "could not serialize session as an object".to_owned(),
-        ));
-    };
-    insert_returned_fields(object, &context.options.session.additional_fields, record)?;
-    Ok(value)
 }
 
 fn is_core_session_field(name: &str) -> bool {

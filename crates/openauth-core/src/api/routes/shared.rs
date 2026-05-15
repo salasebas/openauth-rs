@@ -1,9 +1,9 @@
 use http::{header, HeaderValue, StatusCode};
 use serde::Serialize;
 use serde_json::{json, Value};
-use time::OffsetDateTime;
 
 use crate::api::additional_fields::AdditionalFieldError;
+use crate::api::output::{session_response_cookies, user_output_value};
 use crate::api::{ApiErrorResponse, ApiRequest, ApiResponse};
 use crate::auth::email_password::{
     AuthFlowError, AuthFlowErrorCode, EmailPasswordConfig, SignInInput, SignUpInput,
@@ -13,12 +13,10 @@ use crate::context::request_state::{
     has_request_state, set_current_new_session, set_current_session_user,
 };
 use crate::context::AuthContext;
-use crate::cookies::{
-    set_cookie_cache, set_session_cookie, Cookie, CookieCachePayload, CookieOptions,
-    SessionCookieOptions,
-};
+use crate::cookies::Cookie;
 use crate::db::{DbAdapter, DbRecord, DbValue, Session, User};
 use crate::error::OpenAuthError;
+use crate::plugin::PluginPasswordValidationRejection;
 
 pub(super) trait RequestMetadata {
     fn with_request_metadata(self, request: &ApiRequest) -> Self;
@@ -64,42 +62,7 @@ pub(super) fn auth_session_cookies(
     user: &User,
     dont_remember: bool,
 ) -> Result<Vec<Cookie>, OpenAuthError> {
-    let mut cookies = set_session_cookie(
-        &context.auth_cookies,
-        &context.secret,
-        &session.token,
-        SessionCookieOptions {
-            dont_remember,
-            overrides: CookieOptions::default(),
-        },
-    )?;
-    if context.options.session.cookie_cache.enabled {
-        let max_age = context
-            .options
-            .session
-            .cookie_cache
-            .max_age
-            .unwrap_or(60 * 5);
-        cookies.extend(set_cookie_cache(
-            &context.auth_cookies,
-            &context.secret,
-            &CookieCachePayload {
-                session: session.clone(),
-                user: user.clone(),
-                updated_at: OffsetDateTime::now_utc().unix_timestamp(),
-                version: context
-                    .options
-                    .session
-                    .cookie_cache
-                    .version
-                    .clone()
-                    .unwrap_or_else(|| "1".to_owned()),
-            },
-            context.options.session.cookie_cache.strategy,
-            max_age,
-        )?);
-    }
-    Ok(cookies)
+    session_response_cookies(context, session, user, dont_remember)
 }
 
 pub(super) fn record_new_session(session: &Session, user: &User) -> Result<(), OpenAuthError> {
@@ -162,12 +125,7 @@ pub(super) async fn user_response_value(
     context: &AuthContext,
     user: &User,
 ) -> Result<Value, OpenAuthError> {
-    crate::api::additional_fields::user_response_value(
-        adapter,
-        &context.options.user.additional_fields,
-        user,
-    )
-    .await
+    user_output_value(adapter, context, user).await
 }
 
 pub(super) fn json_response<T>(
@@ -251,6 +209,12 @@ pub(super) fn error_response(
         },
         Vec::new(),
     )
+}
+
+pub(super) fn password_validation_rejection_response(
+    rejection: PluginPasswordValidationRejection,
+) -> Result<ApiResponse, OpenAuthError> {
+    error_response(rejection.status, rejection.code, rejection.message)
 }
 
 pub(super) fn unauthorized() -> Result<ApiResponse, OpenAuthError> {

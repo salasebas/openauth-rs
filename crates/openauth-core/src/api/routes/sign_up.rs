@@ -7,15 +7,18 @@ use serde_json::Value;
 use super::shared::{
     additional_session_create_values, auth_flow_error_response, auth_session_cookies,
     email_password_config, error_response, invalid_additional_field_response, json_response,
-    message_openapi_response, record_new_session, sign_up_email_openapi_response,
-    user_response_value, RequestMetadata,
+    message_openapi_response, password_validation_rejection_response, record_new_session,
+    sign_up_email_openapi_response, user_response_value, RequestMetadata,
 };
 use crate::api::additional_fields::{create_values, AdditionalFieldError};
+use crate::api::plugin_pipeline::run_password_validators;
 use crate::api::{
     create_auth_endpoint, parse_request_body, AsyncAuthEndpoint, AuthEndpointOptions, BodyField,
     BodySchema, JsonSchemaType, OpenApiOperation,
 };
-use crate::auth::email_password::{EmailPasswordAuth, SignUpInput};
+use crate::auth::email_password::{
+    AuthFlowError, AuthFlowErrorCode, EmailPasswordAuth, SignUpInput,
+};
 use crate::db::DbAdapter;
 use crate::error::OpenAuthError;
 use crate::user::DbUserStore;
@@ -109,6 +112,20 @@ pub(super) fn sign_up_email_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEn
                             );
                         }
                     }
+                }
+                if DbUserStore::new(adapter.as_ref())
+                    .find_user_by_email(&input.email)
+                    .await?
+                    .is_some()
+                {
+                    return auth_flow_error_response(AuthFlowError::new(
+                        AuthFlowErrorCode::UserAlreadyExists,
+                    ));
+                }
+                if let Err(rejection) =
+                    run_password_validators(context, "/sign-up/email", &input.password).await
+                {
+                    return password_validation_rejection_response(rejection);
                 }
 
                 let auth = EmailPasswordAuth::new(
