@@ -40,7 +40,9 @@ pub fn email_otp(adapter: Arc<dyn DbAdapter>, options: EmailOtpOptions) -> AuthP
         ),
         AuthPlugin::with_error_code,
     );
-    let plugin = if hook_options.send_verification_on_sign_up {
+    let plugin = if hook_options.send_verification_on_sign_up
+        && !hook_options.override_default_email_verification
+    {
         let adapter = Arc::clone(&adapter);
         let options = Arc::clone(&hook_options);
         plugin.with_async_after_hook("/sign-up/email", move |context, request, response| {

@@ -73,7 +73,7 @@ async fn send_email_verification_otp(
     let generated = resolve_otp(
         adapter,
         options,
-        &context.secret,
+        &context.secret_config,
         &email,
         EmailOtpType::EmailVerification,
         &identifier,

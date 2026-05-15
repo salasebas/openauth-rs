@@ -160,9 +160,7 @@ fn endpoint_with_method(
     create_auth_endpoint(
         path,
         method,
-        AuthEndpointOptions::new()
-            .operation_id(operation_id)
-            .body_schema(common_schema(path)),
+        AuthEndpointOptions::new().operation_id(operation_id),
         move |context, request| handler(context, request, Arc::clone(&adapter), options.clone()),
     )
 }

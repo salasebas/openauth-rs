@@ -1,7 +1,7 @@
 use http::{header, StatusCode};
 use openauth_core::api::{ApiRequest, ApiResponse};
 use openauth_core::auth::session::{GetSessionInput, SessionAuth};
-use openauth_core::context::AuthContext;
+use openauth_core::context::{AuthContext, SecretMaterial};
 use openauth_core::db::{DbAdapter, DbValue, User, Verification};
 use openauth_core::error::OpenAuthError;
 use openauth_core::session::{CreateSessionInput, DbSessionStore};
@@ -17,7 +17,7 @@ use super::types::{EmailOtpOptions, EmailOtpPayload, EmailOtpType, ResendStrateg
 pub(super) async fn resolve_otp(
     adapter: &dyn DbAdapter,
     options: &EmailOtpOptions,
-    secret: &str,
+    secret: &SecretMaterial,
     email: &str,
     otp_type: EmailOtpType,
     identifier: &str,
@@ -26,7 +26,9 @@ pub(super) async fn resolve_otp(
     if options.resend_strategy == ResendStrategy::Reuse {
         if let Some(existing) = store.find_verification(identifier).await? {
             let parts = otp::split_value(&existing.value);
-            if parts.attempts < options.allowed_attempts {
+            if existing.expires_at > OffsetDateTime::now_utc()
+                && parts.attempts < options.allowed_attempts
+            {
                 if let Some(plain) = otp::reusable_otp(options, secret, &parts)? {
                     store
                         .update_verification(
@@ -36,6 +38,8 @@ pub(super) async fn resolve_otp(
                         .await?;
                     return Ok(plain);
                 }
+            } else {
+                store.delete_verification(identifier).await?;
             }
         }
     }
@@ -56,7 +60,7 @@ pub(super) async fn resolve_otp(
 pub(super) async fn verify_otp(
     adapter: &dyn DbAdapter,
     options: &EmailOtpOptions,
-    secret: &str,
+    secret: &SecretMaterial,
     identifier: &str,
     provided: &str,
     consume: bool,

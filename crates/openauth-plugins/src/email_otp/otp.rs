@@ -1,5 +1,6 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use openauth_core::context::SecretMaterial;
 use openauth_core::crypto::buffer::constant_time_equal;
 use openauth_core::crypto::{symmetric_decrypt, symmetric_encrypt};
 use openauth_core::error::OpenAuthError;
@@ -49,7 +50,11 @@ pub fn generate(options: &EmailOtpOptions, email: &str, otp_type: EmailOtpType) 
     generate_numeric(options.otp_length)
 }
 
-pub fn store(options: &EmailOtpOptions, secret: &str, otp: &str) -> Result<String, OpenAuthError> {
+pub fn store(
+    options: &EmailOtpOptions,
+    secret: &SecretMaterial,
+    otp: &str,
+) -> Result<String, OpenAuthError> {
     match &options.store_otp {
         OtpStorage::Plain => Ok(otp.to_owned()),
         OtpStorage::Hashed => Ok(hash_otp(otp)),
@@ -61,7 +66,7 @@ pub fn store(options: &EmailOtpOptions, secret: &str, otp: &str) -> Result<Strin
 
 pub fn verify(
     options: &EmailOtpOptions,
-    secret: &str,
+    secret: &SecretMaterial,
     stored: &str,
     provided: &str,
 ) -> Result<bool, OpenAuthError> {
@@ -85,7 +90,7 @@ pub fn verify(
 
 pub fn reusable_otp(
     options: &EmailOtpOptions,
-    secret: &str,
+    secret: &SecretMaterial,
     parts: &StoredOtpParts,
 ) -> Result<Option<String>, OpenAuthError> {
     match &options.store_otp {

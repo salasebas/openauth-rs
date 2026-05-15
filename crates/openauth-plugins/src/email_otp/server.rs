@@ -10,19 +10,11 @@ use serde::{Deserialize, Serialize};
 use super::helpers::{parse_type, resolve_otp, validated_email};
 use super::otp;
 use super::response;
-use super::types::{EmailOtpOptions, EmailOtpType};
+use super::types::{EmailOtpOptions, EmailOtpType, OtpStorage};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateOtpBody {
-    email: String,
-    #[serde(rename = "type")]
-    otp_type: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GetOtpBody {
     email: String,
     #[serde(rename = "type")]
     otp_type: String,
@@ -61,7 +53,7 @@ pub(super) fn create_verification_otp<'a>(
         let otp = resolve_otp(
             adapter.as_ref(),
             &options,
-            &context.secret,
+            &context.secret_config,
             &email,
             otp_type,
             &identifier,
@@ -83,10 +75,6 @@ pub(super) fn get_verification_otp<'a>(
             query_param(&request, "type"),
         ) {
             (Some(email), Some(otp_type)) => (email, otp_type),
-            _ if !request.body().is_empty() => {
-                let body: GetOtpBody = parse_request_body(&request)?;
-                (body.email, body.otp_type)
-            }
             (None, _) => {
                 return response::error(StatusCode::BAD_REQUEST, "INVALID_EMAIL", "Invalid email");
             }
@@ -125,7 +113,19 @@ pub(super) fn get_verification_otp<'a>(
             return response::json(StatusCode::OK, &OtpResponse { otp: None }, Vec::new());
         }
         let parts = otp::split_value(&verification.value);
-        let plain = otp::reusable_otp(&options, &context.secret, &parts)?;
+        let plain = otp::reusable_otp(&options, &context.secret_config, &parts)?;
+        if plain.is_none()
+            && matches!(
+                options.store_otp,
+                OtpStorage::Hashed | OtpStorage::CustomHash(_)
+            )
+        {
+            return response::error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_OTP",
+                "Stored OTP cannot be retrieved",
+            );
+        }
         response::json(StatusCode::OK, &OtpResponse { otp: plain }, Vec::new())
     })
 }
