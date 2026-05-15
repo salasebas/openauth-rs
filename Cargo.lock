@@ -1092,6 +1092,7 @@ dependencies = [
  "hmac",
  "http",
  "indexmap",
+ "josekit",
  "openauth-core",
  "openauth-oauth",
  "openauth-social-providers",
