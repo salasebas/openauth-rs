@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use super::account::{link_account, link_error_code, normalize_user_info, oauth_account};
 use super::config::{GenericOAuthConfig, GenericOAuthOptions};
+use super::discovery::DiscoveryCache;
 use super::errors;
 use super::provider::GenericOAuthProvider;
 use super::route_http::{
@@ -68,7 +69,10 @@ struct RedirectBody {
     redirect: bool,
 }
 
-pub fn sign_in_oauth2_endpoint(options: GenericOAuthOptions) -> AsyncAuthEndpoint {
+pub fn sign_in_oauth2_endpoint(
+    options: GenericOAuthOptions,
+    discovery_cache: DiscoveryCache,
+) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/sign-in/oauth2",
         Method::POST,
@@ -78,6 +82,7 @@ pub fn sign_in_oauth2_endpoint(options: GenericOAuthOptions) -> AsyncAuthEndpoin
             .body_schema(sign_in_schema()),
         move |context, request| {
             let options = options.clone();
+            let discovery_cache = discovery_cache.clone();
             Box::pin(async move {
                 let adapter = adapter(context)?;
                 let body: SignInOAuth2Body = parse_request_body(&request)?;
@@ -88,7 +93,7 @@ pub fn sign_in_oauth2_endpoint(options: GenericOAuthOptions) -> AsyncAuthEndpoin
                         "No config found for provider",
                     );
                 }
-                let config = resolved_config(&options, &body.provider_id).await?;
+                let config = resolved_config(&options, &discovery_cache, &body.provider_id).await?;
                 let state = generate_oauth_state(
                     context,
                     Some(adapter.as_ref()),
@@ -116,19 +121,28 @@ pub fn sign_in_oauth2_endpoint(options: GenericOAuthOptions) -> AsyncAuthEndpoin
     )
 }
 
-pub fn oauth2_callback_endpoint(options: GenericOAuthOptions) -> AsyncAuthEndpoint {
+pub fn oauth2_callback_endpoint(
+    options: GenericOAuthOptions,
+    discovery_cache: DiscoveryCache,
+) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/oauth2/callback/:providerId",
         Method::GET,
         AuthEndpointOptions::new().operation_id("oAuth2Callback"),
         move |context, request| {
             let options = options.clone();
-            Box::pin(async move { callback_get(context, &options, request).await })
+            let discovery_cache = discovery_cache.clone();
+            Box::pin(
+                async move { callback_get(context, &options, &discovery_cache, request).await },
+            )
         },
     )
 }
 
-pub fn oauth2_link_endpoint(options: GenericOAuthOptions) -> AsyncAuthEndpoint {
+pub fn oauth2_link_endpoint(
+    options: GenericOAuthOptions,
+    discovery_cache: DiscoveryCache,
+) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/oauth2/link",
         Method::POST,
@@ -138,6 +152,7 @@ pub fn oauth2_link_endpoint(options: GenericOAuthOptions) -> AsyncAuthEndpoint {
             .body_schema(link_schema()),
         move |context, request| {
             let options = options.clone();
+            let discovery_cache = discovery_cache.clone();
             Box::pin(async move {
                 let adapter = adapter(context)?;
                 let Some((_session, user)) =
@@ -157,7 +172,7 @@ pub fn oauth2_link_endpoint(options: GenericOAuthOptions) -> AsyncAuthEndpoint {
                         "No config found for provider",
                     );
                 }
-                let config = resolved_config(&options, &body.provider_id).await?;
+                let config = resolved_config(&options, &discovery_cache, &body.provider_id).await?;
                 let state = generate_oauth_state(
                     context,
                     Some(adapter.as_ref()),
@@ -189,11 +204,12 @@ pub fn oauth2_link_endpoint(options: GenericOAuthOptions) -> AsyncAuthEndpoint {
 async fn callback_get(
     context: &AuthContext,
     options: &GenericOAuthOptions,
+    discovery_cache: &DiscoveryCache,
     request: ApiRequest,
 ) -> Result<ApiResponse, OpenAuthError> {
     let adapter = adapter(context)?;
     let provider_id = path_param(&request, "providerId")?;
-    let config = resolved_config(options, provider_id).await?;
+    let config = resolved_config(options, discovery_cache, provider_id).await?;
     if let Some(error) = query_param(&request, "error") {
         return redirect_with_error(&default_error_url(context), &error);
     }
@@ -283,13 +299,14 @@ async fn callback_get(
 
 async fn resolved_config(
     options: &GenericOAuthOptions,
+    discovery_cache: &DiscoveryCache,
     provider_id: &str,
 ) -> Result<GenericOAuthConfig, OpenAuthError> {
     let mut config = options
         .find(provider_id)
         .cloned()
         .ok_or_else(|| api_error_value(errors::PROVIDER_CONFIG_NOT_FOUND))?;
-    if let Some(discovery) = super::discovery::fetch(&config).await? {
+    if let Some(discovery) = discovery_cache.fetch(&config).await? {
         config.authorization_url = config
             .authorization_url
             .or(discovery.authorization_endpoint);

@@ -10,6 +10,12 @@ use url::Url;
 use super::config::{GenericOAuthConfig, GenericOAuthTokenRequest};
 use super::user_info;
 
+/// Social provider implementation used by the generic OAuth plugin.
+///
+/// `SocialOAuthProvider::create_authorization_url` is synchronous, so providers that only
+/// define `discovery_url` cannot resolve their authorization endpoint through this trait method.
+/// Use the plugin routes (`/sign-in/oauth2`, `/oauth2/callback/:providerId`, `/oauth2/link`) as
+/// the canonical flow for discovery-only generic providers.
 #[derive(Debug, Clone)]
 pub struct GenericOAuthProvider {
     config: GenericOAuthConfig,

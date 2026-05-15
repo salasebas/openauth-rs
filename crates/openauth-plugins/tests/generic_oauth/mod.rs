@@ -15,10 +15,16 @@ use openauth_oauth::oauth2::{
 };
 use openauth_plugins::generic_oauth::{
     auth0, generic_oauth, gumroad, hubspot, keycloak, line, microsoft_entra_id, okta, patreon,
-    slack, GenericOAuthConfig, GenericOAuthOptions, GenericOAuthTokenRequest, UPSTREAM_PLUGIN_ID,
+    slack, Auth0Options, BaseOAuthProviderOptions, GenericOAuthConfig, GenericOAuthOptions,
+    GenericOAuthTokenRequest, GumroadOptions, HubSpotOptions, KeycloakOptions, LineOptions,
+    MicrosoftEntraIdOptions, OktaOptions, PatreonOptions, SlackOptions, UPSTREAM_PLUGIN_ID,
 };
 use serde_json::Value;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::thread;
 
 #[test]
 fn generic_oauth_plugin_exposes_metadata_endpoints_and_errors() {
@@ -182,26 +188,99 @@ async fn provider_uses_custom_get_token_and_maps_profile() {
 #[test]
 fn helper_providers_match_upstream_defaults() {
     assert_eq!(
-        auth0("client", "secret", "https://tenant.auth0.com").discovery_url,
+        auth0(Auth0Options {
+            base: helper_base("client", "secret"),
+            domain: "https://tenant.auth0.com".to_owned(),
+        })
+        .discovery_url,
         Some("https://tenant.auth0.com/.well-known/openid-configuration".to_owned())
     );
     assert_eq!(
-        okta("client", "secret", "https://dev.okta.com/oauth2/default/").discovery_url,
+        okta(OktaOptions {
+            base: helper_base("client", "secret"),
+            issuer: "https://dev.okta.com/oauth2/default/".to_owned(),
+        })
+        .discovery_url,
         Some("https://dev.okta.com/oauth2/default/.well-known/openid-configuration".to_owned())
     );
     assert_eq!(
-        keycloak("client", "secret", "https://kc.example.com/realms/acme/").discovery_url,
+        keycloak(KeycloakOptions {
+            base: helper_base("client", "secret"),
+            issuer: "https://kc.example.com/realms/acme/".to_owned(),
+        })
+        .discovery_url,
         Some("https://kc.example.com/realms/acme/.well-known/openid-configuration".to_owned())
     );
-    assert_eq!(gumroad("client", "secret").provider_id, "gumroad");
-    assert_eq!(hubspot("client", "secret").scopes, vec!["oauth"]);
-    assert_eq!(line("client", "secret").provider_id, "line");
     assert_eq!(
-        microsoft_entra_id("client", "secret", "common").authorization_url,
+        gumroad(GumroadOptions {
+            base: helper_base("client", "secret"),
+        })
+        .provider_id,
+        "gumroad"
+    );
+    assert_eq!(
+        hubspot(HubSpotOptions {
+            base: helper_base("client", "secret"),
+        })
+        .scopes,
+        vec!["oauth"]
+    );
+    assert_eq!(
+        line(LineOptions {
+            base: helper_base("client", "secret"),
+            provider_id: Some("line-jp".to_owned()),
+        })
+        .provider_id,
+        "line-jp"
+    );
+    assert_eq!(
+        microsoft_entra_id(MicrosoftEntraIdOptions {
+            base: helper_base("client", "secret"),
+            tenant_id: "common".to_owned(),
+        })
+        .authorization_url,
         Some("https://login.microsoftonline.com/common/oauth2/v2.0/authorize".to_owned())
     );
-    assert_eq!(patreon("client", "secret").scopes, vec!["identity[email]"]);
-    assert_eq!(slack("client", "secret").provider_id, "slack");
+    assert_eq!(
+        patreon(PatreonOptions {
+            base: helper_base("client", "secret"),
+        })
+        .scopes,
+        vec!["identity[email]"]
+    );
+    assert_eq!(
+        slack(SlackOptions {
+            base: helper_base("client", "secret"),
+        })
+        .provider_id,
+        "slack"
+    );
+}
+
+#[test]
+fn helper_provider_options_apply_overrides() {
+    let config = slack(SlackOptions {
+        base: BaseOAuthProviderOptions {
+            client_id: "client".to_owned(),
+            client_secret: Some("secret".to_owned()),
+            scopes: Some(vec!["openid".to_owned(), "team".to_owned()]),
+            redirect_uri: Some("https://app.example.com/custom/callback".to_owned()),
+            pkce: true,
+            disable_implicit_sign_up: true,
+            disable_sign_up: true,
+            override_user_info: true,
+        },
+    });
+
+    assert_eq!(config.scopes, vec!["openid", "team"]);
+    assert_eq!(
+        config.redirect_uri.as_deref(),
+        Some("https://app.example.com/custom/callback")
+    );
+    assert!(config.pkce);
+    assert!(config.disable_implicit_sign_up);
+    assert!(config.disable_sign_up);
+    assert!(config.override_user_info);
 }
 
 #[tokio::test]
@@ -276,6 +355,46 @@ async fn sign_in_oauth2_route_rejects_unknown_provider() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(body["code"], "PROVIDER_CONFIG_NOT_FOUND");
+}
+
+#[tokio::test]
+async fn sign_in_oauth2_caches_discovery_by_provider() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let discovery_url = discovery_server(Arc::clone(&hits));
+    let mut config =
+        GenericOAuthConfig::discovery("discovery", "client-1", Some("secret-1"), discovery_url);
+    config.scopes = vec!["openid".to_owned()];
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    let plugin = generic_oauth(GenericOAuthOptions {
+        config: vec![config],
+    });
+    let context = create_auth_context_with_adapter(
+        OpenAuthOptions {
+            base_url: Some("https://app.example.com".to_owned()),
+            plugins: vec![plugin],
+            ..OpenAuthOptions::default()
+        },
+        adapter,
+    )
+    .unwrap();
+    let router = AuthRouter::try_new(context, Vec::new()).unwrap();
+
+    for _ in 0..2 {
+        let response = router
+            .handle_async(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("https://app.example.com/api/auth/sign-in/oauth2")
+                    .header("content-type", "application/json")
+                    .body(br#"{"providerId":"discovery","disableRedirect":true}"#.to_vec())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -390,10 +509,39 @@ fn provider(config: GenericOAuthConfig) -> openauth_plugins::generic_oauth::Gene
     openauth_plugins::generic_oauth::GenericOAuthProvider::new(config)
 }
 
+fn helper_base(client_id: &str, client_secret: &str) -> BaseOAuthProviderOptions {
+    BaseOAuthProviderOptions {
+        client_id: client_id.to_owned(),
+        client_secret: Some(client_secret.to_owned()),
+        ..BaseOAuthProviderOptions::default()
+    }
+}
+
 fn query_value(url: &url::Url, key: &str) -> Option<String> {
     url.query_pairs()
         .find(|(name, _)| name == key)
         .map(|(_, value)| value.into_owned())
+}
+
+fn discovery_server(hits: Arc<AtomicUsize>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        for stream in listener.incoming().take(2) {
+            let mut stream = stream.unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer);
+            hits.fetch_add(1, Ordering::SeqCst);
+            let body = r#"{"authorization_endpoint":"https://idp.example.com/oauth/authorize","token_endpoint":"https://idp.example.com/oauth/token","userinfo_endpoint":"https://idp.example.com/oauth/userinfo","issuer":"https://idp.example.com"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    format!("http://{address}/.well-known/openid-configuration")
 }
 
 fn jwt_with_claims(claims: &str) -> String {

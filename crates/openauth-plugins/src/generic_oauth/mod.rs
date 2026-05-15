@@ -28,11 +28,14 @@ pub use errors::{
 pub use provider::GenericOAuthProvider;
 pub use providers::{
     auth0, gumroad, hubspot, keycloak, line, microsoft_entra_id, okta, patreon, slack,
+    Auth0Options, BaseOAuthProviderOptions, GumroadOptions, HubSpotOptions, KeycloakOptions,
+    LineOptions, MicrosoftEntraIdOptions, OktaOptions, PatreonOptions, SlackOptions,
 };
 
 /// Build the Better Auth-compatible generic OAuth plugin.
 pub fn generic_oauth(options: GenericOAuthOptions) -> AuthPlugin {
     let init_options = options.clone();
+    let discovery_cache = discovery::DiscoveryCache::default();
     AuthPlugin::new(UPSTREAM_PLUGIN_ID)
         .with_version(env!("CARGO_PKG_VERSION"))
         .with_options(options.to_json())
@@ -65,9 +68,15 @@ pub fn generic_oauth(options: GenericOAuthOptions) -> AuthPlugin {
             ISSUER_MISSING,
             "OAuth issuer parameter missing. The authorization server did not include the required iss parameter (RFC 9207).",
         ))
-        .with_endpoint(routes::sign_in_oauth2_endpoint(options.clone()))
-        .with_endpoint(routes::oauth2_callback_endpoint(options.clone()))
-        .with_endpoint(routes::oauth2_link_endpoint(options))
+        .with_endpoint(routes::sign_in_oauth2_endpoint(
+            options.clone(),
+            discovery_cache.clone(),
+        ))
+        .with_endpoint(routes::oauth2_callback_endpoint(
+            options.clone(),
+            discovery_cache.clone(),
+        ))
+        .with_endpoint(routes::oauth2_link_endpoint(options, discovery_cache))
         .with_init(move |_context| {
             let mut output = PluginInitOutput::new();
             let mut seen = BTreeSet::new();
