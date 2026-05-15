@@ -8,6 +8,7 @@ use openauth_oauth::oauth2::{
 use url::Url;
 
 use super::config::{GenericOAuthConfig, GenericOAuthTokenRequest};
+use super::discovery::DiscoveryCache;
 use super::user_info;
 
 /// Social provider implementation used by the generic OAuth plugin.
@@ -19,11 +20,25 @@ use super::user_info;
 #[derive(Debug, Clone)]
 pub struct GenericOAuthProvider {
     config: GenericOAuthConfig,
+    discovery_cache: Option<DiscoveryCache>,
 }
 
 impl GenericOAuthProvider {
     pub fn new(config: GenericOAuthConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            discovery_cache: None,
+        }
+    }
+
+    pub(crate) fn with_discovery_cache(
+        config: GenericOAuthConfig,
+        discovery_cache: DiscoveryCache,
+    ) -> Self {
+        Self {
+            config,
+            discovery_cache: Some(discovery_cache),
+        }
     }
 
     pub fn config(&self) -> &GenericOAuthConfig {
@@ -54,11 +69,6 @@ impl GenericOAuthProvider {
         &self,
         input: SocialAuthorizationCodeRequest,
     ) -> Result<AuthorizationCodeRequest, OAuthError> {
-        if self.config.token_url.is_none() {
-            return Err(OAuthError::InvalidResponse(
-                "Invalid OAuth configuration. Token URL not found.".to_owned(),
-            ));
-        }
         Ok(AuthorizationCodeRequest {
             code: input.code,
             redirect_uri: input.redirect_uri,
@@ -69,6 +79,31 @@ impl GenericOAuthProvider {
             headers: super::discovery::headers(&self.config.authorization_headers),
             additional_params: self.config.token_url_params.clone(),
             ..AuthorizationCodeRequest::default()
+        })
+    }
+
+    async fn token_endpoint(&self) -> Result<String, OAuthError> {
+        if let Some(token_url) = &self.config.token_url {
+            return Ok(token_url.clone());
+        }
+        let Some(discovery_cache) = &self.discovery_cache else {
+            return Err(OAuthError::InvalidResponse(
+                "Invalid OAuth configuration. Token URL not found.".to_owned(),
+            ));
+        };
+        let discovery = discovery_cache
+            .fetch(&self.config)
+            .await
+            .map_err(|error| OAuthError::InvalidResponse(error.to_string()))?
+            .ok_or_else(|| {
+                OAuthError::InvalidResponse(
+                    "Invalid OAuth configuration. Token URL not found.".to_owned(),
+                )
+            })?;
+        discovery.token_endpoint.ok_or_else(|| {
+            OAuthError::InvalidResponse(
+                "Invalid OAuth configuration. Token URL not found.".to_owned(),
+            )
         })
     }
 }
@@ -131,11 +166,7 @@ impl SocialOAuthProvider for GenericOAuthProvider {
                 })
                 .await;
             }
-            let token_endpoint = self.config.token_url.clone().ok_or_else(|| {
-                OAuthError::InvalidResponse(
-                    "Invalid OAuth configuration. Token URL not found.".to_owned(),
-                )
-            })?;
+            let token_endpoint = self.token_endpoint().await?;
             validate_authorization_code(ClientTokenRequest {
                 token_endpoint,
                 request: self.authorization_code_input(input)?,
@@ -174,11 +205,7 @@ impl SocialOAuthProvider for GenericOAuthProvider {
         refresh_token_value: String,
     ) -> SocialProviderFuture<'_, OAuth2Tokens> {
         Box::pin(async move {
-            let token_endpoint = self.config.token_url.clone().ok_or_else(|| {
-                OAuthError::InvalidResponse(
-                    "Invalid OAuth configuration. Token URL not found.".to_owned(),
-                )
-            })?;
+            let token_endpoint = self.token_endpoint().await?;
             refresh_access_token(ClientTokenRequest {
                 token_endpoint,
                 request: RefreshAccessTokenRequest {

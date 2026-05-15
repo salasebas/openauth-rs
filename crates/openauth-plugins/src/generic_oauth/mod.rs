@@ -7,6 +7,7 @@ mod errors;
 mod provider;
 pub mod providers;
 mod route_http;
+mod route_support;
 mod routes;
 mod user_info;
 
@@ -18,8 +19,10 @@ use std::sync::Arc;
 pub const UPSTREAM_PLUGIN_ID: &str = "generic-oauth";
 
 pub use config::{
-    GenericOAuthConfig, GenericOAuthGetToken, GenericOAuthGetUserInfo,
-    GenericOAuthMapProfileToUser, GenericOAuthOptions, GenericOAuthTokenRequest,
+    GenericOAuthConfig, GenericOAuthFlow, GenericOAuthGetToken, GenericOAuthGetUserInfo,
+    GenericOAuthMapProfileToUser, GenericOAuthOptions, GenericOAuthParams,
+    GenericOAuthParamsCallback, GenericOAuthParamsContext, GenericOAuthParamsFuture,
+    GenericOAuthTokenRequest,
 };
 pub use errors::{
     INVALID_OAUTH_CONFIG, INVALID_OAUTH_CONFIGURATION, ISSUER_MISMATCH, ISSUER_MISSING,
@@ -36,6 +39,7 @@ pub use providers::{
 pub fn generic_oauth(options: GenericOAuthOptions) -> AuthPlugin {
     let init_options = options.clone();
     let discovery_cache = discovery::DiscoveryCache::default();
+    let init_discovery_cache = discovery_cache.clone();
     AuthPlugin::new(UPSTREAM_PLUGIN_ID)
         .with_version(env!("CARGO_PKG_VERSION"))
         .with_options(options.to_json())
@@ -85,7 +89,10 @@ pub fn generic_oauth(options: GenericOAuthOptions) -> AuthPlugin {
                     continue;
                 }
                 let provider: Arc<dyn SocialOAuthProvider> =
-                    Arc::new(GenericOAuthProvider::new(config.clone()));
+                    Arc::new(GenericOAuthProvider::with_discovery_cache(
+                        config.clone(),
+                        init_discovery_cache.clone(),
+                    ));
                 output = output.social_provider(provider);
             }
             Ok(output)

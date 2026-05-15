@@ -46,11 +46,21 @@ pub(super) fn redirect_with_error(
     location: &str,
     error: &str,
 ) -> Result<ApiResponse, OpenAuthError> {
+    redirect_with_error_description(location, error, None)
+}
+
+pub(super) fn redirect_with_error_description(
+    location: &str,
+    error: &str,
+    description: Option<&str>,
+) -> Result<ApiResponse, OpenAuthError> {
     let separator = if location.contains('?') { '&' } else { '?' };
-    redirect(
-        &format!("{location}{separator}error={}", percent_encode(error)),
-        Vec::new(),
-    )
+    let mut target = format!("{location}{separator}error={}", percent_encode(error));
+    if let Some(description) = description {
+        target.push_str("&error_description=");
+        target.push_str(&percent_encode(description));
+    }
+    redirect(&target, Vec::new())
 }
 
 pub(super) fn sign_in_schema() -> BodySchema {

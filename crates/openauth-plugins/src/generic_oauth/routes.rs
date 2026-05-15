@@ -1,35 +1,31 @@
-use http::{header, HeaderValue, Method, StatusCode};
+use http::{Method, StatusCode};
 use openauth_core::api::{
     create_auth_endpoint, parse_request_body, ApiRequest, ApiResponse, AsyncAuthEndpoint,
-    AuthEndpointOptions, PathParams,
+    AuthEndpointOptions,
 };
 use openauth_core::auth::oauth::{
     generate_oauth_state, handle_oauth_user_info, parse_oauth_state, HandleOAuthUserInfoInput,
-    OAuthStateInput, OAuthStateLink, OAuthUserInfoError,
+    OAuthStateInput, OAuthStateLink,
 };
 use openauth_core::context::AuthContext;
-use openauth_core::cookies::{
-    get_session_cookie, set_session_cookie, verify_cookie_value, SessionCookieOptions,
-};
-use openauth_core::db::DbAdapter;
+use openauth_core::cookies::{set_session_cookie, SessionCookieOptions};
 use openauth_core::error::OpenAuthError;
-use openauth_core::session::DbSessionStore;
-use openauth_core::user::DbUserStore;
 use openauth_oauth::oauth2::{
     SocialAuthorizationCodeRequest, SocialAuthorizationUrlRequest, SocialOAuthProvider,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
-use std::sync::Arc;
 
 use super::account::{link_account, link_error_code, normalize_user_info, oauth_account};
-use super::config::{GenericOAuthConfig, GenericOAuthOptions};
+use super::config::{GenericOAuthFlow, GenericOAuthOptions};
 use super::discovery::DiscoveryCache;
 use super::errors;
 use super::provider::GenericOAuthProvider;
 use super::route_http::{
-    api_error, json_response, link_schema, redirect, redirect_with_error, sign_in_schema,
+    api_error, link_schema, redirect, redirect_with_error, redirect_with_error_description,
+    sign_in_schema,
 };
+use super::route_support::*;
 
 #[derive(Debug, Deserialize)]
 struct SignInOAuth2Body {
@@ -63,12 +59,6 @@ struct LinkOAuth2Body {
     scopes: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct RedirectBody {
-    url: String,
-    redirect: bool,
-}
-
 pub fn sign_in_oauth2_endpoint(
     options: GenericOAuthOptions,
     discovery_cache: DiscoveryCache,
@@ -93,7 +83,18 @@ pub fn sign_in_oauth2_endpoint(
                         "No config found for provider",
                     );
                 }
-                let config = resolved_config(&options, &discovery_cache, &body.provider_id).await?;
+                let mut config =
+                    match resolved_config(&options, &discovery_cache, &body.provider_id).await {
+                        Ok(config) => config,
+                        Err(error) => return config_error_response(error),
+                    };
+                let redirect_uri = callback_redirect_uri(context, &config);
+                resolve_authorization_url_params(
+                    &mut config,
+                    GenericOAuthFlow::SignIn,
+                    redirect_uri.clone(),
+                )
+                .await?;
                 let state = generate_oauth_state(
                     context,
                     Some(adapter.as_ref()),
@@ -107,10 +108,11 @@ pub fn sign_in_oauth2_endpoint(
                     },
                 )
                 .await?;
-                let provider = GenericOAuthProvider::new(config.clone());
+                let provider =
+                    GenericOAuthProvider::with_discovery_cache(config.clone(), discovery_cache);
                 let url = provider.create_authorization_url(SocialAuthorizationUrlRequest {
                     state: state.state,
-                    redirect_uri: oauth2_redirect_uri(context, &config.provider_id),
+                    redirect_uri,
                     code_verifier: Some(state.data.code_verifier),
                     scopes: body.scopes,
                     login_hint: None,
@@ -172,7 +174,18 @@ pub fn oauth2_link_endpoint(
                         "No config found for provider",
                     );
                 }
-                let config = resolved_config(&options, &discovery_cache, &body.provider_id).await?;
+                let mut config =
+                    match resolved_config(&options, &discovery_cache, &body.provider_id).await {
+                        Ok(config) => config,
+                        Err(error) => return config_error_response(error),
+                    };
+                let redirect_uri = callback_redirect_uri(context, &config);
+                resolve_authorization_url_params(
+                    &mut config,
+                    GenericOAuthFlow::Link,
+                    redirect_uri.clone(),
+                )
+                .await?;
                 let state = generate_oauth_state(
                     context,
                     Some(adapter.as_ref()),
@@ -187,10 +200,11 @@ pub fn oauth2_link_endpoint(
                     },
                 )
                 .await?;
-                let provider = GenericOAuthProvider::new(config.clone());
+                let provider =
+                    GenericOAuthProvider::with_discovery_cache(config.clone(), discovery_cache);
                 let url = provider.create_authorization_url(SocialAuthorizationUrlRequest {
                     state: state.state,
-                    redirect_uri: oauth2_redirect_uri(context, &config.provider_id),
+                    redirect_uri,
                     code_verifier: Some(state.data.code_verifier),
                     scopes: body.scopes,
                     login_hint: None,
@@ -209,9 +223,13 @@ async fn callback_get(
 ) -> Result<ApiResponse, OpenAuthError> {
     let adapter = adapter(context)?;
     let provider_id = path_param(&request, "providerId")?;
-    let config = resolved_config(options, discovery_cache, provider_id).await?;
+    let mut config = resolved_config(options, discovery_cache, provider_id).await?;
     if let Some(error) = query_param(&request, "error") {
-        return redirect_with_error(&default_error_url(context), &error);
+        return redirect_with_error_description(
+            &default_error_url(context),
+            &error,
+            query_param(&request, "error_description").as_deref(),
+        );
     }
     let Some(code) = query_param(&request, "code") else {
         return redirect_with_error(&default_error_url(context), "oAuth_code_missing");
@@ -230,12 +248,24 @@ async fn callback_get(
     if let Some(error) = issuer_error(&config, query_param(&request, "iss").as_deref()) {
         return redirect_with_error(&error_url, error);
     }
-    let provider = GenericOAuthProvider::new(config.clone());
+    let redirect_uri = callback_redirect_uri(context, &config);
+    if resolve_token_url_params(
+        &mut config,
+        GenericOAuthFlow::Callback,
+        redirect_uri.clone(),
+    )
+    .await
+    .is_err()
+    {
+        return redirect_with_error(&error_url, "oauth_code_verification_failed");
+    }
+    let provider =
+        GenericOAuthProvider::with_discovery_cache(config.clone(), discovery_cache.clone());
     let tokens = match provider
         .validate_authorization_code(SocialAuthorizationCodeRequest {
             code,
             code_verifier: Some(state_data.code_verifier),
-            redirect_uri: callback_redirect_uri(context, &config),
+            redirect_uri,
             device_id: query_param(&request, "device_id"),
         })
         .await
@@ -301,138 +331,4 @@ async fn callback_get(
         &state_data.callback_url
     };
     redirect(target, cookies)
-}
-
-async fn resolved_config(
-    options: &GenericOAuthOptions,
-    discovery_cache: &DiscoveryCache,
-    provider_id: &str,
-) -> Result<GenericOAuthConfig, OpenAuthError> {
-    let mut config = options
-        .find(provider_id)
-        .cloned()
-        .ok_or_else(|| api_error_value(errors::PROVIDER_CONFIG_NOT_FOUND))?;
-    if let Some(discovery) = discovery_cache.fetch(&config).await? {
-        config.authorization_url = config
-            .authorization_url
-            .or(discovery.authorization_endpoint);
-        config.token_url = config.token_url.or(discovery.token_endpoint);
-        config.user_info_url = config.user_info_url.or(discovery.userinfo_endpoint);
-        config.issuer = config.issuer.or(discovery.issuer);
-    }
-    if config.authorization_url.is_none() || config.token_url.is_none() {
-        return Err(api_error_value(errors::INVALID_OAUTH_CONFIGURATION));
-    }
-    Ok(config)
-}
-
-fn issuer_error(config: &GenericOAuthConfig, received: Option<&str>) -> Option<&'static str> {
-    let expected = config.issuer.as_deref()?;
-    match received {
-        Some(received) if received == expected => None,
-        Some(_) => Some("issuer_mismatch"),
-        None if config.require_issuer_validation => Some("issuer_missing"),
-        None => None,
-    }
-}
-
-fn adapter(context: &AuthContext) -> Result<Arc<dyn DbAdapter>, OpenAuthError> {
-    context.adapter().ok_or_else(|| {
-        OpenAuthError::InvalidConfig("generic-oauth routes require an adapter".to_owned())
-    })
-}
-
-async fn current_session(
-    context: &AuthContext,
-    adapter: &dyn DbAdapter,
-    request: &ApiRequest,
-) -> Result<Option<(openauth_core::db::Session, openauth_core::db::User)>, OpenAuthError> {
-    let Some(cookie_header) = request
-        .headers()
-        .get(header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return Ok(None);
-    };
-    let Some(signed_token) = get_session_cookie(cookie_header, None, None) else {
-        return Ok(None);
-    };
-    let Some(token) = verify_cookie_value(&signed_token, &context.secret)? else {
-        return Ok(None);
-    };
-    let Some(session) = DbSessionStore::new(adapter).find_session(&token).await? else {
-        return Ok(None);
-    };
-    let Some(user) = DbUserStore::new(adapter)
-        .find_user_by_id(&session.user_id)
-        .await?
-    else {
-        return Ok(None);
-    };
-    Ok(Some((session, user)))
-}
-
-fn path_param<'a>(request: &'a ApiRequest, name: &str) -> Result<&'a str, OpenAuthError> {
-    request
-        .extensions()
-        .get::<PathParams>()
-        .and_then(|params| params.get(name))
-        .ok_or_else(|| OpenAuthError::Api(format!("missing path param `{name}`")))
-}
-
-fn query_param(request: &ApiRequest, name: &str) -> Option<String> {
-    request.uri().query().and_then(|query| {
-        url::form_urlencoded::parse(query.as_bytes())
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.into_owned())
-    })
-}
-
-fn oauth2_redirect_uri(context: &AuthContext, provider_id: &str) -> String {
-    format!(
-        "{}/oauth2/callback/{provider_id}",
-        context.base_url.trim_end_matches('/')
-    )
-}
-
-fn callback_redirect_uri(context: &AuthContext, config: &GenericOAuthConfig) -> String {
-    config
-        .redirect_uri
-        .clone()
-        .unwrap_or_else(|| oauth2_redirect_uri(context, &config.provider_id))
-}
-
-fn default_error_url(context: &AuthContext) -> String {
-    format!("{}/error", context.base_url.trim_end_matches('/'))
-}
-
-fn redirect_json_response(url: String, redirect: bool) -> Result<ApiResponse, OpenAuthError> {
-    let mut response = json_response(
-        StatusCode::OK,
-        &RedirectBody {
-            url: url.clone(),
-            redirect,
-        },
-    )?;
-    if redirect {
-        response.headers_mut().insert(
-            header::LOCATION,
-            HeaderValue::from_str(&url).map_err(|error| OpenAuthError::Api(error.to_string()))?,
-        );
-    }
-    Ok(response)
-}
-
-fn api_error_value(code: &str) -> OpenAuthError {
-    OpenAuthError::Api(code.to_owned())
-}
-
-fn oauth_user_info_error(error: OAuthUserInfoError) -> &'static str {
-    match error {
-        OAuthUserInfoError::AccountNotLinked => "account_not_linked",
-        OAuthUserInfoError::SignupDisabled => "signup_disabled",
-        OAuthUserInfoError::UnableToCreateUser => "unable_to_create_user",
-        OAuthUserInfoError::UnableToCreateSession => "unable_to_create_session",
-        OAuthUserInfoError::UnableToLinkAccount => "unable_to_link_account",
-    }
 }

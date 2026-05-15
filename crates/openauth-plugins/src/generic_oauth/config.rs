@@ -19,6 +19,25 @@ pub type GenericOAuthMapProfileFuture =
     Pin<Box<dyn Future<Output = Result<OAuth2UserInfo, OAuthError>> + Send>>;
 pub type GenericOAuthMapProfileToUser =
     Arc<dyn Fn(OAuth2UserInfo) -> GenericOAuthMapProfileFuture + Send + Sync>;
+pub type GenericOAuthParams = BTreeMap<String, String>;
+pub type GenericOAuthParamsFuture =
+    Pin<Box<dyn Future<Output = Result<GenericOAuthParams, OAuthError>> + Send>>;
+pub type GenericOAuthParamsCallback =
+    Arc<dyn Fn(GenericOAuthParamsContext) -> GenericOAuthParamsFuture + Send + Sync>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenericOAuthFlow {
+    SignIn,
+    Link,
+    Callback,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericOAuthParamsContext {
+    pub provider_id: String,
+    pub flow: GenericOAuthFlow,
+    pub redirect_uri: String,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GenericOAuthTokenRequest {
@@ -76,6 +95,8 @@ pub struct GenericOAuthConfig {
     pub access_type: Option<String>,
     pub authorization_url_params: BTreeMap<String, String>,
     pub token_url_params: BTreeMap<String, String>,
+    pub authorization_url_params_callback: Option<GenericOAuthParamsCallback>,
+    pub token_url_params_callback: Option<GenericOAuthParamsCallback>,
     pub disable_implicit_sign_up: bool,
     pub disable_sign_up: bool,
     pub authentication: ClientAuthentication,
@@ -112,6 +133,14 @@ impl std::fmt::Debug for GenericOAuthConfig {
             .field("access_type", &self.access_type)
             .field("authorization_url_params", &self.authorization_url_params)
             .field("token_url_params", &self.token_url_params)
+            .field(
+                "authorization_url_params_callback",
+                &self.authorization_url_params_callback.is_some(),
+            )
+            .field(
+                "token_url_params_callback",
+                &self.token_url_params_callback.is_some(),
+            )
             .field("disable_implicit_sign_up", &self.disable_implicit_sign_up)
             .field("disable_sign_up", &self.disable_sign_up)
             .field("authentication", &self.authentication)
@@ -224,6 +253,8 @@ impl Default for GenericOAuthConfig {
             access_type: None,
             authorization_url_params: BTreeMap::new(),
             token_url_params: BTreeMap::new(),
+            authorization_url_params_callback: None,
+            token_url_params_callback: None,
             disable_implicit_sign_up: false,
             disable_sign_up: false,
             authentication: ClientAuthentication::Post,
