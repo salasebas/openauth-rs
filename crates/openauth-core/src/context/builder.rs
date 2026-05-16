@@ -6,7 +6,8 @@ use openauth_oauth::oauth2::SocialOAuthProvider;
 use crate::cookies::get_cookies;
 use crate::crypto::password::{hash_password, verify_password};
 use crate::crypto::{build_secret_config, parse_secrets_env};
-use crate::db::{auth_schema, DbAdapter, HookedAdapter};
+use crate::db::RateLimitStorage as DbRateLimitStorage;
+use crate::db::{auth_schema, AuthSchemaOptions, DbAdapter, HookedAdapter};
 use crate::env::is_production;
 use crate::env::logger::{create_logger, LoggerOptions};
 use crate::error::OpenAuthError;
@@ -118,6 +119,7 @@ pub fn create_auth_context_with_environment_and_adapter(
         memory_store: Arc::new(TokioMemoryRateLimitStore::new()),
     };
 
+    let schema_options = schema_options_from_auth_options(&options);
     let mut context = AuthContext {
         app_name: "OpenAuth".to_owned(),
         base_url,
@@ -134,7 +136,7 @@ pub fn create_auth_context_with_environment_and_adapter(
         plugins: options.plugins,
         adapter,
         social_providers,
-        db_schema: auth_schema(Default::default()),
+        db_schema: auth_schema(schema_options),
         plugin_error_codes: BTreeMap::new(),
         plugin_database_hooks: Vec::new(),
         plugin_migrations: Vec::new(),
@@ -193,4 +195,15 @@ fn validate_rate_limit_storage(options: &OpenAuthOptions) -> Result<(), OpenAuth
         ));
     }
     Ok(())
+}
+
+fn schema_options_from_auth_options(options: &OpenAuthOptions) -> AuthSchemaOptions {
+    AuthSchemaOptions {
+        rate_limit_storage: match options.rate_limit.storage {
+            RateLimitStorageOption::Memory => DbRateLimitStorage::Memory,
+            RateLimitStorageOption::Database => DbRateLimitStorage::Database,
+            RateLimitStorageOption::SecondaryStorage => DbRateLimitStorage::SecondaryStorage,
+        },
+        ..AuthSchemaOptions::default()
+    }
 }

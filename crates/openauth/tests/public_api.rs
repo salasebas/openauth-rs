@@ -662,6 +662,41 @@ async fn openauth_create_schema_uses_plugin_augmented_schema(
 }
 
 #[tokio::test]
+async fn openauth_create_schema_includes_database_rate_limit_table(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let captured_schema = Arc::new(StdMutex::new(None));
+    let adapter = SchemaCapturingAdapter {
+        captured_schema: Arc::clone(&captured_schema),
+    };
+    let auth = OpenAuth::builder()
+        .options(test_options())
+        .adapter(adapter)
+        .rate_limit(
+            RateLimitOptions::database(TestRateLimitStore)
+                .enabled(true)
+                .window(60)
+                .max(1),
+        )
+        .build()?;
+
+    auth.create_schema(None).await?;
+
+    let schema = captured_schema
+        .lock()
+        .map_err(|_| OpenAuthError::Adapter("schema lock poisoned".to_owned()))?
+        .clone()
+        .ok_or("schema was not passed to adapter")?;
+    let table = schema
+        .table("rate_limit")
+        .ok_or("rate_limit table missing")?;
+    assert_eq!(table.name, "rate_limits");
+    assert!(table.field("key").is_some());
+    assert!(table.field("count").is_some());
+    assert!(table.field("last_request").is_some());
+    Ok(())
+}
+
+#[tokio::test]
 async fn openauth_run_migrations_uses_plugin_augmented_schema_and_is_explicit(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let captured_schema = Arc::new(StdMutex::new(None));

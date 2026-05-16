@@ -25,9 +25,9 @@
 - Modify: `crates/openauth-core/src/context/builder.rs`
 - Test: `crates/openauth/tests/public_api.rs`
 
-- [ ] Derive `AuthSchemaOptions.rate_limit_storage` from `OpenAuthOptions.rate_limit.storage`.
-- [ ] Add a public API test that builds `OpenAuth` with `RateLimitOptions::database(...)`, calls `create_schema(None)`, and verifies the schema includes the rate limit table.
-- [ ] Run `cargo test -p openauth --test public_api`.
+- [x] Derive `AuthSchemaOptions.rate_limit_storage` from `OpenAuthOptions.rate_limit.storage`.
+- [x] Add a public API test that builds `OpenAuth` with `RateLimitOptions::database(...)`, calls `create_schema(None)`, and verifies the schema includes the rate limit table.
+- [x] Run `cargo test -p openauth --test public_api`.
 - [ ] Commit: `fix(core): include rate limit table for database store`.
 
 ## Task 2: Respect SQLx Physical Rate Limit Columns
