@@ -27,7 +27,7 @@ default = []
 plugins = ["dep:openauth-plugins"]
 
 [dev-dependencies]
-openauth-sqlx.workspace = true
+openauth-sqlx = { workspace = true, features = ["mysql", "postgres"] }
 sqlx.workspace = true
 
 [lints]

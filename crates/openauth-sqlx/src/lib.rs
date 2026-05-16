@@ -1,5 +1,7 @@
 //! SQLx database adapters for OpenAuth.
 
+pub mod migration;
+
 #[cfg(feature = "sqlite")]
 mod sqlite;
 

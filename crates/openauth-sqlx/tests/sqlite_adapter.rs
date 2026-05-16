@@ -3,14 +3,16 @@
 use std::sync::Arc;
 
 use http::{header, Method, Request, StatusCode};
+use indexmap::IndexMap;
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context;
 use openauth_core::cookies::Cookie;
 use openauth_core::crypto::password::verify_password;
 use openauth_core::db::{
     auth_schema, AdapterCapabilities, AuthSchemaOptions, Count, Create, DbAdapter, DbField,
-    DbFieldType, DbRecord, DbValue, DeleteMany, FindMany, FindOne, HookedAdapter, JoinOption,
-    RateLimitStorage, Sort, SortDirection, TableOptions, Update, Where, WhereOperator,
+    DbFieldType, DbRecord, DbTable, DbValue, DeleteMany, FindMany, FindOne, ForeignKey,
+    HookedAdapter, JoinOption, OnDelete, RateLimitStorage, Sort, SortDirection, TableOptions,
+    Update, Where, WhereOperator,
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
@@ -19,6 +21,7 @@ use openauth_core::options::{
 use openauth_core::plugin::{
     PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook,
 };
+use openauth_sqlx::migration::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_sqlx::{SqliteAdapter, SqliteRateLimitStore};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -356,6 +359,320 @@ async fn sqlite_adapter_run_migrations_applies_plugin_aware_schema() -> Result<(
     .await
     .map_err(sql_error)?;
     assert_eq!(tenant_column_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_adapter_plan_migrations_reports_empty_database_tables_in_order(
+) -> Result<(), OpenAuthError> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    let adapter = SqliteAdapter::new(pool);
+    let schema = auth_schema(AuthSchemaOptions::default());
+
+    let plan = adapter.plan_migrations(&schema).await?;
+
+    let table_names = plan
+        .to_be_created
+        .iter()
+        .map(|table| table.table_name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        table_names,
+        vec!["users", "sessions", "accounts", "verifications"]
+    );
+    assert!(plan.to_be_added.is_empty());
+    assert!(plan
+        .statements
+        .iter()
+        .take(4)
+        .all(|statement| statement.kind == MigrationStatementKind::CreateTable));
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_adapter_plan_migrations_reports_plugin_columns_indexes_and_sql(
+) -> Result<(), OpenAuthError> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    let base_schema = auth_schema(AuthSchemaOptions::default());
+    let adapter = SqliteAdapter::with_schema(pool.clone(), base_schema.clone());
+    adapter.run_migrations(&base_schema).await?;
+
+    let mut plugin_schema = base_schema.clone();
+    plugin_schema.insert_plugin_field(
+        "user",
+        "tenant_id".to_owned(),
+        DbField::new("tenant_id", DbFieldType::String)
+            .optional()
+            .indexed(),
+    )?;
+
+    let plan = adapter.plan_migrations(&plugin_schema).await?;
+    let sql = adapter.compile_migrations(&plugin_schema).await?;
+
+    assert_eq!(plan.to_be_added.len(), 1);
+    assert_eq!(plan.to_be_added[0].table_name, "users");
+    assert_eq!(plan.to_be_added[0].column_name, "tenant_id");
+    assert_eq!(plan.indexes_to_be_created.len(), 1);
+    assert_eq!(
+        plan.indexes_to_be_created[0].index_name,
+        "idx_users_tenant_id"
+    );
+    assert!(sql.contains("ALTER TABLE"));
+    assert!(sql.contains("ADD COLUMN"));
+    assert!(sql.contains("CREATE INDEX"));
+    assert!(!sql.contains("DROP"));
+    assert!(!sql.contains("RENAME"));
+    assert!(!sql.contains("ADD INDEX"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_adapter_plan_migrations_reports_plugin_tables_with_deferred_indexes(
+) -> Result<(), OpenAuthError> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    let mut schema = auth_schema(AuthSchemaOptions::default());
+    let mut fields = IndexMap::new();
+    fields.insert("id".to_owned(), DbField::new("id", DbFieldType::String));
+    fields.insert(
+        "external_id".to_owned(),
+        DbField::new("external_id", DbFieldType::String)
+            .optional()
+            .indexed(),
+    );
+    schema.insert_plugin_table(
+        "plugin_identity".to_owned(),
+        DbTable {
+            name: "plugin_identities".to_owned(),
+            fields,
+            order: Some(5),
+        },
+    )?;
+    let adapter = SqliteAdapter::with_schema(pool, schema.clone());
+
+    let plan = adapter.plan_migrations(&schema).await?;
+
+    assert!(plan
+        .to_be_created
+        .iter()
+        .any(|table| table.table_name == "plugin_identities"));
+    assert!(plan
+        .indexes_to_be_created
+        .iter()
+        .any(|index| index.index_name == "idx_plugin_identities_external_id"));
+    let table_position = plan
+        .statements
+        .iter()
+        .position(|statement| statement.sql.contains("plugin_identities"))
+        .ok_or_else(|| OpenAuthError::Adapter("missing plugin table statement".to_owned()))?;
+    let index_position = plan
+        .statements
+        .iter()
+        .position(|statement| statement.sql.contains("idx_plugin_identities_external_id"))
+        .ok_or_else(|| OpenAuthError::Adapter("missing plugin index statement".to_owned()))?;
+    assert!(table_position < index_position);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_adapter_compile_migrations_returns_semicolon_for_noop() -> Result<(), OpenAuthError>
+{
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    let schema = auth_schema(AuthSchemaOptions::default());
+    let adapter = SqliteAdapter::with_schema(pool, schema.clone());
+    adapter.run_migrations(&schema).await?;
+
+    assert_eq!(adapter.compile_migrations(&schema).await?, ";");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_adapter_plan_migrations_warns_for_type_mismatch_without_rewrite(
+) -> Result<(), OpenAuthError> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    sqlx::query(
+        "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email INTEGER NOT NULL UNIQUE, email_verified INTEGER NOT NULL, image TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .map_err(sql_error)?;
+    let adapter = SqliteAdapter::new(pool);
+    let schema = auth_schema(AuthSchemaOptions::default());
+
+    let plan = adapter.plan_migrations(&schema).await?;
+    let sql = adapter.compile_migrations(&schema).await?;
+
+    assert!(plan.warnings.iter().any(|warning| matches!(
+        warning,
+        SchemaMigrationWarning::ColumnTypeMismatch {
+            table_name,
+            column_name,
+            expected,
+            actual
+        } if table_name == "users"
+            && column_name == "email"
+            && expected == "TEXT"
+            && actual.eq_ignore_ascii_case("INTEGER")
+    )));
+    assert!(!sql.contains("ALTER COLUMN"));
+    assert!(!sql.contains("DROP"));
+    assert!(!sql.contains("RENAME"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_adapter_run_migrations_adds_plugin_columns_to_existing_tables(
+) -> Result<(), OpenAuthError> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    let base_schema = auth_schema(AuthSchemaOptions::default());
+    let adapter = SqliteAdapter::with_schema(pool.clone(), base_schema.clone());
+    adapter.run_migrations(&base_schema).await?;
+
+    let mut plugin_schema = base_schema.clone();
+    plugin_schema.insert_plugin_field(
+        "user",
+        "tenant_id".to_owned(),
+        DbField::new("tenant_id", DbFieldType::String)
+            .optional()
+            .indexed(),
+    )?;
+
+    adapter.run_migrations(&plugin_schema).await?;
+    adapter.run_migrations(&plugin_schema).await?;
+
+    let tenant_column_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'tenant_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+    let tenant_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_users_tenant_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+
+    assert_eq!(tenant_column_count, 1);
+    assert_eq!(tenant_index_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_adapter_run_migrations_repairs_missing_indexes_on_existing_columns(
+) -> Result<(), OpenAuthError> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    let mut schema = auth_schema(AuthSchemaOptions::default());
+    schema.insert_plugin_field(
+        "user",
+        "tenant_id".to_owned(),
+        DbField::new("tenant_id", DbFieldType::String)
+            .optional()
+            .indexed(),
+    )?;
+    let adapter = SqliteAdapter::with_schema(pool.clone(), schema.clone());
+    adapter.run_migrations(&schema).await?;
+    sqlx::query("DROP INDEX idx_users_tenant_id")
+        .execute(&pool)
+        .await
+        .map_err(sql_error)?;
+
+    adapter.run_migrations(&schema).await?;
+
+    let tenant_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_users_tenant_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+    assert_eq!(tenant_index_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_adapter_run_migrations_creates_plugin_tables_with_indexes_and_foreign_keys(
+) -> Result<(), OpenAuthError> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    let mut schema = auth_schema(AuthSchemaOptions::default());
+    let mut fields = IndexMap::new();
+    fields.insert("id".to_owned(), DbField::new("id", DbFieldType::String));
+    fields.insert(
+        "user_id".to_owned(),
+        DbField::new("user_id", DbFieldType::String)
+            .indexed()
+            .references(ForeignKey::new("users", "id", OnDelete::Cascade)),
+    );
+    fields.insert(
+        "external_id".to_owned(),
+        DbField::new("external_id", DbFieldType::String)
+            .optional()
+            .indexed(),
+    );
+    schema.insert_plugin_table(
+        "plugin_identity".to_owned(),
+        DbTable {
+            name: "plugin_identities".to_owned(),
+            fields,
+            order: Some(5),
+        },
+    )?;
+    let adapter = SqliteAdapter::with_schema(pool.clone(), schema.clone());
+
+    adapter.run_migrations(&schema).await?;
+
+    let table_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'plugin_identities'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+    let external_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_plugin_identities_external_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+    let fk_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_foreign_key_list('plugin_identities') WHERE \"table\" = 'users' AND \"from\" = 'user_id' AND on_delete = 'CASCADE'",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+
+    assert_eq!(table_count, 1);
+    assert_eq!(external_index_count, 1);
+    assert_eq!(fk_count, 1);
     Ok(())
 }
 

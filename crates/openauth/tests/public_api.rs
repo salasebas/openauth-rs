@@ -18,7 +18,11 @@ use openauth::{
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static SQL_TEST_ID: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn openauth_crate_exposes_product_initializer() -> Result<(), Box<dyn std::error::Error>> {
@@ -741,6 +745,211 @@ async fn openauth_run_migrations_uses_plugin_augmented_schema_and_is_explicit(
 }
 
 #[tokio::test]
+async fn openauth_run_migrations_applies_sqlite_plugin_schema_and_http_flows(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await?;
+    let base_schema = openauth::db::auth_schema(openauth::db::AuthSchemaOptions::default());
+    let adapter = openauth_sqlx::SqliteAdapter::with_schema(pool.clone(), base_schema.clone());
+    adapter.run_migrations(&base_schema).await?;
+    let plugin =
+        AuthPlugin::new("sqlite-tenant-schema").with_schema(PluginSchemaContribution::field(
+            "user",
+            "tenant_id",
+            openauth::db::DbField::new("tenant_id", openauth::db::DbFieldType::String)
+                .optional()
+                .indexed(),
+        ));
+    let auth = open_auth_with_adapter(
+        OpenAuthOptions {
+            plugins: vec![plugin],
+            ..test_options()
+        },
+        Arc::new(adapter),
+    )?;
+
+    auth.run_migrations().await?;
+    let sign_up = auth
+        .handler_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"sqlite-plugin@example.com","password":"secret123"}"#,
+            None,
+        )?)
+        .await?;
+    let cookie = cookie_header(&sign_up);
+    let session = auth
+        .handler_async(json_request(
+            Method::GET,
+            "/api/auth/get-session",
+            "",
+            Some(&cookie),
+        )?)
+        .await?;
+
+    let tenant_column_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'tenant_id'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    let tenant_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_users_tenant_id'",
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    assert_eq!(sign_up.status(), StatusCode::OK);
+    assert_eq!(session.status(), StatusCode::OK);
+    assert_eq!(tenant_column_count, 1);
+    assert_eq!(tenant_index_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn openauth_run_migrations_applies_postgres_plugin_schema_and_http_flows(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let database_url = std::env::var("OPENAUTH_TEST_POSTGRES_URL")
+        .unwrap_or_else(|_| "postgres://user:password@localhost:5432/better_auth".to_owned());
+    let schema_name = unique_sql_prefix();
+    let base_schema = openauth::db::auth_schema(openauth::db::AuthSchemaOptions::default());
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await?;
+    sqlx::query(&format!("CREATE SCHEMA {schema_name}"))
+        .execute(&pool)
+        .await?;
+    sqlx::query(&format!("SET search_path TO {schema_name}"))
+        .execute(&pool)
+        .await?;
+    let adapter = openauth_sqlx::PostgresAdapter::with_schema(pool.clone(), base_schema.clone());
+    adapter.run_migrations(&base_schema).await?;
+    let plugin =
+        AuthPlugin::new("postgres-tenant-schema").with_schema(PluginSchemaContribution::field(
+            "user",
+            "tenant_id",
+            openauth::db::DbField::new("tenant_id", openauth::db::DbFieldType::String)
+                .optional()
+                .indexed(),
+        ));
+    let auth = open_auth_with_adapter(
+        OpenAuthOptions {
+            plugins: vec![plugin],
+            ..test_options()
+        },
+        Arc::new(adapter),
+    )?;
+
+    auth.run_migrations().await?;
+    let sign_up = auth
+        .handler_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"postgres-plugin@example.com","password":"secret123"}"#,
+            None,
+        )?)
+        .await?;
+    let cookie = cookie_header(&sign_up);
+    let session = auth
+        .handler_async(json_request(
+            Method::GET,
+            "/api/auth/get-session",
+            "",
+            Some(&cookie),
+        )?)
+        .await?;
+
+    let users_table = "users";
+    let tenant_column_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'tenant_id'",
+    )
+    .bind(users_table)
+    .fetch_one(&pool)
+    .await?;
+    let tenant_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND tablename = $1 AND indexname = $2",
+    )
+    .bind(users_table)
+    .bind("idx_users_tenant_id")
+    .fetch_one(&pool)
+    .await?;
+
+    assert_eq!(sign_up.status(), StatusCode::OK);
+    assert_eq!(session.status(), StatusCode::OK);
+    assert_eq!(tenant_column_count, 1);
+    assert_eq!(tenant_index_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn openauth_run_migrations_applies_mysql_plugin_schema_and_http_flows(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let database_url = std::env::var("OPENAUTH_TEST_MYSQL_URL")
+        .unwrap_or_else(|_| "mysql://user:password@localhost:3306/better_auth".to_owned());
+    let base_schema = openauth::db::auth_schema(openauth::db::AuthSchemaOptions::default());
+    let pool = sqlx::mysql::MySqlPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await?;
+    let adapter = openauth_sqlx::MySqlAdapter::with_schema(pool.clone(), base_schema.clone());
+    adapter.run_migrations(&base_schema).await?;
+    let plugin =
+        AuthPlugin::new("mysql-tenant-schema").with_schema(PluginSchemaContribution::field(
+            "user",
+            "tenant_id",
+            openauth::db::DbField::new("tenant_id", openauth::db::DbFieldType::String)
+                .optional()
+                .indexed(),
+        ));
+    let auth = open_auth_with_adapter(
+        OpenAuthOptions {
+            plugins: vec![plugin],
+            ..test_options()
+        },
+        Arc::new(adapter),
+    )?;
+
+    auth.run_migrations().await?;
+    let email = format!("mysql-plugin-{}@example.com", unique_sql_prefix());
+    let sign_up = auth
+        .handler_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            &format!(r#"{{"name":"Ada","email":"{email}","password":"secret123"}}"#),
+            None,
+        )?)
+        .await?;
+    let cookie = cookie_header(&sign_up);
+    let session = auth
+        .handler_async(json_request(
+            Method::GET,
+            "/api/auth/get-session",
+            "",
+            Some(&cookie),
+        )?)
+        .await?;
+
+    let tenant_column_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'tenant_id'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    let tenant_index_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'users' AND index_name = 'idx_users_tenant_id'",
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    assert_eq!(sign_up.status(), StatusCode::OK);
+    assert_eq!(session.status(), StatusCode::OK);
+    assert_eq!(tenant_column_count, 1);
+    assert_eq!(tenant_index_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn openauth_create_schema_without_adapter_returns_invalid_config(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let auth = open_auth(test_options())?;
@@ -972,6 +1181,15 @@ fn test_options() -> OpenAuthOptions {
         },
         ..OpenAuthOptions::default()
     }
+}
+
+fn unique_sql_prefix() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let sequence = SQL_TEST_ID.fetch_add(1, Ordering::Relaxed);
+    format!("oa_public_{millis}_{sequence}")
 }
 
 fn json_request(
