@@ -52,7 +52,7 @@ pub fn create_auth_context_with_environment_and_adapter(
 ) -> Result<AuthContext, OpenAuthError> {
     let logger = create_logger(LoggerOptions::default());
     let production = options.production || is_production();
-    let env_secrets = parse_secrets_env(environment.better_auth_secrets.as_deref())?;
+    let env_secrets = parse_secrets_env(environment.openauth_secrets.as_deref())?;
     let secrets = if options.secrets.is_empty() {
         env_secrets.unwrap_or_default()
     } else {

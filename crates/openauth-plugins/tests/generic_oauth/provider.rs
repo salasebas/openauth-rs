@@ -1,8 +1,7 @@
 use super::common::*;
 
 #[test]
-fn provider_authorization_url_uses_better_auth_oauth2_callback_and_pkce() -> Result<(), OAuthError>
-{
+fn provider_authorization_url_uses_openauth_oauth2_callback_and_pkce() -> Result<(), OAuthError> {
     let provider = provider(example_config());
     let url = provider.create_authorization_url(SocialAuthorizationUrlRequest {
         state: "state-1".to_owned(),

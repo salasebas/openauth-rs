@@ -62,12 +62,12 @@ fn create_auth_context_rejects_missing_secret_in_production() {
 }
 
 #[test]
-fn create_auth_context_uses_better_auth_secret_from_environment(
+fn create_auth_context_uses_openauth_secret_from_environment(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ctx = create_auth_context_with_environment(
         OpenAuthOptions::default(),
         AuthEnvironment {
-            better_auth_secret: Some("env-secret-at-least-32-chars-long!!".to_owned()),
+            openauth_secret: Some("env-secret-at-least-32-chars-long!!".to_owned()),
             ..AuthEnvironment::default()
         },
     )?;
@@ -85,8 +85,7 @@ fn create_auth_context_prefers_options_secret_over_environment(
             ..OpenAuthOptions::default()
         },
         AuthEnvironment {
-            better_auth_secret: Some("env-secret-at-least-32-chars-long!!".to_owned()),
-            auth_secret: Some("auth-secret-at-least-32-chars-long!!".to_owned()),
+            openauth_secret: Some("env-secret-at-least-32-chars-long!!".to_owned()),
             ..AuthEnvironment::default()
         },
     )?;
@@ -101,12 +100,11 @@ fn create_auth_context_builds_secret_config_from_environment_secrets(
     let ctx = create_auth_context_with_environment(
         OpenAuthOptions::default(),
         AuthEnvironment {
-            better_auth_secrets: Some(
+            openauth_secrets: Some(
                 "2:secret-b-at-least-32-chars-long!!,1:secret-a-at-least-32-chars-long!!"
                     .to_owned(),
             ),
-            better_auth_secret: Some("legacy-secret-at-least-32-chars!!".to_owned()),
-            ..AuthEnvironment::default()
+            openauth_secret: Some("legacy-secret-at-least-32-chars!!".to_owned()),
         },
     )?;
 

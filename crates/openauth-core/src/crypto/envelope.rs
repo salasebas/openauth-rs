@@ -1,15 +1,15 @@
-//! Better Auth secret-rotation envelope helpers.
+//! OpenAuth secret-rotation envelope helpers.
 
-const ENVELOPE_PREFIX: &str = "$ba$";
+const ENVELOPE_PREFIX: &str = "$oa$";
 
-/// Parsed Better Auth encrypted payload envelope.
+/// Parsed OpenAuth encrypted payload envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Envelope {
     pub version: u32,
     pub ciphertext: String,
 }
 
-/// Parse `$ba$<version>$<ciphertext>` payloads.
+/// Parse `$oa$<version>$<ciphertext>` payloads.
 pub fn parse_envelope(data: &str) -> Option<Envelope> {
     let rest = data.strip_prefix(ENVELOPE_PREFIX)?;
     let (version, ciphertext) = rest.split_once('$')?;
@@ -24,7 +24,7 @@ pub fn parse_envelope(data: &str) -> Option<Envelope> {
     })
 }
 
-/// Format a ciphertext with Better Auth's secret-rotation envelope.
+/// Format a ciphertext with OpenAuth's secret-rotation envelope.
 pub fn format_envelope(version: u32, ciphertext: &str) -> String {
     format!("{ENVELOPE_PREFIX}{version}${ciphertext}")
 }

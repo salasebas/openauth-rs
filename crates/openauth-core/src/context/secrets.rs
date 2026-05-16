@@ -6,7 +6,7 @@ use crate::options::OpenAuthOptions;
 
 use super::AuthEnvironment;
 
-pub(super) const DEFAULT_SECRET: &str = "better-auth-secret-12345678901234567890";
+pub(super) const DEFAULT_SECRET: &str = "openauth-secret-123456789012345678901";
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum SecretMaterial {
@@ -65,8 +65,7 @@ pub(super) fn resolve_legacy_secret(
     options
         .secret
         .clone()
-        .or_else(|| environment.better_auth_secret.clone())
-        .or_else(|| environment.auth_secret.clone())
+        .or_else(|| environment.openauth_secret.clone())
 }
 
 pub(super) fn validate_secret(secret: &str, production: bool) -> Result<(), OpenAuthError> {

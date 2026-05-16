@@ -76,9 +76,9 @@ Avance marcado el 2026-05-12: `[x]` significa que el comportamiento existe en Op
 - [ ] Validar `baseURL` dinamico con `allowedHosts` no vacio.
 - [x] Inferir `basePath` por defecto `/api/auth`.
 - [ ] Normalizar origen/base path sin doble slash ni protocolos invalidos.
-- [ ] Leer `BETTER_AUTH_URL`, `NEXT_PUBLIC_BETTER_AUTH_URL`, `PUBLIC_BETTER_AUTH_URL`, `NUXT_PUBLIC_*`, `BASE_URL`.
-- [ ] Leer `BETTER_AUTH_TRUSTED_ORIGINS`.
-- [x] Leer secrets desde opciones, `BETTER_AUTH_SECRETS`, `BETTER_AUTH_SECRET`, `AUTH_SECRET`.
+- [ ] Leer `OPENAUTH_URL`.
+- [ ] Leer `OPENAUTH_TRUSTED_ORIGINS`.
+- [x] Leer secrets desde opciones, `OPENAUTH_SECRETS`, `OPENAUTH_SECRET`.
 - [x] Bloquear secret default en produccion.
 - [ ] Advertir secret corto o baja entropia.
 - [x] Soportar secret rotation con version actual, keys y legacy secret.

@@ -74,7 +74,7 @@ These imports are part of the upstream behavior. In Rust, replace them with narr
 - [ ] `vitest` is test-only and maps to Rust unit/integration tests.
 - [ ] `tsconfig.json` references `../core`; Rust equivalent should express crate dependencies explicitly and avoid circular imports.
 - [ ] `package.json` peer dependencies are not runtime behavior by themselves; only imported functions above need Rust equivalents.
-- [ ] `BETTER_AUTH_TELEMETRY_ID` exists in core env upstream but is not consumed by `packages/telemetry` in 1.6.9; do not require it for parity unless the target project intentionally adds a stronger override feature.
+- [ ] `OPENAUTH_TELEMETRY_ID` is the OpenAuth equivalent of the upstream telemetry id env, but upstream `packages/telemetry` 1.6.9 does not consume it; do not require it for parity unless the target project intentionally adds a stronger override feature.
 
 ## Endpoint And OpenAPI Checklist
 
@@ -160,8 +160,8 @@ Use this as a target shape when implementing in a Rust project. Adjust paths for
 ## Enablement And Transport Checklist
 
 - [x] Telemetry is disabled by default when options do not enable it.
-- [ ] `BETTER_AUTH_TELEMETRY=true` equivalent enables telemetry.
-- [ ] `BETTER_AUTH_TELEMETRY=1` equivalent enables telemetry.
+- [ ] `OPENAUTH_TELEMETRY=true` enables telemetry.
+- [ ] `OPENAUTH_TELEMETRY=1` enables telemetry.
 - [x] Explicit `options.telemetry.enabled=true` equivalent enables telemetry.
 - [x] Explicit `options.telemetry.enabled=false` keeps telemetry disabled unless the environment flag enables it, matching upstream `envEnabled || telemetryEnabled`.
 - [ ] Boolean env parser treats missing env as the supplied fallback.
@@ -177,7 +177,7 @@ Use this as a target shape when implementing in a Rust project. Adjust paths for
 - [x] Custom track errors are caught and logged.
 - [ ] HTTP transport errors are caught and logged.
 - [ ] Debug mode can be enabled with `options.telemetry.debug=true`.
-- [ ] Debug mode can be enabled with `BETTER_AUTH_TELEMETRY_DEBUG=true` equivalent.
+- [ ] Debug mode can be enabled with `OPENAUTH_TELEMETRY_DEBUG=true`.
 - [ ] Debug mode logs the event payload instead of posting it to the endpoint.
 - [ ] Normal HTTP publishing sends `POST` with the telemetry event body.
 - [x] Init event is emitted asynchronously during constructor setup when telemetry is enabled.
@@ -433,7 +433,7 @@ Upstream detects Deno, Bun, Node, and edge. In Rust, preserve the intent: identi
 
 ### Environment
 
-- [ ] `NODE_ENV=production` upstream behavior maps to production detection where applicable.
+- [ ] Upstream production environment behavior maps to `RUST_ENV=production` where applicable.
 - [ ] CI detection takes precedence over test/development when production is not set.
 - [ ] Test detection returns `test`.
 - [ ] Missing production/CI/test indicators returns `development`.
@@ -598,7 +598,7 @@ Adapt upstream tests into Rust tests with mocked transport, mocked env, and dete
 - [x] Test publishes init event when telemetry is enabled by options.
 - [ ] Test publishes init event when telemetry is enabled by environment.
 - [x] Test does not publish when telemetry is disabled and env does not enable it.
-- [x] Test `BETTER_AUTH_TELEMETRY=false` does not enable telemetry by itself. OpenAuth coverage uses the Rust env equivalent, `OPENAUTH_TELEMETRY=false`.
+- [x] Test `OPENAUTH_TELEMETRY=false` does not enable telemetry by itself.
 - [ ] Test no publish occurs in test mode unless `skipTestCheck` is set.
 - [x] Test custom track receives init event when enabled.
 - [x] Test custom track error is swallowed and logged.
@@ -714,7 +714,7 @@ From `src/telemetry.test.ts`:
 - [x] `does not publish when disabled via option`
 - [x] `shouldn't fail cause track isn't being reached`
 - [x] `initializes without Node built-ins in edge-like env`
-- [x] `returns noop publisher when BETTER_AUTH_TELEMETRY_ENDPOINT is undefined` (covered with OpenAuth's `OPENAUTH_TELEMETRY_ENDPOINT` equivalent).
+- [x] `returns noop publisher when OPENAUTH_TELEMETRY_ENDPOINT is undefined`.
 
 ## Self-Review
 

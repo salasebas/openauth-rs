@@ -1,6 +1,45 @@
 use openauth_core::context::{AuthEnvironment, SecretMaterial};
 use openauth_core::crypto::{SecretConfig, SecretEntry};
+use openauth_core::env::is_production;
 use openauth_core::options::{ExperimentalOptions, OpenAuthOptions};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+struct EnvRestore(Vec<(&'static str, Option<String>)>);
+
+impl EnvRestore {
+    fn unset(keys: &[&'static str]) -> Self {
+        let saved = keys
+            .iter()
+            .map(|key| (*key, std::env::var(key).ok()))
+            .collect::<Vec<_>>();
+        for key in keys {
+            std::env::remove_var(key);
+        }
+        Self(saved)
+    }
+}
+
+impl Drop for EnvRestore {
+    fn drop(&mut self) {
+        for (key, value) in &self.0 {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn lock_env() -> MutexGuard<'static, ()> {
+    env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[test]
 fn openauth_options_debug_redacts_secret_material() {
@@ -44,16 +83,58 @@ fn secret_rotation_debug_redacts_secret_material() {
 #[test]
 fn auth_environment_debug_redacts_secret_material() {
     let environment = AuthEnvironment {
-        better_auth_secret: Some("better-auth-secret-should-not-appear".to_owned()),
-        auth_secret: Some("auth-secret-should-not-appear".to_owned()),
-        better_auth_secrets: Some("1:rotating-env-secret-should-not-appear".to_owned()),
+        openauth_secret: Some("openauth-secret-should-not-appear".to_owned()),
+        openauth_secrets: Some("1:rotating-env-secret-should-not-appear".to_owned()),
     };
 
     let output = format!("{environment:?}");
 
-    assert!(!output.contains("better-auth-secret-should-not-appear"));
-    assert!(!output.contains("auth-secret-should-not-appear"));
+    assert!(!output.contains("openauth-secret-should-not-appear"));
     assert!(!output.contains("rotating-env-secret-should-not-appear"));
+}
+
+#[test]
+fn auth_environment_from_process_is_empty_when_secret_env_is_unset() {
+    let _guard = lock_env();
+    let _restore = EnvRestore::unset(&["OPENAUTH_SECRET", "OPENAUTH_SECRETS"]);
+
+    assert_eq!(AuthEnvironment::from_process(), AuthEnvironment::default());
+}
+
+#[test]
+fn auth_environment_from_process_reads_mocked_secret_env() {
+    let _guard = lock_env();
+    let _restore = EnvRestore::unset(&["OPENAUTH_SECRET", "OPENAUTH_SECRETS"]);
+    std::env::set_var("OPENAUTH_SECRET", "openauth-secret");
+    std::env::set_var("OPENAUTH_SECRETS", "2:next,1:prev");
+
+    assert_eq!(
+        AuthEnvironment::from_process(),
+        AuthEnvironment {
+            openauth_secret: Some("openauth-secret".to_owned()),
+            openauth_secrets: Some("2:next,1:prev".to_owned()),
+        }
+    );
+}
+
+#[test]
+fn is_production_is_false_when_rust_env_is_unset() {
+    let _guard = lock_env();
+    let _restore = EnvRestore::unset(&["RUST_ENV"]);
+
+    assert!(!is_production());
+}
+
+#[test]
+fn is_production_only_accepts_exact_production_rust_env() {
+    let _guard = lock_env();
+    let _restore = EnvRestore::unset(&["RUST_ENV"]);
+
+    std::env::set_var("RUST_ENV", "development");
+    assert!(!is_production());
+
+    std::env::set_var("RUST_ENV", "production");
+    assert!(is_production());
 }
 
 #[test]

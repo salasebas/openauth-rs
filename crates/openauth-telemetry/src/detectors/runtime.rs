@@ -1,4 +1,4 @@
-use crate::env::{is_ci, is_test, node_env};
+use crate::env::{is_ci, is_test, rust_env};
 use crate::types::RuntimeInfo;
 
 pub fn detect_runtime() -> RuntimeInfo {
@@ -11,7 +11,7 @@ pub fn detect_runtime() -> RuntimeInfo {
 }
 
 pub fn detect_environment() -> String {
-    if node_env().as_deref() == Some("production") {
+    if rust_env().as_deref() == Some("production") {
         return "production".to_owned();
     }
     if is_ci() {

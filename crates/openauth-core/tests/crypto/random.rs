@@ -8,7 +8,7 @@ fn generate_random_string_respects_requested_length() {
 }
 
 #[test]
-fn generate_random_string_uses_better_auth_charset() {
+fn generate_random_string_uses_openauth_charset() {
     let value = generate_random_string(512);
 
     assert!(value

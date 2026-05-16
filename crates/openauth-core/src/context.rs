@@ -60,9 +60,8 @@ pub struct AuthContext {
 /// Environment values used by context initialization.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct AuthEnvironment {
-    pub better_auth_secret: Option<String>,
-    pub auth_secret: Option<String>,
-    pub better_auth_secrets: Option<String>,
+    pub openauth_secret: Option<String>,
+    pub openauth_secrets: Option<String>,
 }
 
 impl fmt::Debug for AuthEnvironment {
@@ -70,16 +69,12 @@ impl fmt::Debug for AuthEnvironment {
         formatter
             .debug_struct("AuthEnvironment")
             .field(
-                "better_auth_secret",
-                &self.better_auth_secret.as_ref().map(|_| "<redacted>"),
+                "openauth_secret",
+                &self.openauth_secret.as_ref().map(|_| "<redacted>"),
             )
             .field(
-                "auth_secret",
-                &self.auth_secret.as_ref().map(|_| "<redacted>"),
-            )
-            .field(
-                "better_auth_secrets",
-                &self.better_auth_secrets.as_ref().map(|_| "<redacted>"),
+                "openauth_secrets",
+                &self.openauth_secrets.as_ref().map(|_| "<redacted>"),
             )
             .finish()
     }
@@ -88,9 +83,8 @@ impl fmt::Debug for AuthEnvironment {
 impl AuthEnvironment {
     pub fn from_process() -> Self {
         Self {
-            better_auth_secret: std::env::var("BETTER_AUTH_SECRET").ok(),
-            auth_secret: std::env::var("AUTH_SECRET").ok(),
-            better_auth_secrets: std::env::var("BETTER_AUTH_SECRETS").ok(),
+            openauth_secret: std::env::var("OPENAUTH_SECRET").ok(),
+            openauth_secrets: std::env::var("OPENAUTH_SECRETS").ok(),
         }
     }
 }

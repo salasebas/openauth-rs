@@ -2,7 +2,7 @@
 
 pub mod logger;
 
-/// Returns true when `NODE_ENV`-style environment state is production.
+/// Returns true when OpenAuth is running in a production environment.
 pub fn is_production() -> bool {
-    std::env::var("NODE_ENV").is_ok_and(|value| value == "production")
+    std::env::var("RUST_ENV").is_ok_and(|value| value == "production")
 }
