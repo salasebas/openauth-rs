@@ -250,6 +250,52 @@ async fn postgres_rate_limit_store_allows_exactly_one_concurrent_request(
 }
 
 #[tokio::test]
+async fn postgres_rate_limit_store_uses_physical_column_names() -> Result<(), OpenAuthError> {
+    let prefix = unique_prefix();
+    let table = format!("{prefix}_custom_rate_limits");
+    let schema = auth_schema(AuthSchemaOptions {
+        user: table_options(&prefix, "users"),
+        account: table_options(&prefix, "accounts"),
+        session: table_options(&prefix, "sessions"),
+        verification: table_options(&prefix, "verifications"),
+        rate_limit: TableOptions::default()
+            .with_name(table.clone())
+            .with_field_name("key", "rl_key")
+            .with_field_name("count", "rl_count")
+            .with_field_name("last_request", "rl_last_request"),
+        rate_limit_storage: RateLimitStorage::Database,
+        ..AuthSchemaOptions::default()
+    });
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url())
+        .await
+        .map_err(sql_error)?;
+    let adapter = PostgresAdapter::with_schema(pool.clone(), schema.clone());
+    adapter.create_schema(&schema, None).await?;
+    let store = PostgresRateLimitStore::from(&adapter);
+    let key = "127.0.0.1|/physical-columns".to_owned();
+
+    let decision = store
+        .consume(RateLimitConsumeInput {
+            key: key.clone(),
+            rule: RateLimitRule { window: 60, max: 5 },
+            now_ms: 1_700_000_000_000,
+        })
+        .await?;
+
+    assert!(decision.permitted);
+    let stored_count: i64 =
+        sqlx::query_scalar(&format!("SELECT rl_count FROM {table} WHERE rl_key = $1"))
+            .bind(key)
+            .fetch_one(&pool)
+            .await
+            .map_err(sql_error)?;
+    assert_eq!(stored_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn postgres_adapter_uses_physical_names_from_auth_schema() -> Result<(), OpenAuthError> {
     let prefix = unique_prefix();
     let schema = auth_schema(AuthSchemaOptions {

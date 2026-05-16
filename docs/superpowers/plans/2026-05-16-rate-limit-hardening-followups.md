@@ -41,11 +41,11 @@
 - Test: `crates/openauth-sqlx/tests/postgres_adapter.rs`
 - Test: `crates/openauth-sqlx/tests/mysql_adapter.rs`
 
-- [ ] Add a small `RateLimitSqlNames` helper that stores quoted table, key, count, and last_request names.
-- [ ] Build `RateLimitSqlNames` from each adapter's `DbSchema` in `From<&Adapter>`.
-- [ ] Update SQL statements to use resolved physical column names.
-- [ ] Add custom physical column tests for SQLite, Postgres, and MySQL.
-- [ ] Run `cargo test -p openauth-sqlx --all-features`.
+- [x] Add a small `RateLimitSqlNames` helper that stores quoted table, key, count, and last_request names.
+- [x] Build `RateLimitSqlNames` from each adapter's `DbSchema` in `From<&Adapter>`.
+- [x] Update SQL statements to use resolved physical column names.
+- [x] Add custom physical column tests for SQLite, Postgres, and MySQL.
+- [x] Run `cargo test -p openauth-sqlx --all-features`.
 - [ ] Commit: `fix(sqlx): honor rate limit physical columns`.
 
 ## Task 3: Remove Redis Per-Store Mutex

@@ -25,7 +25,7 @@ use self::errors::{inactive_transaction, sql_error};
 use self::schema::create_schema;
 use self::state::{PostgresExecutor, PostgresState};
 use self::support::quote_identifier;
-use crate::consume_record;
+use crate::{consume_record, RateLimitSqlNames};
 
 #[derive(Debug, Clone)]
 pub struct PostgresAdapter {
@@ -36,7 +36,7 @@ pub struct PostgresAdapter {
 #[derive(Debug, Clone)]
 pub struct PostgresRateLimitStore {
     pool: PgPool,
-    table: String,
+    names: RateLimitSqlNames,
 }
 
 impl PostgresRateLimitStore {
@@ -47,37 +47,38 @@ impl PostgresRateLimitStore {
     pub fn with_table(pool: PgPool, table: impl Into<String>) -> Self {
         Self {
             pool,
-            table: table.into(),
+            names: RateLimitSqlNames::new(table),
         }
     }
 }
 
 impl From<&PostgresAdapter> for PostgresRateLimitStore {
     fn from(adapter: &PostgresAdapter) -> Self {
-        let table = adapter
-            .schema
-            .table("rate_limit")
-            .map(|table| table.name.clone())
-            .unwrap_or_else(|| "rate_limits".to_owned());
-        Self::with_table(adapter.pool.clone(), table)
+        Self {
+            pool: adapter.pool.clone(),
+            names: RateLimitSqlNames::from_schema(&adapter.schema),
+        }
     }
 }
 
 impl RateLimitStore for PostgresRateLimitStore {
     fn consume<'a>(&'a self, input: RateLimitConsumeInput) -> RateLimitFuture<'a> {
-        Box::pin(async move { consume_postgres_rate_limit(&self.pool, &self.table, input).await })
+        Box::pin(async move { consume_postgres_rate_limit(&self.pool, &self.names, input).await })
     }
 }
 
 async fn consume_postgres_rate_limit(
     pool: &PgPool,
-    table: &str,
+    names: &RateLimitSqlNames,
     input: RateLimitConsumeInput,
 ) -> Result<RateLimitDecision, OpenAuthError> {
-    let table = quote_identifier(table)?;
+    let table = quote_identifier(&names.table)?;
+    let key = quote_identifier(&names.key)?;
+    let count = quote_identifier(&names.count)?;
+    let last_request = quote_identifier(&names.last_request)?;
     let mut tx = pool.begin().await.map_err(sql_error)?;
     sqlx::query(&format!(
-        "INSERT INTO {table} (key, count, last_request) VALUES ($1, 0, $2) ON CONFLICT (key) DO NOTHING"
+        "INSERT INTO {table} ({key}, {count}, {last_request}) VALUES ($1, 0, $2) ON CONFLICT ({key}) DO NOTHING"
     ))
     .bind(&input.key)
     .bind(input.now_ms)
@@ -85,7 +86,7 @@ async fn consume_postgres_rate_limit(
     .await
     .map_err(sql_error)?;
     let row = sqlx::query(&format!(
-        "SELECT count, last_request FROM {table} WHERE key = $1 FOR UPDATE"
+        "SELECT {count} AS count, {last_request} AS last_request FROM {table} WHERE {key} = $1 FOR UPDATE"
     ))
     .bind(&input.key)
     .fetch_optional(&mut *tx)
@@ -96,7 +97,7 @@ async fn consume_postgres_rate_limit(
     if decision.permitted {
         if update {
             sqlx::query(&format!(
-                "UPDATE {table} SET count = $1, last_request = $2 WHERE key = $3"
+                "UPDATE {table} SET {count} = $1, {last_request} = $2 WHERE {key} = $3"
             ))
             .bind(record.count as i64)
             .bind(record.last_request)
@@ -106,7 +107,7 @@ async fn consume_postgres_rate_limit(
             .map_err(sql_error)?;
         } else {
             sqlx::query(&format!(
-                "INSERT INTO {table} (key, count, last_request) VALUES ($1, $2, $3)"
+                "INSERT INTO {table} ({key}, {count}, {last_request}) VALUES ($1, $2, $3)"
             ))
             .bind(&record.key)
             .bind(record.count as i64)

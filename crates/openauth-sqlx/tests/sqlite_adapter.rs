@@ -293,6 +293,46 @@ async fn sqlite_rate_limit_store_allows_exactly_one_concurrent_request() -> Resu
 }
 
 #[tokio::test]
+async fn sqlite_rate_limit_store_uses_physical_column_names() -> Result<(), OpenAuthError> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    let schema = auth_schema(AuthSchemaOptions {
+        rate_limit: TableOptions::default()
+            .with_name("custom_rate_limits")
+            .with_field_name("key", "rl_key")
+            .with_field_name("count", "rl_count")
+            .with_field_name("last_request", "rl_last_request"),
+        rate_limit_storage: RateLimitStorage::Database,
+        ..AuthSchemaOptions::default()
+    });
+    let adapter = SqliteAdapter::with_schema(pool.clone(), schema.clone());
+    adapter.create_schema(&schema, None).await?;
+    let store = SqliteRateLimitStore::from(&adapter);
+    let key = "127.0.0.1|/physical-columns".to_owned();
+
+    let decision = store
+        .consume(RateLimitConsumeInput {
+            key: key.clone(),
+            rule: RateLimitRule { window: 60, max: 5 },
+            now_ms: 1_700_000_000_000,
+        })
+        .await?;
+
+    assert!(decision.permitted);
+    let stored_count: i64 =
+        sqlx::query_scalar("SELECT rl_count FROM custom_rate_limits WHERE rl_key = ?")
+            .bind(key)
+            .fetch_one(&pool)
+            .await
+            .map_err(sql_error)?;
+    assert_eq!(stored_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn sqlite_adapter_run_migrations_applies_plugin_aware_schema() -> Result<(), OpenAuthError> {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)

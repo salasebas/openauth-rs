@@ -27,7 +27,48 @@ pub use postgres::PostgresRateLimitStore;
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteRateLimitStore;
 
+use openauth_core::db::DbSchema;
 use openauth_core::options::{RateLimitConsumeInput, RateLimitDecision, RateLimitRecord};
+
+#[derive(Debug, Clone)]
+pub(crate) struct RateLimitSqlNames {
+    pub table: String,
+    pub key: String,
+    pub count: String,
+    pub last_request: String,
+}
+
+impl RateLimitSqlNames {
+    pub fn new(table: impl Into<String>) -> Self {
+        Self {
+            table: table.into(),
+            key: "key".to_owned(),
+            count: "count".to_owned(),
+            last_request: "last_request".to_owned(),
+        }
+    }
+
+    pub fn from_schema(schema: &DbSchema) -> Self {
+        let Some(table) = schema.table("rate_limit") else {
+            return Self::new("rate_limits");
+        };
+        Self {
+            table: table.name.clone(),
+            key: table
+                .field("key")
+                .map(|field| field.name.clone())
+                .unwrap_or_else(|| "key".to_owned()),
+            count: table
+                .field("count")
+                .map(|field| field.name.clone())
+                .unwrap_or_else(|| "count".to_owned()),
+            last_request: table
+                .field("last_request")
+                .map(|field| field.name.clone())
+                .unwrap_or_else(|| "last_request".to_owned()),
+        }
+    }
+}
 
 fn consume_record(
     input: RateLimitConsumeInput,
