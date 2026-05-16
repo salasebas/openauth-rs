@@ -22,9 +22,12 @@ use sqlx::{MySql, MySqlPool, Row, Transaction};
 use tokio::sync::Mutex;
 
 use self::errors::{inactive_transaction, sql_error};
-use self::schema::create_schema;
+use self::schema::{
+    create_schema, execute_migration_plan, plan_migrations as plan_schema_migrations,
+};
 use self::state::{MySqlExecutor, MySqlState};
 use self::support::quote_identifier;
+use crate::migration::SchemaMigrationPlan;
 use crate::{consume_record, RateLimitSqlNames};
 
 #[derive(Debug, Clone)]
@@ -156,6 +159,17 @@ impl MySqlAdapter {
         Ok(Self::with_schema(pool, schema))
     }
 
+    pub async fn plan_migrations(
+        &self,
+        schema: &DbSchema,
+    ) -> Result<SchemaMigrationPlan, OpenAuthError> {
+        plan_schema_migrations(MySqlExecutor::Pool(&self.pool), schema).await
+    }
+
+    pub async fn compile_migrations(&self, schema: &DbSchema) -> Result<String, OpenAuthError> {
+        Ok(self.plan_migrations(schema).await?.compile())
+    }
+
     fn state(&self) -> MySqlState<'_, '_> {
         MySqlState {
             schema: &self.schema,
@@ -256,7 +270,9 @@ impl DbAdapter for MySqlAdapter {
 
     fn run_migrations<'a>(&'a self, schema: &'a DbSchema) -> AdapterFuture<'a, ()> {
         Box::pin(async move {
-            self.create_schema(schema, None).await?;
+            let plan = plan_schema_migrations(MySqlExecutor::Pool(&self.pool), schema).await?;
+            let mut executor = MySqlExecutor::Pool(&self.pool);
+            execute_migration_plan(&mut executor, &plan).await?;
             Ok(())
         })
     }
