@@ -21,8 +21,9 @@ pub use email_verification::{
 pub use origins::{TrustedOriginOptions, TrustedOriginsProvider};
 pub use password::{OnPasswordReset, PasswordOptions, PasswordResetPayload};
 pub use rate_limit::{
-    DynamicRateLimitPathRule, RateLimitOptions, RateLimitPathRule, RateLimitRecord, RateLimitRule,
-    RateLimitRuleProvider, RateLimitStorage, RateLimitStorageOption,
+    DynamicRateLimitPathRule, HybridRateLimitOptions, RateLimitConsumeInput, RateLimitDecision,
+    RateLimitFuture, RateLimitOptions, RateLimitPathRule, RateLimitRecord, RateLimitRule,
+    RateLimitRuleProvider, RateLimitStorage, RateLimitStorageOption, RateLimitStore,
 };
 pub use root::{ExperimentalOptions, OpenAuthOptions, TelemetryOptions};
 pub use session::{SessionAdditionalField, SessionOptions};

@@ -26,5 +26,9 @@ tokio.workspace = true
 default = []
 plugins = ["dep:openauth-plugins"]
 
+[dev-dependencies]
+openauth-sqlx.workspace = true
+sqlx.workspace = true
+
 [lints]
 workspace = true

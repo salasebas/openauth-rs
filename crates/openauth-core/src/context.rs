@@ -13,16 +13,17 @@ use crate::db::{DbAdapter, DbSchema};
 use crate::env::logger::Logger;
 use crate::error::OpenAuthError;
 use crate::options::{
-    DynamicRateLimitPathRule, OpenAuthOptions, RateLimitPathRule, RateLimitStorage,
-    RateLimitStorageOption,
+    DynamicRateLimitPathRule, HybridRateLimitOptions, OpenAuthOptions, RateLimitPathRule,
+    RateLimitStorageOption, RateLimitStore,
 };
 use crate::plugin::{AuthPlugin, PluginErrorCode};
-use crate::rate_limit::MemoryRateLimitStorage;
+use crate::rate_limit::TokioMemoryRateLimitStore;
 use http::Request;
 use openauth_oauth::oauth2::SocialOAuthProvider;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub use builder::{
     create_auth_context, create_auth_context_with_adapter, create_auth_context_with_environment,
@@ -124,8 +125,10 @@ pub struct RateLimitContext {
     pub custom_rules: Vec<RateLimitPathRule>,
     pub dynamic_rules: Vec<DynamicRateLimitPathRule>,
     pub plugin_rules: Vec<crate::plugin::PluginRateLimitRule>,
-    pub custom_storage: Option<Arc<dyn RateLimitStorage>>,
-    pub memory_storage: Arc<MemoryRateLimitStorage>,
+    pub custom_store: Option<Arc<dyn RateLimitStore>>,
+    pub hybrid: HybridRateLimitOptions,
+    pub memory_idle_ttl: Option<Duration>,
+    pub memory_store: Arc<TokioMemoryRateLimitStore>,
 }
 
 impl AuthContext {

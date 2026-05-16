@@ -14,18 +14,119 @@ use openauth_core::db::{
     TransactionCallback, Update, UpdateMany,
 };
 use openauth_core::error::OpenAuthError;
+use openauth_core::options::{
+    RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitRecord, RateLimitStore,
+};
 use sqlx::mysql::MySqlPoolOptions;
-use sqlx::{MySql, MySqlPool, Transaction};
+use sqlx::{MySql, MySqlPool, Row, Transaction};
 use tokio::sync::Mutex;
 
 use self::errors::{inactive_transaction, sql_error};
 use self::schema::create_schema;
 use self::state::{MySqlExecutor, MySqlState};
+use self::support::quote_identifier;
+use crate::{consume_record, RateLimitSqlNames};
 
 #[derive(Debug, Clone)]
 pub struct MySqlAdapter {
     pool: MySqlPool,
     schema: Arc<DbSchema>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MySqlRateLimitStore {
+    pool: MySqlPool,
+    names: RateLimitSqlNames,
+}
+
+impl MySqlRateLimitStore {
+    pub fn new(pool: MySqlPool) -> Self {
+        Self::with_table(pool, "rate_limits")
+    }
+
+    pub fn with_table(pool: MySqlPool, table: impl Into<String>) -> Self {
+        Self {
+            pool,
+            names: RateLimitSqlNames::new(table),
+        }
+    }
+}
+
+impl From<&MySqlAdapter> for MySqlRateLimitStore {
+    fn from(adapter: &MySqlAdapter) -> Self {
+        Self {
+            pool: adapter.pool.clone(),
+            names: RateLimitSqlNames::from_schema(&adapter.schema),
+        }
+    }
+}
+
+impl RateLimitStore for MySqlRateLimitStore {
+    fn consume<'a>(&'a self, input: RateLimitConsumeInput) -> RateLimitFuture<'a> {
+        Box::pin(async move { consume_mysql_rate_limit(&self.pool, &self.names, input).await })
+    }
+}
+
+async fn consume_mysql_rate_limit(
+    pool: &MySqlPool,
+    names: &RateLimitSqlNames,
+    input: RateLimitConsumeInput,
+) -> Result<RateLimitDecision, OpenAuthError> {
+    let table = quote_identifier(&names.table)?;
+    let key = quote_identifier(&names.key)?;
+    let count = quote_identifier(&names.count)?;
+    let last_request = quote_identifier(&names.last_request)?;
+    let mut tx = pool.begin().await.map_err(sql_error)?;
+    sqlx::query(&format!(
+        "INSERT IGNORE INTO {table} ({key}, {count}, {last_request}) VALUES (?, 0, ?)"
+    ))
+    .bind(&input.key)
+    .bind(input.now_ms)
+    .execute(&mut *tx)
+    .await
+    .map_err(sql_error)?;
+    let row = sqlx::query(&format!(
+        "SELECT {count} AS count, {last_request} AS last_request FROM {table} WHERE {key} = ? FOR UPDATE"
+    ))
+    .bind(&input.key)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(sql_error)?
+    .ok_or_else(|| OpenAuthError::Adapter("missing rate limit row".to_owned()))?;
+    let (decision, record, update) = consume_record(input, Some(mysql_record(row)));
+    if decision.permitted {
+        if update {
+            sqlx::query(&format!(
+                "UPDATE {table} SET {count} = ?, {last_request} = ? WHERE {key} = ?"
+            ))
+            .bind(record.count as i64)
+            .bind(record.last_request)
+            .bind(&record.key)
+            .execute(&mut *tx)
+            .await
+            .map_err(sql_error)?;
+        } else {
+            sqlx::query(&format!(
+                "INSERT INTO {table} ({key}, {count}, {last_request}) VALUES (?, ?, ?)"
+            ))
+            .bind(&record.key)
+            .bind(record.count as i64)
+            .bind(record.last_request)
+            .execute(&mut *tx)
+            .await
+            .map_err(sql_error)?;
+        }
+    }
+    tx.commit().await.map_err(sql_error)?;
+    Ok(decision)
+}
+
+fn mysql_record(row: sqlx::mysql::MySqlRow) -> RateLimitRecord {
+    RateLimitRecord {
+        key: String::new(),
+        count: row.get::<i64, _>("count") as u64,
+        last_request: row.get("last_request"),
+    }
 }
 
 impl MySqlAdapter {

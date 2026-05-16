@@ -4,7 +4,7 @@ pub mod auth;
 
 pub use auth::{
     open_auth, open_auth_with_adapter, open_auth_with_adapter_and_endpoints,
-    open_auth_with_endpoints, OpenAuth,
+    open_auth_with_endpoints, OpenAuth, OpenAuthBuilder,
 };
 pub use openauth_core::api::{
     core_auth_async_endpoints, create_auth_endpoint, parse_request_body, ApiErrorCode,
@@ -39,11 +39,12 @@ pub use openauth_core::options::{
     AccountLinkingOptions, AccountOptions, AdvancedOptions, ChangeEmailOptions,
     CookieAttributesOverride, CookieCacheOptions, CookieCacheStrategy, CookieConfig,
     DeleteUserOptions, DynamicRateLimitPathRule, EmailVerificationOptions, ExperimentalOptions,
-    IpAddressOptions, OAuthStateStoreStrategy, OpenAuthOptions, PasswordOptions, RateLimitOptions,
+    HybridRateLimitOptions, IpAddressOptions, OAuthStateStoreStrategy, OpenAuthOptions,
+    PasswordOptions, RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitOptions,
     RateLimitPathRule, RateLimitRecord, RateLimitRule, RateLimitRuleProvider, RateLimitStorage,
-    RateLimitStorageOption, SendVerificationEmail, SessionAdditionalField, SessionOptions,
-    TelemetryOptions, TrustedOriginOptions, TrustedOriginsProvider, UserAdditionalField,
-    UserOptions, VerificationEmail,
+    RateLimitStorageOption, RateLimitStore, SendVerificationEmail, SessionAdditionalField,
+    SessionOptions, TelemetryOptions, TrustedOriginOptions, TrustedOriginsProvider,
+    UserAdditionalField, UserOptions, VerificationEmail,
 };
 pub use openauth_core::plugin::{
     AuthPlugin, PluginAfterHook, PluginAfterHookAction, PluginAfterHookFuture,

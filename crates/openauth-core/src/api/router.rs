@@ -5,7 +5,7 @@ use crate::context::request_state::{run_with_request_state, set_current_request_
 use crate::context::AuthContext;
 use crate::error::OpenAuthError;
 use crate::plugin::{PluginBeforeHookAction, PluginRequestAction};
-use crate::rate_limit::{on_request_rate_limit, on_response_rate_limit};
+use crate::rate_limit::{consume_rate_limit, on_request_rate_limit, on_response_rate_limit};
 use crate::utils::url::normalize_pathname;
 
 use super::endpoint::{
@@ -211,7 +211,7 @@ impl AuthRouter {
         {
             return Ok(response);
         }
-        if let Some(rejection) = on_request_rate_limit(&self.context, &request)? {
+        if let Some(rejection) = consume_rate_limit(&self.context, &request).await? {
             return rate_limit_response(rejection);
         }
         if let Some((endpoint, params)) = async_endpoint {
@@ -268,7 +268,6 @@ impl AuthRouter {
                 endpoint_operation_id(endpoint),
             )
             .await?;
-            on_response_rate_limit(&self.context, &request)?;
             return run_on_response_plugins(&self.context, &request, response);
         }
         if let Some((endpoint, params)) = sync_endpoint {
@@ -304,7 +303,6 @@ impl AuthRouter {
                 None,
             )
             .await?;
-            on_response_rate_limit(&self.context, &request)?;
             return run_on_response_plugins(&self.context, &request, response);
         }
         unreachable!("endpoint existence checked before rate limiting")

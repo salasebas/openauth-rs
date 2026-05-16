@@ -14,18 +14,119 @@ use openauth_core::db::{
     TransactionCallback, Update, UpdateMany,
 };
 use openauth_core::error::OpenAuthError;
+use openauth_core::options::{
+    RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitRecord, RateLimitStore,
+};
 use sqlx::sqlite::SqlitePoolOptions;
-use sqlx::{Executor, Sqlite, SqlitePool, Transaction};
+use sqlx::{Executor, Row, Sqlite, SqlitePool, Transaction};
 use tokio::sync::Mutex;
 
 use self::errors::sql_error;
 use self::schema::create_schema;
 use self::state::{SqliteExecutor, SqliteState};
+use self::support::quote_identifier;
+use crate::{consume_record, RateLimitSqlNames};
 
 #[derive(Debug, Clone)]
 pub struct SqliteAdapter {
     pool: SqlitePool,
     schema: Arc<DbSchema>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SqliteRateLimitStore {
+    pool: SqlitePool,
+    names: RateLimitSqlNames,
+}
+
+impl SqliteRateLimitStore {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self::with_table(pool, "rate_limits")
+    }
+
+    pub fn with_table(pool: SqlitePool, table: impl Into<String>) -> Self {
+        Self {
+            pool,
+            names: RateLimitSqlNames::new(table),
+        }
+    }
+}
+
+impl From<&SqliteAdapter> for SqliteRateLimitStore {
+    fn from(adapter: &SqliteAdapter) -> Self {
+        Self {
+            pool: adapter.pool.clone(),
+            names: RateLimitSqlNames::from_schema(&adapter.schema),
+        }
+    }
+}
+
+impl RateLimitStore for SqliteRateLimitStore {
+    fn consume<'a>(&'a self, input: RateLimitConsumeInput) -> RateLimitFuture<'a> {
+        Box::pin(async move { consume_sqlite_rate_limit(&self.pool, &self.names, input).await })
+    }
+}
+
+async fn consume_sqlite_rate_limit(
+    pool: &SqlitePool,
+    names: &RateLimitSqlNames,
+    input: RateLimitConsumeInput,
+) -> Result<RateLimitDecision, OpenAuthError> {
+    let table = quote_identifier(&names.table)?;
+    let key = quote_identifier(&names.key)?;
+    let count = quote_identifier(&names.count)?;
+    let last_request = quote_identifier(&names.last_request)?;
+    let mut tx = pool.begin().await.map_err(sql_error)?;
+    sqlx::query(&format!(
+        "INSERT OR IGNORE INTO {table} ({key}, {count}, {last_request}) VALUES (?, 0, ?)"
+    ))
+    .bind(&input.key)
+    .bind(input.now_ms)
+    .execute(&mut *tx)
+    .await
+    .map_err(sql_error)?;
+    let row = sqlx::query(&format!(
+        "SELECT {count} AS count, {last_request} AS last_request FROM {table} WHERE {key} = ?"
+    ))
+    .bind(&input.key)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(sql_error)?
+    .ok_or_else(|| OpenAuthError::Adapter("missing rate limit row".to_owned()))?;
+    let (decision, record, update) = consume_record(input, Some(sqlite_record(row)));
+    if decision.permitted {
+        if update {
+            sqlx::query(&format!(
+                "UPDATE {table} SET {count} = ?, {last_request} = ? WHERE {key} = ?"
+            ))
+            .bind(record.count as i64)
+            .bind(record.last_request)
+            .bind(&record.key)
+            .execute(&mut *tx)
+            .await
+            .map_err(sql_error)?;
+        } else {
+            sqlx::query(&format!(
+                "INSERT INTO {table} ({key}, {count}, {last_request}) VALUES (?, ?, ?)"
+            ))
+            .bind(&record.key)
+            .bind(record.count as i64)
+            .bind(record.last_request)
+            .execute(&mut *tx)
+            .await
+            .map_err(sql_error)?;
+        }
+    }
+    tx.commit().await.map_err(sql_error)?;
+    Ok(decision)
+}
+
+fn sqlite_record(row: sqlx::sqlite::SqliteRow) -> RateLimitRecord {
+    RateLimitRecord {
+        key: String::new(),
+        count: row.get::<i64, _>("count") as u64,
+        last_request: row.get("last_request"),
+    }
 }
 
 impl SqliteAdapter {

@@ -57,6 +57,43 @@ impl Default for PasswordOptions {
     }
 }
 
+impl PasswordOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn builder() -> Self {
+        Self::new()
+    }
+
+    #[must_use]
+    pub fn min_password_length(mut self, length: usize) -> Self {
+        self.min_password_length = length;
+        self
+    }
+
+    #[must_use]
+    pub fn max_password_length(mut self, length: usize) -> Self {
+        self.max_password_length = length;
+        self
+    }
+
+    #[must_use]
+    pub fn on_password_reset<P>(mut self, handler: P) -> Self
+    where
+        P: OnPasswordReset,
+    {
+        self.on_password_reset = Some(Arc::new(handler));
+        self
+    }
+
+    #[must_use]
+    pub fn revoke_sessions_on_password_reset(mut self, enabled: bool) -> Self {
+        self.revoke_sessions_on_password_reset = enabled;
+        self
+    }
+}
+
 impl fmt::Debug for PasswordOptions {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

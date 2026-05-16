@@ -111,6 +111,55 @@ pub struct EmailVerificationOptions {
     pub auto_sign_in_after_verification: bool,
 }
 
+impl EmailVerificationOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn builder() -> Self {
+        Self::new()
+    }
+
+    #[must_use]
+    pub fn send_verification_email<S>(mut self, sender: S) -> Self
+    where
+        S: SendVerificationEmail,
+    {
+        self.send_verification_email = Some(Arc::new(sender));
+        self
+    }
+
+    #[must_use]
+    pub fn before_email_verification<B>(mut self, callback: B) -> Self
+    where
+        B: BeforeEmailVerification,
+    {
+        self.before_email_verification = Some(Arc::new(callback));
+        self
+    }
+
+    #[must_use]
+    pub fn after_email_verification<A>(mut self, callback: A) -> Self
+    where
+        A: AfterEmailVerification,
+    {
+        self.after_email_verification = Some(Arc::new(callback));
+        self
+    }
+
+    #[must_use]
+    pub fn expires_in(mut self, expires_in: u64) -> Self {
+        self.expires_in = Some(expires_in);
+        self
+    }
+
+    #[must_use]
+    pub fn auto_sign_in_after_verification(mut self, enabled: bool) -> Self {
+        self.auto_sign_in_after_verification = enabled;
+        self
+    }
+}
+
 impl fmt::Debug for EmailVerificationOptions {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
