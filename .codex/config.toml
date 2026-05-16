@@ -5,13 +5,21 @@ approvals_reviewer = "auto_review"
 sandbox_mode = "workspace-write"
 default_permissions = "openauth-dev"
 
+[sandbox_workspace_write]
+network_access = true
+
 [permissions.openauth-dev.filesystem]
 ":project_roots" = "write"
 
 [permissions.openauth-dev.network]
 enabled = true
-mode = "limited"
+mode = "full"
 allow_local_binding = true
+
+[permissions.openauth-dev.network.domains]
+"localhost" = "allow"
+"127.0.0.1" = "allow"
+"::1" = "allow"
 
 [features]
 hooks = true
