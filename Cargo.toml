@@ -7,6 +7,7 @@ members = [
     "crates/openauth-oauth",
     "crates/openauth-oauth-provider",
     "crates/openauth-plugins",
+    "crates/openauth-redis",
     "crates/openauth-scim",
     "crates/openauth-sqlx",
     "crates/openauth-social-providers",
@@ -40,6 +41,7 @@ openauth-core = { path = "crates/openauth-core", version = "0.0.3" }
 openauth-oauth = { path = "crates/openauth-oauth", version = "0.0.3" }
 openauth-plugins = { path = "crates/openauth-plugins", version = "0.0.3" }
 openauth-social-providers = { path = "crates/openauth-social-providers", version = "0.0.3" }
+openauth-sqlx = { path = "crates/openauth-sqlx", version = "0.0.3" }
 openauth-telemetry = { path = "crates/openauth-telemetry", version = "0.0.3" }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -54,6 +56,7 @@ subtle = "2"
 thiserror = "2"
 time = { version = "0.3", features = ["serde"] }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-rate-limit = { version = "0.8", default-features = false }
 unicode-normalization = "0.1"
 url = "2"
 

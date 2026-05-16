@@ -837,8 +837,8 @@ fn plugin_error_codes_are_registered_and_validated() -> Result<(), Box<dyn std::
     Ok(())
 }
 
-#[test]
-fn plugin_rate_limit_rules_apply_before_user_custom_overrides(
+#[tokio::test]
+async fn plugin_rate_limit_rules_apply_before_user_custom_overrides(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let plugin = AuthPlugin::new("rate-limit").with_rate_limit(PluginRateLimitRule::new(
         "/plugin/limited",
@@ -860,12 +860,14 @@ fn plugin_rate_limit_rules_apply_before_user_custom_overrides(
     let router = AuthRouter::new(context, vec![endpoint("/plugin/limited", ok_handler)]);
 
     for attempt in 0..4 {
-        let response = router.handle(
-            Request::builder()
-                .method(Method::GET)
-                .uri("http://localhost:3000/api/auth/plugin/limited")
-                .body(Vec::new())?,
-        )?;
+        let response = router
+            .handle_async(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("http://localhost:3000/api/auth/plugin/limited")
+                    .body(Vec::new())?,
+            )
+            .await?;
         if attempt < 3 {
             assert_eq!(response.status(), StatusCode::OK);
         } else {

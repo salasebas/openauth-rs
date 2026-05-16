@@ -14,6 +14,50 @@ pub struct SessionOptions {
     pub additional_fields: BTreeMap<String, SessionAdditionalField>,
 }
 
+impl SessionOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn builder() -> Self {
+        Self::new()
+    }
+
+    #[must_use]
+    pub fn expires_in(mut self, expires_in: u64) -> Self {
+        self.expires_in = Some(expires_in);
+        self
+    }
+
+    #[must_use]
+    pub fn update_age(mut self, update_age: u64) -> Self {
+        self.update_age = Some(update_age);
+        self
+    }
+
+    #[must_use]
+    pub fn fresh_age(mut self, fresh_age: u64) -> Self {
+        self.fresh_age = Some(fresh_age);
+        self
+    }
+
+    #[must_use]
+    pub fn cookie_cache(mut self, cookie_cache: CookieCacheOptions) -> Self {
+        self.cookie_cache = cookie_cache;
+        self
+    }
+
+    #[must_use]
+    pub fn additional_field(
+        mut self,
+        name: impl Into<String>,
+        field: SessionAdditionalField,
+    ) -> Self {
+        self.additional_fields.insert(name.into(), field);
+        self
+    }
+}
+
 /// Runtime metadata for custom session fields accepted by `/update-session`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionAdditionalField {

@@ -10,8 +10,9 @@ use crate::db::{auth_schema, DbAdapter, HookedAdapter};
 use crate::env::is_production;
 use crate::env::logger::{create_logger, LoggerOptions};
 use crate::error::OpenAuthError;
+use crate::options::RateLimitStore;
 use crate::options::{OpenAuthOptions, RateLimitStorageOption};
-use crate::rate_limit::MemoryRateLimitStorage;
+use crate::rate_limit::{LegacyRateLimitStorageAdapter, TokioMemoryRateLimitStore};
 
 use super::origins::resolve_trusted_origins;
 use super::plugins::initialize_plugins;
@@ -108,8 +109,13 @@ pub fn create_auth_context_with_environment_and_adapter(
         custom_rules: options.rate_limit.custom_rules.clone(),
         dynamic_rules: options.rate_limit.dynamic_rules.clone(),
         plugin_rules: Vec::new(),
-        custom_storage: options.rate_limit.custom_storage.clone(),
-        memory_storage: Arc::new(MemoryRateLimitStorage::new()),
+        custom_store: options.rate_limit.custom_store.clone().or_else(|| {
+            options.rate_limit.custom_storage.clone().map(|storage| {
+                Arc::new(LegacyRateLimitStorageAdapter::new(storage)) as Arc<dyn RateLimitStore>
+            })
+        }),
+        hybrid: options.rate_limit.hybrid.clone(),
+        memory_store: Arc::new(TokioMemoryRateLimitStore::new()),
     };
 
     let mut context = AuthContext {
@@ -175,7 +181,7 @@ pub(super) fn insert_social_provider(
 }
 
 fn validate_rate_limit_storage(options: &OpenAuthOptions) -> Result<(), OpenAuthError> {
-    if options.rate_limit.custom_storage.is_some() {
+    if options.rate_limit.custom_store.is_some() || options.rate_limit.custom_storage.is_some() {
         return Ok(());
     }
     if matches!(
@@ -183,7 +189,7 @@ fn validate_rate_limit_storage(options: &OpenAuthOptions) -> Result<(), OpenAuth
         RateLimitStorageOption::Database | RateLimitStorageOption::SecondaryStorage
     ) {
         return Err(OpenAuthError::InvalidConfig(
-            "rate_limit.custom_storage is required when using database or secondary-storage rate limiting without a concrete adapter".to_owned(),
+            "rate_limit.custom_store or rate_limit.custom_storage is required when using database or secondary-storage rate limiting without a concrete adapter".to_owned(),
         ));
     }
     Ok(())

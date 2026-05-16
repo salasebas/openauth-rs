@@ -133,7 +133,7 @@ fn create_auth_context_rejects_external_rate_limit_storage_without_storage_contr
     assert!(matches!(
         result,
         Err(openauth_core::error::OpenAuthError::InvalidConfig(message))
-            if message.contains("custom_storage")
+            if message.contains("custom_store") && message.contains("custom_storage")
     ));
 }
 

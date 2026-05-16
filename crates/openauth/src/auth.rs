@@ -22,6 +22,10 @@ pub struct OpenAuth {
 }
 
 impl OpenAuth {
+    pub fn builder() -> OpenAuthBuilder {
+        OpenAuthBuilder::new()
+    }
+
     pub fn handler(&self, request: ApiRequest) -> Result<ApiResponse, OpenAuthError> {
         self.router.handle(request)
     }
@@ -69,6 +73,153 @@ impl OpenAuth {
             )
         })?;
         adapter.run_migrations(&self.context.db_schema).await
+    }
+}
+
+#[derive(Default)]
+pub struct OpenAuthBuilder {
+    options: OpenAuthOptions,
+    adapter: Option<Arc<dyn DbAdapter>>,
+    extra_endpoints: Vec<AuthEndpoint>,
+    async_endpoints: Vec<AsyncAuthEndpoint>,
+}
+
+impl OpenAuthBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn options(mut self, options: OpenAuthOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    #[must_use]
+    pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.options = self.options.base_url(base_url);
+        self
+    }
+
+    #[must_use]
+    pub fn base_path(mut self, base_path: impl Into<String>) -> Self {
+        self.options = self.options.base_path(base_path);
+        self
+    }
+
+    #[must_use]
+    pub fn secret(mut self, secret: impl Into<String>) -> Self {
+        self.options = self.options.secret(secret);
+        self
+    }
+
+    #[must_use]
+    pub fn rate_limit(mut self, rate_limit: openauth_core::options::RateLimitOptions) -> Self {
+        self.options = self.options.rate_limit(rate_limit);
+        self
+    }
+
+    #[must_use]
+    pub fn session(mut self, session: openauth_core::options::SessionOptions) -> Self {
+        self.options = self.options.session(session);
+        self
+    }
+
+    #[must_use]
+    pub fn user(mut self, user: openauth_core::options::UserOptions) -> Self {
+        self.options = self.options.user(user);
+        self
+    }
+
+    #[must_use]
+    pub fn password(mut self, password: openauth_core::options::PasswordOptions) -> Self {
+        self.options = self.options.password(password);
+        self
+    }
+
+    #[must_use]
+    pub fn account(mut self, account: openauth_core::options::AccountOptions) -> Self {
+        self.options = self.options.account(account);
+        self
+    }
+
+    #[must_use]
+    pub fn advanced(mut self, advanced: openauth_core::options::AdvancedOptions) -> Self {
+        self.options = self.options.advanced(advanced);
+        self
+    }
+
+    #[must_use]
+    pub fn production(mut self, production: bool) -> Self {
+        self.options = self.options.production(production);
+        self
+    }
+
+    #[must_use]
+    pub fn plugin(mut self, plugin: openauth_core::plugin::AuthPlugin) -> Self {
+        self.options = self.options.plugin(plugin);
+        self
+    }
+
+    #[must_use]
+    pub fn social_provider<P>(mut self, provider: P) -> Self
+    where
+        P: openauth_core::oauth::oauth2::SocialOAuthProvider,
+    {
+        self.options = self.options.social_provider(provider);
+        self
+    }
+
+    #[must_use]
+    pub fn adapter<A>(mut self, adapter: A) -> Self
+    where
+        A: DbAdapter + 'static,
+    {
+        self.adapter = Some(Arc::new(adapter));
+        self
+    }
+
+    #[must_use]
+    pub fn adapter_arc(mut self, adapter: Arc<dyn DbAdapter>) -> Self {
+        self.adapter = Some(adapter);
+        self
+    }
+
+    #[must_use]
+    pub fn endpoint(mut self, endpoint: AuthEndpoint) -> Self {
+        self.extra_endpoints.push(endpoint);
+        self
+    }
+
+    #[must_use]
+    pub fn endpoints(mut self, endpoints: Vec<AuthEndpoint>) -> Self {
+        self.extra_endpoints.extend(endpoints);
+        self
+    }
+
+    #[must_use]
+    pub fn async_endpoint(mut self, endpoint: AsyncAuthEndpoint) -> Self {
+        self.async_endpoints.push(endpoint);
+        self
+    }
+
+    #[must_use]
+    pub fn async_endpoints(mut self, endpoints: Vec<AsyncAuthEndpoint>) -> Self {
+        self.async_endpoints.extend(endpoints);
+        self
+    }
+
+    pub fn build(self) -> Result<OpenAuth, OpenAuthError> {
+        if let Some(adapter) = self.adapter {
+            open_auth_with_adapter_and_endpoints(
+                self.options,
+                adapter,
+                self.extra_endpoints,
+                self.async_endpoints,
+            )
+        } else {
+            open_auth_with_endpoints(self.options, self.extra_endpoints, self.async_endpoints)
+        }
     }
 }
 

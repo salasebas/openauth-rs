@@ -13,11 +13,13 @@ use openauth_core::db::{
     RateLimitStorage, Sort, SortDirection, TableOptions, Update, Where, WhereOperator,
 };
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
+use openauth_core::options::{
+    AdvancedOptions, OpenAuthOptions, RateLimitConsumeInput, RateLimitRule, RateLimitStore,
+};
 use openauth_core::plugin::{
     PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook,
 };
-use openauth_sqlx::SqliteAdapter;
+use openauth_sqlx::{SqliteAdapter, SqliteRateLimitStore};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Mutex as StdMutex;
@@ -215,6 +217,78 @@ async fn sqlite_adapter_create_schema_is_idempotent_and_creates_rate_limit_table
     .await
     .map_err(sql_error)?;
     assert_eq!(table_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_rate_limit_store_denies_without_incrementing_denied_requests(
+) -> Result<(), OpenAuthError> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    let schema = auth_schema(AuthSchemaOptions {
+        rate_limit_storage: RateLimitStorage::Database,
+        ..AuthSchemaOptions::default()
+    });
+    let adapter = SqliteAdapter::with_schema(pool.clone(), schema.clone());
+    adapter.create_schema(&schema, None).await?;
+    let store = SqliteRateLimitStore::from(&adapter);
+    let rule = RateLimitRule { window: 60, max: 1 };
+    let key = "127.0.0.1|/limited".to_owned();
+
+    let first = store
+        .consume(RateLimitConsumeInput {
+            key: key.clone(),
+            rule: rule.clone(),
+            now_ms: 1_700_000_000_000,
+        })
+        .await?;
+    let second = store
+        .consume(RateLimitConsumeInput {
+            key: key.clone(),
+            rule,
+            now_ms: 1_700_000_000_001,
+        })
+        .await?;
+
+    assert!(first.permitted);
+    assert!(!second.permitted);
+    let stored_count: i64 = sqlx::query_scalar("SELECT count FROM rate_limits WHERE key = ?")
+        .bind(key)
+        .fetch_one(&pool)
+        .await
+        .map_err(sql_error)?;
+    assert_eq!(stored_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_rate_limit_store_allows_exactly_one_concurrent_request() -> Result<(), OpenAuthError>
+{
+    let adapter = adapter().await?;
+    let store = SqliteRateLimitStore::from(&adapter);
+    let rule = RateLimitRule { window: 60, max: 1 };
+    let key = "127.0.0.1|/concurrent".to_owned();
+    let first = RateLimitConsumeInput {
+        key: key.clone(),
+        rule: rule.clone(),
+        now_ms: 1_700_000_000_000,
+    };
+    let second = RateLimitConsumeInput {
+        key,
+        rule,
+        now_ms: 1_700_000_000_000,
+    };
+
+    let (first, second) = tokio::join!(store.consume(first), store.consume(second));
+    let permitted = [first?, second?]
+        .into_iter()
+        .filter(|decision| decision.permitted)
+        .count();
+
+    assert_eq!(permitted, 1);
     Ok(())
 }
 

@@ -10,6 +10,34 @@ pub struct UserOptions {
     pub additional_fields: BTreeMap<String, UserAdditionalField>,
 }
 
+impl UserOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn builder() -> Self {
+        Self::new()
+    }
+
+    #[must_use]
+    pub fn change_email(mut self, change_email: ChangeEmailOptions) -> Self {
+        self.change_email = change_email;
+        self
+    }
+
+    #[must_use]
+    pub fn delete_user(mut self, delete_user: DeleteUserOptions) -> Self {
+        self.delete_user = delete_user;
+        self
+    }
+
+    #[must_use]
+    pub fn additional_field(mut self, name: impl Into<String>, field: UserAdditionalField) -> Self {
+        self.additional_fields.insert(name.into(), field);
+        self
+    }
+}
+
 /// Runtime metadata for custom user fields accepted by user-writing endpoints.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserAdditionalField {
@@ -71,8 +99,46 @@ pub struct ChangeEmailOptions {
     pub update_email_without_verification: bool,
 }
 
+impl ChangeEmailOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn builder() -> Self {
+        Self::new()
+    }
+
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    #[must_use]
+    pub fn update_email_without_verification(mut self, enabled: bool) -> Self {
+        self.update_email_without_verification = enabled;
+        self
+    }
+}
+
 /// User deletion behavior.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeleteUserOptions {
     pub enabled: bool,
+}
+
+impl DeleteUserOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn builder() -> Self {
+        Self::new()
+    }
+
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
 }

@@ -1,17 +1,20 @@
 use http::{header, Method, Request, StatusCode};
+use openauth::db::DbAdapter;
 use openauth::{
     core_auth_async_endpoints, create_auth_endpoint, open_auth, open_auth_with_adapter,
     open_auth_with_endpoints, AdvancedOptions, ApiErrorResponse, ApiRequest, ApiResponse,
     AsyncAuthEndpoint, AuthEndpoint, AuthEndpointOptions, AuthPlugin, BodyField, BodySchema,
-    ChangeEmailOptions, CookieCacheStrategy, DeleteUserOptions, EmailVerificationOptions,
-    EndpointKind, HookedAdapter, JsonSchemaType, MemoryAdapter, OpenApiOperation, OpenAuthError,
-    OpenAuthOptions, PathParams, PluginAfterHookAction, PluginBeforeHookAction,
-    PluginDatabaseAfterInput, PluginDatabaseBeforeAction, PluginDatabaseBeforeInput,
-    PluginDatabaseHook, PluginDatabaseHookContext, PluginDatabaseOperation, PluginEndpoint,
-    PluginEndpointHooks, PluginErrorCode, PluginHookMatcher, PluginInitOutput, PluginMigration,
-    PluginRateLimitRule, PluginRequestAction, PluginSchemaContribution, ProviderOptions,
-    RateLimitOptions, SessionAdditionalField, SessionAuth, SessionOptions, SignOutResult,
-    SocialOAuthProvider, TrustedOriginOptions, UpdateUserInput, UserOptions, VerificationEmail,
+    ChangeEmailOptions, CookieCacheOptions, CookieCacheStrategy, DeleteUserOptions,
+    EmailVerificationOptions, EndpointKind, HookedAdapter, JsonSchemaType, MemoryAdapter,
+    OpenApiOperation, OpenAuth, OpenAuthBuilder, OpenAuthError, OpenAuthOptions, PathParams,
+    PluginAfterHookAction, PluginBeforeHookAction, PluginDatabaseAfterInput,
+    PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook,
+    PluginDatabaseHookContext, PluginDatabaseOperation, PluginEndpoint, PluginEndpointHooks,
+    PluginErrorCode, PluginHookMatcher, PluginInitOutput, PluginMigration, PluginRateLimitRule,
+    PluginRequestAction, PluginSchemaContribution, ProviderOptions, RateLimitConsumeInput,
+    RateLimitDecision, RateLimitFuture, RateLimitOptions, RateLimitStorageOption, RateLimitStore,
+    SessionAdditionalField, SessionAuth, SessionOptions, SignOutResult, SocialOAuthProvider,
+    TrustedOriginOptions, UpdateUserInput, UserOptions, VerificationEmail,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -32,6 +35,235 @@ fn openauth_crate_exposes_product_initializer() -> Result<(), Box<dyn std::error
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.body(), b"OK");
+    Ok(())
+}
+
+#[test]
+fn openauth_builder_exposes_primary_initializer() -> Result<(), Box<dyn std::error::Error>> {
+    let auth = OpenAuth::builder()
+        .secret("secret-a-at-least-32-chars-long!!")
+        .rate_limit(RateLimitOptions::memory().enabled(false))
+        .build()?;
+
+    let response = auth.handler(
+        Request::builder()
+            .method(Method::GET)
+            .uri("http://localhost:3000/api/auth/ok")
+            .body(Vec::new())?,
+    )?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    Ok(())
+}
+
+#[test]
+fn openauth_builder_accepts_adapter_and_extra_endpoints() -> Result<(), Box<dyn std::error::Error>>
+{
+    let extra = AuthEndpoint {
+        path: "/builder-custom".to_owned(),
+        method: Method::GET,
+        handler: |_context, _request| openauth::api::response(StatusCode::OK, b"BUILDER".to_vec()),
+    };
+    let auth = OpenAuthBuilder::new()
+        .secret("secret-a-at-least-32-chars-long!!")
+        .adapter(MemoryAdapter::new())
+        .endpoint(extra)
+        .build()?;
+
+    let response = auth.handler(
+        Request::builder()
+            .method(Method::GET)
+            .uri("http://localhost:3000/api/auth/builder-custom")
+            .body(Vec::new())?,
+    )?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.body(), b"BUILDER");
+    Ok(())
+}
+
+#[test]
+fn option_builders_cover_common_nested_configuration() {
+    let options = OpenAuthOptions::new()
+        .secret("secret-a-at-least-32-chars-long!!")
+        .base_url("https://auth.example.com")
+        .base_path("/auth")
+        .production(true)
+        .session(
+            SessionOptions::new()
+                .expires_in(3600)
+                .update_age(60)
+                .fresh_age(30)
+                .cookie_cache(
+                    CookieCacheOptions::new()
+                        .enabled(true)
+                        .max_age(300)
+                        .strategy(CookieCacheStrategy::Jwe)
+                        .refresh_cache(false)
+                        .version("v1"),
+                ),
+        )
+        .user(
+            UserOptions::new()
+                .change_email(ChangeEmailOptions::new().enabled(true))
+                .delete_user(DeleteUserOptions::new().enabled(true)),
+        )
+        .rate_limit(
+            RateLimitOptions::memory()
+                .enabled(true)
+                .window(60)
+                .max(10)
+                .storage(RateLimitStorageOption::Memory),
+        );
+
+    assert_eq!(
+        options.base_url.as_deref(),
+        Some("https://auth.example.com")
+    );
+    assert_eq!(options.base_path.as_deref(), Some("/auth"));
+    assert!(options.production);
+    assert_eq!(options.session.expires_in, Some(3600));
+    assert!(options.session.cookie_cache.enabled);
+    assert!(options.user.change_email.enabled);
+    assert_eq!(options.rate_limit.window, 60);
+}
+
+#[test]
+fn option_builder_aliases_match_new_constructors() {
+    let options = OpenAuthOptions::builder().rate_limit(
+        RateLimitOptions::builder()
+            .custom_rule("/login", openauth::RateLimitRule::new(10, 2))
+            .hybrid(openauth::HybridRateLimitOptions::builder().set_enabled(true)),
+    );
+
+    assert_eq!(options.rate_limit.custom_rules[0].path, "/login");
+    assert_eq!(
+        options.rate_limit.custom_rules[0].rule,
+        Some(openauth::RateLimitRule { window: 10, max: 2 })
+    );
+    assert!(options.rate_limit.hybrid.enabled);
+}
+
+#[test]
+fn rate_limit_builders_cover_distributed_and_hybrid_configuration() {
+    let database = RateLimitOptions::database(TestRateLimitStore)
+        .enabled(true)
+        .window(30)
+        .max(5)
+        .hybrid(openauth::HybridRateLimitOptions::enabled().local_multiplier(3));
+    let secondary = RateLimitOptions::secondary_storage(TestRateLimitStore)
+        .enabled(true)
+        .window(60)
+        .max(20);
+
+    assert_eq!(database.storage, RateLimitStorageOption::Database);
+    assert!(database.custom_store.is_some());
+    assert!(database.hybrid.enabled);
+    assert_eq!(database.hybrid.local_multiplier, 3);
+    assert_eq!(secondary.storage, RateLimitStorageOption::SecondaryStorage);
+    assert!(secondary.custom_store.is_some());
+}
+
+#[tokio::test]
+async fn openauth_builder_uses_sqlx_rate_limit_store_with_handler_async(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await?;
+    let schema = openauth::db::auth_schema(openauth::db::AuthSchemaOptions {
+        rate_limit_storage: openauth::db::RateLimitStorage::Database,
+        ..openauth::db::AuthSchemaOptions::default()
+    });
+    let adapter = openauth_sqlx::SqliteAdapter::with_schema(pool, schema.clone());
+    adapter.create_schema(&schema, None).await?;
+    let rate_limit = openauth_sqlx::SqliteRateLimitStore::from(&adapter);
+    let auth = OpenAuth::builder()
+        .secret("secret-a-at-least-32-chars-long!!")
+        .adapter(adapter)
+        .rate_limit(
+            RateLimitOptions::database(rate_limit)
+                .enabled(true)
+                .window(60)
+                .max(1),
+        )
+        .build()?;
+
+    let first = auth
+        .handler_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/ok")
+                .body(Vec::new())?,
+        )
+        .await?;
+    let second = auth
+        .handler_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/ok")
+                .body(Vec::new())?,
+        )
+        .await?;
+
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    Ok(())
+}
+
+#[tokio::test]
+async fn openauth_builder_initializes_memory_rate_limit_backend(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let auth = OpenAuth::builder()
+        .secret("secret-a-at-least-32-chars-long!!")
+        .rate_limit(RateLimitOptions::memory().enabled(true).window(60).max(1))
+        .build()?;
+
+    let first = auth
+        .handler_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/ok")
+                .body(Vec::new())?,
+        )
+        .await?;
+    let second = auth
+        .handler_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/ok")
+                .body(Vec::new())?,
+        )
+        .await?;
+
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    Ok(())
+}
+
+#[tokio::test]
+async fn openauth_builder_initializes_secondary_rate_limit_backend(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let auth = OpenAuth::builder()
+        .secret("secret-a-at-least-32-chars-long!!")
+        .rate_limit(
+            RateLimitOptions::secondary_storage(TestRateLimitStore)
+                .enabled(true)
+                .window(60)
+                .max(1),
+        )
+        .build()?;
+
+    let response = auth
+        .handler_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/ok")
+                .body(Vec::new())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
     Ok(())
 }
 
@@ -178,6 +410,19 @@ fn openauth_crate_reexports_core_contract_types() {
     let _action_type: Option<PluginRequestAction> = None;
     let _trusted_origins = TrustedOriginOptions::default();
     let _rate_limit = RateLimitOptions::default();
+    let _rate_limit_input = RateLimitConsumeInput {
+        key: "127.0.0.1|/test".to_owned(),
+        rule: openauth::RateLimitRule { window: 10, max: 1 },
+        now_ms: 1_700_000_000_000,
+    };
+    let _rate_limit_decision = RateLimitDecision {
+        permitted: true,
+        retry_after: 0,
+        limit: 1,
+        remaining: 0,
+        reset_after: 10,
+    };
+    let _rate_limit_store: Option<Arc<dyn RateLimitStore>> = None;
     let _user_options = UserOptions {
         change_email: ChangeEmailOptions {
             enabled: true,
@@ -189,7 +434,7 @@ fn openauth_crate_reexports_core_contract_types() {
     let _email_verification = EmailVerificationOptions::default();
     let _verification_email_type: Option<VerificationEmail> = None;
     let _cookie_strategy = CookieCacheStrategy::Jwe;
-    let _memory_storage = openauth::rate_limit::MemoryRateLimitStorage::new();
+    let _memory_storage = openauth::rate_limit::TokioMemoryRateLimitStore::new();
     let _session_auth_type: Option<SessionAuth<'_>> = None;
     let _update_user = UpdateUserInput::new().name("Ada").image(None);
     let _route_builder = core_auth_async_endpoints;
@@ -724,6 +969,22 @@ fn set_cookie_values(response: &http::Response<Vec<u8>>) -> Vec<String> {
 
 struct SchemaCapturingAdapter {
     captured_schema: Arc<StdMutex<Option<openauth::db::DbSchema>>>,
+}
+
+struct TestRateLimitStore;
+
+impl RateLimitStore for TestRateLimitStore {
+    fn consume<'a>(&'a self, input: RateLimitConsumeInput) -> RateLimitFuture<'a> {
+        Box::pin(async move {
+            Ok(RateLimitDecision {
+                permitted: true,
+                retry_after: 0,
+                limit: input.rule.max,
+                remaining: input.rule.max.saturating_sub(1),
+                reset_after: input.rule.window,
+            })
+        })
+    }
 }
 
 impl openauth::db::DbAdapter for SchemaCapturingAdapter {

@@ -3,14 +3,18 @@
 use crate::context::AuthContext;
 use crate::env::is_production;
 use crate::error::OpenAuthError;
-use crate::options::{RateLimitRecord, RateLimitRule, RateLimitStorage, RateLimitStorageOption};
+use crate::options::{
+    RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitRecord, RateLimitRule,
+    RateLimitStorage, RateLimitStorageOption, RateLimitStore,
+};
 use crate::utils::ip::{
     create_rate_limit_key, is_valid_ip, normalize_ip_with_options, NormalizeIpOptions,
 };
 use crate::utils::url::normalize_pathname;
 use http::Request;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use tokio_rate_limit::{RateLimiter, RateLimiterConfig};
 
 pub type Body = Vec<u8>;
 
@@ -19,64 +23,155 @@ pub struct RateLimitRejection {
     pub retry_after: u64,
 }
 
-#[derive(Debug, Default)]
-pub struct MemoryRateLimitStorage {
-    entries: Mutex<HashMap<String, MemoryRateLimitEntry>>,
+#[derive(Default)]
+pub struct TokioMemoryRateLimitStore {
+    limiters: Mutex<HashMap<(u64, u64), Arc<RateLimiter>>>,
 }
 
-#[derive(Debug, Clone)]
-struct MemoryRateLimitEntry {
-    record: RateLimitRecord,
-    expires_at: i64,
-}
+#[deprecated(
+    note = "use TokioMemoryRateLimitStore; the legacy name now points at the async Tokio backend"
+)]
+pub type MemoryRateLimitStorage = TokioMemoryRateLimitStore;
 
-impl MemoryRateLimitStorage {
+impl TokioMemoryRateLimitStore {
     pub fn new() -> Self {
         Self::default()
     }
-}
 
-impl RateLimitStorage for MemoryRateLimitStorage {
-    fn get(&self, key: &str) -> Result<Option<RateLimitRecord>, OpenAuthError> {
-        let now = now_seconds();
-        let mut entries = self
-            .entries
+    fn limiter(&self, rule: &RateLimitRule) -> Result<Arc<RateLimiter>, OpenAuthError> {
+        let mut limiters = self
+            .limiters
             .lock()
-            .map_err(|_| OpenAuthError::Api("rate limit storage lock poisoned".to_owned()))?;
-        let Some(entry) = entries.get(key) else {
-            return Ok(None);
-        };
-        if now >= entry.expires_at {
-            entries.remove(key);
-            return Ok(None);
+            .map_err(|_| OpenAuthError::Api("rate limit store lock poisoned".to_owned()))?;
+        let key = (rule.window.max(1), rule.max.max(1));
+        if let Some(limiter) = limiters.get(&key) {
+            return Ok(Arc::clone(limiter));
         }
-        Ok(Some(entry.record.clone()))
-    }
-
-    fn set(
-        &self,
-        key: &str,
-        value: RateLimitRecord,
-        ttl_seconds: u64,
-        _update: bool,
-    ) -> Result<(), OpenAuthError> {
-        let expires_at = now_seconds().saturating_add(ttl_seconds as i64);
-        let mut entries = self
-            .entries
-            .lock()
-            .map_err(|_| OpenAuthError::Api("rate limit storage lock poisoned".to_owned()))?;
-        entries.insert(
-            key.to_owned(),
-            MemoryRateLimitEntry {
-                record: value,
-                expires_at,
-            },
-        );
-        Ok(())
+        let requests_per_second = key.1.div_ceil(key.0).max(1);
+        let limiter = Arc::new(RateLimiter::new(RateLimiterConfig {
+            requests_per_second,
+            burst: key.1.max(requests_per_second),
+        }));
+        limiters.insert(key, Arc::clone(&limiter));
+        Ok(limiter)
     }
 }
 
-pub fn on_request_rate_limit(
+impl RateLimitStore for TokioMemoryRateLimitStore {
+    fn consume<'a>(&'a self, input: RateLimitConsumeInput) -> RateLimitFuture<'a> {
+        Box::pin(async move {
+            let limiter = self.limiter(&input.rule)?;
+            let decision = limiter
+                .check(&input.key)
+                .await
+                .map_err(|error| OpenAuthError::Api(error.to_string()))?;
+            Ok(RateLimitDecision {
+                permitted: decision.permitted,
+                retry_after: duration_seconds(decision.retry_after),
+                limit: decision.limit,
+                remaining: decision.remaining.unwrap_or(0),
+                reset_after: duration_seconds(decision.reset),
+            })
+        })
+    }
+}
+
+pub struct LegacyRateLimitStorageAdapter {
+    storage: Arc<dyn RateLimitStorage>,
+}
+
+impl LegacyRateLimitStorageAdapter {
+    pub fn new(storage: Arc<dyn RateLimitStorage>) -> Self {
+        Self { storage }
+    }
+}
+
+impl RateLimitStore for LegacyRateLimitStorageAdapter {
+    fn consume<'a>(&'a self, input: RateLimitConsumeInput) -> RateLimitFuture<'a> {
+        Box::pin(async move {
+            let window_ms = input.rule.window.saturating_mul(1000) as i64;
+            let existing = self.storage.get(&input.key)?;
+            let decision = match existing {
+                Some(record)
+                    if input.now_ms.saturating_sub(record.last_request) <= window_ms
+                        && record.count >= input.rule.max =>
+                {
+                    denied_decision(&input, record.last_request)
+                }
+                Some(record) if input.now_ms.saturating_sub(record.last_request) <= window_ms => {
+                    let next_count = record.count.saturating_add(1);
+                    self.storage.set(
+                        &input.key,
+                        RateLimitRecord {
+                            key: input.key.clone(),
+                            count: next_count,
+                            last_request: input.now_ms,
+                        },
+                        input.rule.window,
+                        true,
+                    )?;
+                    allowed_decision(&input, next_count)
+                }
+                _ => {
+                    self.storage.set(
+                        &input.key,
+                        RateLimitRecord {
+                            key: input.key.clone(),
+                            count: 1,
+                            last_request: input.now_ms,
+                        },
+                        input.rule.window,
+                        existing.is_some(),
+                    )?;
+                    allowed_decision(&input, 1)
+                }
+            };
+            Ok(decision)
+        })
+    }
+}
+
+pub struct HybridRateLimitStore {
+    local: Arc<TokioMemoryRateLimitStore>,
+    global: Arc<dyn RateLimitStore>,
+    local_multiplier: u64,
+}
+
+impl HybridRateLimitStore {
+    pub fn new(
+        local: Arc<TokioMemoryRateLimitStore>,
+        global: Arc<dyn RateLimitStore>,
+        local_multiplier: u64,
+    ) -> Self {
+        Self {
+            local,
+            global,
+            local_multiplier: local_multiplier.max(1),
+        }
+    }
+}
+
+impl RateLimitStore for HybridRateLimitStore {
+    fn consume<'a>(&'a self, input: RateLimitConsumeInput) -> RateLimitFuture<'a> {
+        Box::pin(async move {
+            let local_input = RateLimitConsumeInput {
+                key: input.key.clone(),
+                rule: RateLimitRule {
+                    window: input.rule.window,
+                    max: input.rule.max.saturating_mul(self.local_multiplier).max(1),
+                },
+                now_ms: input.now_ms,
+            };
+            let local = self.local.consume(local_input).await?;
+            if !local.permitted {
+                return Ok(local);
+            }
+            self.global.consume(input).await
+        })
+    }
+}
+
+pub async fn consume_rate_limit(
     context: &AuthContext,
     request: &Request<Body>,
 ) -> Result<Option<RateLimitRejection>, OpenAuthError> {
@@ -86,49 +181,42 @@ pub fn on_request_rate_limit(
     let Some(config) = resolve_config(context, request)? else {
         return Ok(None);
     };
-    let storage = storage(context);
-    let Some(record) = storage.get(&config.key)? else {
+    let store = store(context);
+    let decision = store
+        .consume(RateLimitConsumeInput {
+            key: config.key,
+            rule: config.rule,
+            now_ms: now_millis(),
+        })
+        .await?;
+    if decision.permitted {
         return Ok(None);
-    };
-
-    if should_rate_limit(config.rule.max, config.rule.window, &record) {
-        return Ok(Some(RateLimitRejection {
-            retry_after: retry_after(record.last_request, config.rule.window),
-        }));
     }
+    Ok(Some(RateLimitRejection {
+        retry_after: decision.retry_after,
+    }))
+}
 
-    Ok(None)
+pub fn on_request_rate_limit(
+    context: &AuthContext,
+    request: &Request<Body>,
+) -> Result<Option<RateLimitRejection>, OpenAuthError> {
+    if !context.rate_limit.enabled {
+        return Ok(None);
+    }
+    if resolve_config(context, request)?.is_none() {
+        return Ok(None);
+    }
+    Err(OpenAuthError::Api(
+        "async rate limit storage requires AuthRouter::handle_async".to_owned(),
+    ))
 }
 
 pub fn on_response_rate_limit(
-    context: &AuthContext,
-    request: &Request<Body>,
+    _context: &AuthContext,
+    _request: &Request<Body>,
 ) -> Result<(), OpenAuthError> {
-    if !context.rate_limit.enabled {
-        return Ok(());
-    }
-    let Some(config) = resolve_config(context, request)? else {
-        return Ok(());
-    };
-    let storage = storage(context);
-    let now = now_seconds();
-    let next_record = match storage.get(&config.key)? {
-        Some(record) if now.saturating_sub(record.last_request) <= config.rule.window as i64 => {
-            RateLimitRecord {
-                key: config.key.clone(),
-                count: record.count.saturating_add(1),
-                last_request: now,
-            }
-        }
-        _ => RateLimitRecord {
-            key: config.key.clone(),
-            count: 1,
-            last_request: now,
-        },
-    };
-
-    let update = next_record.count > 1;
-    storage.set(&config.key, next_record, config.rule.window, update)
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -240,27 +328,57 @@ fn request_ip(context: &AuthContext, request: &Request<Body>) -> Option<String> 
     None
 }
 
-fn storage(context: &AuthContext) -> &dyn RateLimitStorage {
-    if let Some(storage) = &context.rate_limit.custom_storage {
-        return storage.as_ref();
+fn store(context: &AuthContext) -> Arc<dyn RateLimitStore> {
+    if let Some(store) = &context.rate_limit.custom_store {
+        if context.rate_limit.hybrid.enabled {
+            return Arc::new(HybridRateLimitStore::new(
+                Arc::clone(&context.rate_limit.memory_store),
+                Arc::clone(store),
+                context.rate_limit.hybrid.local_multiplier,
+            ));
+        }
+        return Arc::clone(store);
     }
     match context.rate_limit.storage {
         RateLimitStorageOption::Memory
         | RateLimitStorageOption::Database
-        | RateLimitStorageOption::SecondaryStorage => context.rate_limit.memory_storage.as_ref(),
+        | RateLimitStorageOption::SecondaryStorage => context.rate_limit.memory_store.clone(),
     }
 }
 
-fn should_rate_limit(max: u64, window: u64, record: &RateLimitRecord) -> bool {
-    let time_since_last_request = now_seconds().saturating_sub(record.last_request);
-    time_since_last_request < window as i64 && record.count >= max
+fn allowed_decision(input: &RateLimitConsumeInput, count: u64) -> RateLimitDecision {
+    RateLimitDecision {
+        permitted: true,
+        retry_after: 0,
+        limit: input.rule.max,
+        remaining: input.rule.max.saturating_sub(count),
+        reset_after: input.rule.window,
+    }
 }
 
-fn retry_after(last_request: i64, window: u64) -> u64 {
+fn denied_decision(input: &RateLimitConsumeInput, last_request: i64) -> RateLimitDecision {
     let retry_after = last_request
-        .saturating_add(window as i64)
-        .saturating_sub(now_seconds());
-    retry_after.max(0) as u64
+        .saturating_add(input.rule.window.saturating_mul(1000) as i64)
+        .saturating_sub(input.now_ms)
+        .max(0);
+    RateLimitDecision {
+        permitted: false,
+        retry_after: ceil_millis_to_seconds(retry_after),
+        limit: input.rule.max,
+        remaining: 0,
+        reset_after: ceil_millis_to_seconds(retry_after),
+    }
+}
+
+fn duration_seconds(duration: Option<std::time::Duration>) -> u64 {
+    duration.map(|duration| duration.as_secs()).unwrap_or(0)
+}
+
+fn ceil_millis_to_seconds(milliseconds: i64) -> u64 {
+    if milliseconds <= 0 {
+        return 0;
+    }
+    ((milliseconds as u64).saturating_add(999)) / 1000
 }
 
 fn path_matches(pattern: &str, path: &str) -> bool {
@@ -270,6 +388,6 @@ fn path_matches(pattern: &str, path: &str) -> bool {
     pattern == path
 }
 
-fn now_seconds() -> i64 {
-    time::OffsetDateTime::now_utc().unix_timestamp()
+fn now_millis() -> i64 {
+    time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000
 }

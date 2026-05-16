@@ -50,8 +50,8 @@ References: [tokio-rate-limit docs](https://docs.rs/tokio-rate-limit/latest/toki
 **Files:**
 - Create: `docs/superpowers/plans/2026-05-16-rate-limit-backends.md`
 
-- [ ] Save this plan exactly to `docs/superpowers/plans/2026-05-16-rate-limit-backends.md`.
-- [ ] Commit:
+- [x] Save this plan exactly to `docs/superpowers/plans/2026-05-16-rate-limit-backends.md`.
+- [x] Commit:
   ```bash
   git add docs/superpowers/plans/2026-05-16-rate-limit-backends.md
   git commit -m "docs: plan atomic rate limit backends"
@@ -66,12 +66,12 @@ References: [tokio-rate-limit docs](https://docs.rs/tokio-rate-limit/latest/toki
 - Modify: `crates/openauth-core/src/rate_limit.rs`
 - Test: `crates/openauth-core/tests/rate_limit/rate_limiter.rs`
 
-- [ ] Add workspace dependency:
+- [x] Add workspace dependency:
   ```toml
   tokio-rate-limit = { version = "0.8", default-features = false }
   ```
-- [ ] Add `tokio-rate-limit.workspace = true` to `openauth-core`.
-- [ ] Replace `RateLimitStorage` with an async atomic store trait using the repo's boxed-future style:
+- [x] Add `tokio-rate-limit.workspace = true` to `openauth-core`.
+- [x] Replace `RateLimitStorage` with an async atomic store trait using the repo's boxed-future style:
   ```rust
   pub type RateLimitFuture<'a> =
       Pin<Box<dyn Future<Output = Result<RateLimitDecision, OpenAuthError>> + Send + 'a>>;
@@ -83,7 +83,7 @@ References: [tokio-rate-limit docs](https://docs.rs/tokio-rate-limit/latest/toki
       ) -> RateLimitFuture<'a>;
   }
   ```
-- [ ] Add:
+- [x] Add:
   ```rust
   pub struct RateLimitConsumeInput {
       pub key: String,
@@ -99,8 +99,8 @@ References: [tokio-rate-limit docs](https://docs.rs/tokio-rate-limit/latest/toki
       pub reset_after: u64,
   }
   ```
-- [ ] Use milliseconds internally for new stores; preserve serialized `RateLimitRecord` field names for schema compatibility.
-- [ ] Update tests to assert the new decision object and atomic single-call storage behavior.
+- [x] Use milliseconds internally for new stores; preserve serialized `RateLimitRecord` field names for schema compatibility.
+- [x] Update tests to assert the new decision object and atomic single-call storage behavior.
 
 ### Task 3: Use Tokio Local Memory Backend
 
@@ -110,15 +110,15 @@ References: [tokio-rate-limit docs](https://docs.rs/tokio-rate-limit/latest/toki
 - Modify: `crates/openauth-core/src/context/builder.rs`
 - Test: `crates/openauth-core/tests/rate_limit/rate_limiter.rs`
 
-- [ ] Replace the default memory backend used by async routing with a `TokioMemoryRateLimitStore`.
-- [ ] Implement it as a cache of `tokio_rate_limit::RateLimiter` instances keyed by `(window, max)`, because OpenAuth supports different rules per path/plugin.
-- [ ] Configure each limiter as:
+- [x] Replace the default memory backend used by async routing with a `TokioMemoryRateLimitStore`.
+- [x] Implement it as a cache of `tokio_rate_limit::RateLimiter` instances keyed by `(window, max)`, because OpenAuth supports different rules per path/plugin.
+- [x] Configure each limiter as:
   - `requests_per_second = max / window`, rounded up to at least `1`;
   - `burst = max`;
   - request key remains `normalized_ip|normalized_path`.
-- [ ] Map `tokio-rate-limit` decisions to `RateLimitDecision`.
-- [ ] Keep rule resolution unchanged.
-- [ ] Add tests:
+- [x] Map `tokio-rate-limit` decisions to `RateLimitDecision`.
+- [x] Keep rule resolution unchanged.
+- [x] Add tests:
   - sign-in special rule still denies the 4th request;
   - custom wildcard rule still wins;
   - dynamic rule still wins;
@@ -133,12 +133,12 @@ References: [tokio-rate-limit docs](https://docs.rs/tokio-rate-limit/latest/toki
 - Test: `crates/openauth-core/tests/api/main.rs`
 - Test: `crates/openauth-core/tests/rate_limit/rate_limiter.rs`
 
-- [ ] Replace the current `on_request_rate_limit` + `on_response_rate_limit` split with one async `consume_rate_limit`.
-- [ ] In `handle_async`, call `consume_rate_limit` before endpoint middleware reaches the endpoint handler.
-- [ ] Remove response-time counter increments for async routing.
-- [ ] Keep disabled paths from touching rate limit storage.
-- [ ] If `handler()` cannot support the configured backend, return `OpenAuthError::Api("async rate limit storage requires AuthRouter::handle_async")`.
-- [ ] Add tests for:
+- [x] Replace the current `on_request_rate_limit` + `on_response_rate_limit` split with one async `consume_rate_limit`.
+- [x] In `handle_async`, call `consume_rate_limit` before endpoint middleware reaches the endpoint handler.
+- [x] Remove response-time counter increments for async routing.
+- [x] Keep disabled paths from touching rate limit storage.
+- [x] If `handler()` cannot support the configured backend, return `OpenAuthError::Api("async rate limit storage requires AuthRouter::handle_async")`.
+- [x] Add tests for:
   - denied request does not call endpoint handler;
   - disabled path does not consume a token;
   - sync handler error is explicit for async-only backend;
@@ -155,20 +155,20 @@ References: [tokio-rate-limit docs](https://docs.rs/tokio-rate-limit/latest/toki
 - Test: `crates/openauth-sqlx/tests/postgres_adapter.rs`
 - Test: `crates/openauth-sqlx/tests/mysql_adapter.rs`
 
-- [ ] Add `SqliteRateLimitStore`, `PostgresRateLimitStore`, and `MySqlRateLimitStore`.
-- [ ] Do not add SQLx to `openauth-core`; stores live entirely in `openauth-sqlx`.
-- [ ] Use existing `rate_limits` table shape: `key`, `count`, `last_request`.
-- [ ] Implement one atomic consume operation per database:
+- [x] Add `SqliteRateLimitStore`, `PostgresRateLimitStore`, and `MySqlRateLimitStore`.
+- [x] Do not add SQLx to `openauth-core`; stores live entirely in `openauth-sqlx`.
+- [x] Use existing `rate_limits` table shape: `key`, `count`, `last_request`.
+- [x] Implement one atomic consume operation per database:
   - reset count to `1` when `now_ms - last_request > window_ms`;
   - increment only when current count is below `max`;
   - do not increment denied requests;
   - return retry metadata from stored `last_request`.
-- [ ] Use native SQL per backend:
+- [x] Use native SQL per backend:
   - SQLite: transaction plus upsert/update returning behavior compatible with SQLite support.
   - Postgres: `INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING`.
   - MySQL: transaction with row lock or atomic upsert equivalent.
-- [ ] Add tests that simulate two concurrent requests against `max = 1`; exactly one must pass.
-- [ ] Add tests that verify the SQLx backend works through `OpenAuth::handler_async`.
+- [x] Add tests that simulate two concurrent requests against `max = 1`; exactly one must pass.
+- [x] Add tests that verify the SQLx backend works through `OpenAuth::handler_async`.
 
 ### Task 6: Add Redis Atomic Backend
 
@@ -178,21 +178,21 @@ References: [tokio-rate-limit docs](https://docs.rs/tokio-rate-limit/latest/toki
 - Create: `crates/openauth-redis/src/lib.rs`
 - Test: `crates/openauth-redis/tests/redis_rate_limit.rs`
 
-- [ ] Add workspace member `crates/openauth-redis`.
-- [ ] Add dependency only in this crate:
+- [x] Add workspace member `crates/openauth-redis`.
+- [x] Add dependency only in this crate:
   ```toml
   redis = { version = "0.32", default-features = false, features = ["tokio-comp", "connection-manager"] }
   ```
-- [ ] Implement `RedisRateLimitStore`.
-- [ ] Use a Redis Lua script for atomic consume:
+- [x] Implement `RedisRateLimitStore`.
+- [x] Use a Redis Lua script for atomic consume:
   - read `count` and `last_request`;
   - reset expired buckets;
   - increment only when allowed;
   - preserve denied bucket state;
   - set `PEXPIRE` to `window_ms`.
-- [ ] Use key prefix `openauth:` by default, configurable as `RedisRateLimitOptions { key_prefix }`.
-- [ ] Add Redis tests gated behind an env var such as `OPENAUTH_REDIS_URL`; skip cleanly when not set.
-- [ ] Add one test for atomic concurrency with `max = 1`.
+- [x] Use key prefix `openauth:` by default, configurable as `RedisRateLimitOptions { key_prefix }`.
+- [x] Add Redis tests gated behind an env var such as `OPENAUTH_REDIS_URL`; skip cleanly when not set.
+- [x] Add one test for atomic concurrency with `max = 1`.
 
 ### Task 7: Add Hybrid Local + Distributed Mode
 
@@ -201,21 +201,21 @@ References: [tokio-rate-limit docs](https://docs.rs/tokio-rate-limit/latest/toki
 - Modify: `crates/openauth-core/src/rate_limit.rs`
 - Test: `crates/openauth-core/tests/rate_limit/rate_limiter.rs`
 
-- [ ] Add:
+- [x] Add:
   ```rust
   pub struct HybridRateLimitOptions {
       pub enabled: bool,
       pub local_multiplier: u64,
   }
   ```
-- [ ] Add `hybrid: HybridRateLimitOptions` to `RateLimitOptions`, default disabled.
-- [ ] Implement `HybridRateLimitStore`:
+- [x] Add `hybrid: HybridRateLimitOptions` to `RateLimitOptions`, default disabled.
+- [x] Implement `HybridRateLimitStore`:
   - local Tokio store runs first as a prefilter;
   - distributed store runs second and remains authoritative;
   - if local denies, return local denial;
   - if global denies, return global denial.
-- [ ] Default `local_multiplier = 2`, meaning the local prefilter allows twice the global rule before denying, reducing false local denials while still shedding bursts.
-- [ ] Add tests:
+- [x] Default `local_multiplier = 2`, meaning the local prefilter allows twice the global rule before denying, reducing false local denials while still shedding bursts.
+- [x] Add tests:
   - local denial stops before global store is called;
   - global denial is returned when local permits;
   - hybrid disabled preserves direct distributed behavior.
@@ -228,14 +228,14 @@ References: [tokio-rate-limit docs](https://docs.rs/tokio-rate-limit/latest/toki
 - Modify: `README.md`
 - Test: `crates/openauth/tests/public_api.rs`
 
-- [ ] Re-export new decision/store/input types from `openauth`.
-- [ ] Document recommended modes:
+- [x] Re-export new decision/store/input types from `openauth`.
+- [x] Document recommended modes:
   - local/dev/single instance: `Memory` using Tokio backend;
   - multi-instance with existing SQL DB: SQLx store;
   - high-throughput multi-instance: Redis store;
   - very high traffic: Redis or SQLx plus hybrid local prefilter.
-- [ ] Document that non-atomic custom storage is not safe for distributed enforcement unless the implementation's `consume` method is atomic.
-- [ ] Add public API tests for new reexports and initialization with each backend type.
+- [x] Document that non-atomic custom storage is not safe for distributed enforcement unless the implementation's `consume` method is atomic.
+- [x] Add public API tests for new reexports and initialization with backend stores.
 
 ### Task 9: Remove Or Deprecate Legacy `get`/`set` Behavior
 
@@ -244,14 +244,14 @@ References: [tokio-rate-limit docs](https://docs.rs/tokio-rate-limit/latest/toki
 - Modify: `crates/openauth-core/src/rate_limit.rs`
 - Test: `crates/openauth-core/tests/context/runtime.rs`
 
-- [ ] If backward compatibility is required, keep legacy `RateLimitStorage` behind `LegacyRateLimitStorageAdapter`.
-- [ ] Mark it as non-distributed-safe in docs and debug output.
-- [ ] Prefer new `custom_store: Option<Arc<dyn RateLimitStore>>`.
-- [ ] Keep `storage: RateLimitStorageOption` for user intent, but make backend availability explicit:
+- [x] If backward compatibility is required, keep legacy `RateLimitStorage` behind `LegacyRateLimitStorageAdapter`.
+- [x] Mark it as non-distributed-safe in docs and debug output.
+- [x] Prefer new `custom_store: Option<Arc<dyn RateLimitStore>>`.
+- [x] Keep `storage: RateLimitStorageOption` for user intent, but make backend availability explicit:
   - `Memory` always available;
   - `Database` requires a concrete SQLx store or future DbAdapter-backed store;
   - `SecondaryStorage` requires a concrete Redis/secondary atomic store.
-- [ ] Add config tests that reject `Database` and `SecondaryStorage` without a concrete store.
+- [x] Add config tests that reject `Database` and `SecondaryStorage` without a concrete store.
 
 ## Test Plan
 

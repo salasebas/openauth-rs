@@ -14,8 +14,10 @@ use openauth_core::db::{
     SortDirection, TableOptions, Update, Where, WhereOperator,
 };
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
-use openauth_sqlx::PostgresAdapter;
+use openauth_core::options::{
+    AdvancedOptions, OpenAuthOptions, RateLimitConsumeInput, RateLimitRule, RateLimitStore,
+};
+use openauth_sqlx::{PostgresAdapter, PostgresRateLimitStore};
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use time::OffsetDateTime;
@@ -30,7 +32,7 @@ fn database_url() -> String {
 async fn adapter() -> Result<PostgresAdapter, OpenAuthError> {
     let schema = test_schema();
     let pool = PgPoolOptions::new()
-        .max_connections(1)
+        .max_connections(5)
         .connect(&database_url())
         .await
         .map_err(sql_error)?;
@@ -216,6 +218,34 @@ async fn postgres_adapter_reports_public_capabilities() -> Result<(), OpenAuthEr
             .with_joins()
             .with_transactions()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn postgres_rate_limit_store_allows_exactly_one_concurrent_request(
+) -> Result<(), OpenAuthError> {
+    let adapter = adapter().await?;
+    let store = PostgresRateLimitStore::from(&adapter);
+    let rule = RateLimitRule { window: 60, max: 1 };
+    let key = "127.0.0.1|/concurrent".to_owned();
+    let first = RateLimitConsumeInput {
+        key: key.clone(),
+        rule: rule.clone(),
+        now_ms: 1_700_000_000_000,
+    };
+    let second = RateLimitConsumeInput {
+        key,
+        rule,
+        now_ms: 1_700_000_000_000,
+    };
+
+    let (first, second) = tokio::join!(store.consume(first), store.consume(second));
+    let permitted = [first?, second?]
+        .into_iter()
+        .filter(|decision| decision.permitted)
+        .count();
+
+    assert_eq!(permitted, 1);
     Ok(())
 }
 
