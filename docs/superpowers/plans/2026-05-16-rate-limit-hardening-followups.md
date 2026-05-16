@@ -28,7 +28,7 @@
 - [x] Derive `AuthSchemaOptions.rate_limit_storage` from `OpenAuthOptions.rate_limit.storage`.
 - [x] Add a public API test that builds `OpenAuth` with `RateLimitOptions::database(...)`, calls `create_schema(None)`, and verifies the schema includes the rate limit table.
 - [x] Run `cargo test -p openauth --test public_api`.
-- [ ] Commit: `fix(core): include rate limit table for database store`.
+- [x] Commit: `fix(core): include rate limit table for database store`.
 
 ## Task 2: Respect SQLx Physical Rate Limit Columns
 
@@ -46,7 +46,7 @@
 - [x] Update SQL statements to use resolved physical column names.
 - [x] Add custom physical column tests for SQLite, Postgres, and MySQL.
 - [x] Run `cargo test -p openauth-sqlx --all-features`.
-- [ ] Commit: `fix(sqlx): honor rate limit physical columns`.
+- [x] Commit: `fix(sqlx): honor rate limit physical columns`.
 
 ## Task 3: Remove Redis Per-Store Mutex
 
@@ -59,7 +59,7 @@
 - [x] Keep Lua script as the only atomicity mechanism.
 - [x] Add or update the concurrent test so calls share one store but are not serialized by a store mutex.
 - [x] Run `cargo test -p openauth-redis`.
-- [ ] Commit: `perf(redis): avoid serializing rate limit consumes`.
+- [x] Commit: `perf(redis): avoid serializing rate limit consumes`.
 
 ## Task 4: Fix Tokio Memory Retry Metadata
 
@@ -70,7 +70,7 @@
 - [x] Replace duration truncation with ceiling seconds for positive durations.
 - [x] Add a focused test that a denied memory request never returns `X-Retry-After: 0`.
 - [x] Run `cargo test -p openauth-core --test rate_limit`.
-- [ ] Commit: `fix(core): ceil memory rate limit retry seconds`.
+- [x] Commit: `fix(core): ceil memory rate limit retry seconds`.
 
 ## Task 5: Add Memory Backend Idle TTL
 
@@ -85,7 +85,7 @@
 - [x] Build local limiters with `tokio_rate_limit::algorithm::TokenBucket::with_ttl`.
 - [x] Add public builder coverage for configuring the TTL.
 - [x] Run core and public API rate limit tests.
-- [ ] Commit: `feat(core): evict idle memory rate limit keys`.
+- [x] Commit: `feat(core): evict idle memory rate limit keys`.
 
 ## Task 6: Modularize Hot Files If Still Worth It
 
@@ -94,14 +94,14 @@
 - Modify/Create under `crates/openauth-sqlx/src/*/rate_limit.rs`
 - Modify/Create under `crates/openauth/tests/`
 
-- [ ] Re-evaluate file sizes after functional fixes.
-- [ ] Split only if the module boundaries are obvious and tests stay simple.
-- [ ] Run full workspace verification.
-- [ ] Commit any split separately as `refactor(...)`.
+- [x] Re-evaluate file sizes after functional fixes.
+- [x] Split only if the module boundaries are obvious and tests stay simple.
+- [x] Run full workspace verification.
+- [x] Commit any split separately as `refactor(...)`.
 
 ## Verification
 
-- [ ] `cargo fmt --check`
-- [ ] `cargo check --workspace --all-features`
-- [ ] `cargo clippy --workspace --all-targets --all-features`
-- [ ] `cargo test --workspace --all-features`
+- [x] `cargo fmt --check`
+- [x] `cargo check --workspace --all-features`
+- [x] `cargo clippy --workspace --all-targets --all-features`
+- [x] `cargo test --workspace --all-features`
