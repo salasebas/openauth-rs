@@ -181,17 +181,21 @@ References: [Governor docs](https://docs.rs/governor/latest/governor/), upstream
 - [x] Add workspace member `crates/openauth-redis`.
 - [x] Add dependency only in this crate:
   ```toml
-  redis = { version = "0.32", default-features = false, features = ["tokio-comp", "connection-manager"] }
+  redis = { version = "0.32", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
   ```
 - [x] Implement `RedisRateLimitStore`.
+- [x] Document Redis/Valkey compatibility through `redis-rs`, RESP, Lua scripting, and core Redis-compatible commands.
+- [x] Accept `valkey://` and `valkeys://` as aliases for `redis://` and `rediss://` before passing URLs to `redis-rs`.
+- [x] Keep Redis access async-first through `redis::aio::ConnectionManager` and async script invocation.
 - [x] Use a Redis Lua script for atomic consume:
   - read `count` and `last_request`;
   - reset expired buckets;
   - increment only when allowed;
   - preserve denied bucket state;
   - set `PEXPIRE` to `window_ms`.
+- [x] Use `HSET` instead of deprecated `HMSET` for hash writes.
 - [x] Use key prefix `openauth:` by default, configurable as `RedisRateLimitOptions { key_prefix }`.
-- [x] Add Redis tests gated behind an env var such as `OPENAUTH_REDIS_URL`; skip cleanly when not set.
+- [x] Add Redis/Valkey tests for `OPENAUTH_REDIS_URL`, `OPENAUTH_VALKEY_URL`, both together, and the local Docker Compose Redis default when neither is set.
 - [x] Add one test for atomic concurrency with `max = 1`.
 
 ### Task 7: Add Hybrid Local + Distributed Mode
@@ -267,6 +271,14 @@ References: [Governor docs](https://docs.rs/governor/latest/governor/), upstream
 - Run Redis tests only when Redis is available:
   ```bash
   OPENAUTH_REDIS_URL=redis://127.0.0.1:6379 cargo test -p openauth-redis
+  ```
+- Run Valkey-compatible tests when Valkey is available:
+  ```bash
+  OPENAUTH_VALKEY_URL=valkey://127.0.0.1:6379 cargo test -p openauth-redis
+  ```
+- Run both Redis and Valkey targets in one pass when both are available:
+  ```bash
+  OPENAUTH_REDIS_URL=redis://127.0.0.1:6379 OPENAUTH_VALKEY_URL=valkey://127.0.0.1:6379 cargo test -p openauth-redis
   ```
 - Run full workspace:
   ```bash

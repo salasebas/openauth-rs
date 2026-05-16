@@ -1,4 +1,11 @@
 //! Redis-backed integrations for OpenAuth.
+//!
+//! The rate limit store uses `redis-rs` with the async
+//! `redis::aio::ConnectionManager`, RESP-compatible Redis or Valkey servers,
+//! Lua scripting for atomic consume decisions, and core commands that are
+//! shared by Redis and Valkey.
+
+use std::borrow::Cow;
 
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
@@ -18,7 +25,7 @@ local count = tonumber(data[1])
 local last_request = tonumber(data[2])
 
 if count == nil or last_request == nil or (now - last_request) > window then
-  redis.call("HMSET", key, "count", 1, "last_request", now)
+  redis.call("HSET", key, "count", 1, "last_request", now)
   redis.call("PEXPIRE", key, window)
   return {1, 1, now}
 end
@@ -29,7 +36,7 @@ if count >= max then
 end
 
 count = count + 1
-redis.call("HMSET", key, "count", count, "last_request", now)
+redis.call("HSET", key, "count", count, "last_request", now)
 redis.call("PEXPIRE", key, window)
 return {1, count, now}
 "#;
@@ -55,7 +62,8 @@ pub struct RedisRateLimitStore {
 
 impl RedisRateLimitStore {
     pub async fn connect(redis_url: &str) -> Result<Self, OpenAuthError> {
-        let client = redis::Client::open(redis_url)
+        let redis_url = normalize_redis_url(redis_url);
+        let client = redis::Client::open(redis_url.as_ref())
             .map_err(|error| OpenAuthError::Adapter(error.to_string()))?;
         let manager = ConnectionManager::new(client)
             .await
@@ -70,6 +78,16 @@ impl RedisRateLimitStore {
     fn key(&self, key: &str) -> String {
         format!("{}rate-limit:{key}", self.options.key_prefix)
     }
+}
+
+fn normalize_redis_url(redis_url: &str) -> Cow<'_, str> {
+    if let Some(rest) = redis_url.strip_prefix("valkey://") {
+        return Cow::Owned(format!("redis://{rest}"));
+    }
+    if let Some(rest) = redis_url.strip_prefix("valkeys://") {
+        return Cow::Owned(format!("rediss://{rest}"));
+    }
+    Cow::Borrowed(redis_url)
 }
 
 impl RateLimitStore for RedisRateLimitStore {
@@ -117,3 +135,42 @@ fn ceil_millis_to_seconds(milliseconds: i64) -> u64 {
 
 /// Current crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_valkey_urls_to_redis_urls() {
+        assert_eq!(
+            normalize_redis_url("valkey://localhost:6379").as_ref(),
+            "redis://localhost:6379"
+        );
+        assert_eq!(
+            normalize_redis_url("valkeys://localhost:6380").as_ref(),
+            "rediss://localhost:6380"
+        );
+    }
+
+    #[test]
+    fn leaves_non_valkey_urls_unchanged() {
+        assert_eq!(
+            normalize_redis_url("redis://localhost:6379").as_ref(),
+            "redis://localhost:6379"
+        );
+        assert_eq!(
+            normalize_redis_url("rediss://localhost:6380").as_ref(),
+            "rediss://localhost:6380"
+        );
+        assert_eq!(
+            normalize_redis_url("unix:///tmp/redis.sock").as_ref(),
+            "unix:///tmp/redis.sock"
+        );
+    }
+
+    #[test]
+    fn rate_limit_script_uses_current_hash_set_command() {
+        assert!(RATE_LIMIT_SCRIPT.contains("HSET"));
+        assert!(!RATE_LIMIT_SCRIPT.contains("HMSET"));
+    }
+}

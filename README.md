@@ -24,10 +24,15 @@ let auth = OpenAuth::builder()
 
 For multi-instance deployments, use a distributed `RateLimitStore` instead of
 local memory. `openauth-sqlx` provides SQLx-backed stores when the application
-already depends on a SQL database, and `openauth-redis` provides a Redis-backed
-store for higher-throughput shared enforcement. Very high traffic deployments
-can opt into hybrid mode, which runs a local Governor prefilter before the SQLx or
-Redis store while keeping the distributed decision authoritative.
+already depends on a SQL database, and `openauth-redis` provides a Redis/Valkey
+store for higher-throughput shared enforcement. The Redis/Valkey store uses
+`redis-rs`, RESP-compatible servers, Lua scripting for the atomic consume
+operation, and core commands shared by Redis and Valkey. It is async-first via
+`redis::aio::ConnectionManager`; `valkey://` and `valkeys://` URLs are accepted
+as aliases for `redis://` and `rediss://` before connecting. Very high traffic
+deployments can opt into hybrid mode, which runs a local Governor prefilter
+before the SQLx or Redis/Valkey store while keeping the distributed decision
+authoritative.
 
 ```rust
 use openauth::{HybridRateLimitOptions, OpenAuth, RateLimitOptions};
