@@ -41,6 +41,19 @@ services:
       timeout: 5s
       retries: 10
 
+  valkey:
+    image: valkey/valkey:latest
+    container_name: openauth-valkey
+    ports:
+      - "6380:6379"
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
   postgres:
     <<: *postgres-healthcheck
     image: postgres:latest
@@ -88,6 +101,7 @@ services:
 volumes:
   mongodb_data:
   redis_data:
+  valkey_data:
   postgres_data:
   mysql_data:
   mssql_data:

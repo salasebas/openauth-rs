@@ -8,6 +8,7 @@ members = [
     "crates/openauth-oauth",
     "crates/openauth-oauth-provider",
     "crates/openauth-plugins",
+    "crates/openauth-fred",
     "crates/openauth-redis",
     "crates/openauth-scim",
     "crates/openauth-sqlx",

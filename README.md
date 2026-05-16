@@ -25,14 +25,14 @@ let auth = OpenAuth::builder()
 For multi-instance deployments, use a distributed `RateLimitStore` instead of
 local memory. `openauth-sqlx` provides SQLx-backed stores when the application
 already depends on a SQL database, and `openauth-redis` provides a Redis/Valkey
-store for higher-throughput shared enforcement. The Redis/Valkey store uses
-`redis-rs`, RESP-compatible servers, Lua scripting for the atomic consume
-operation, and core commands shared by Redis and Valkey. It is async-first via
-`redis::aio::ConnectionManager`; `valkey://` and `valkeys://` URLs are accepted
-as aliases for `redis://` and `rediss://` before connecting. Very high traffic
-deployments can opt into hybrid mode, which runs a local Governor prefilter
-before the SQLx or Redis/Valkey store while keeping the distributed decision
-authoritative.
+store for higher-throughput shared enforcement. `openauth-fred` provides the
+same rate-limit storage contract for projects that prefer the `fred` client.
+Both Redis crates use RESP-compatible servers, Lua scripting for the atomic
+consume operation, and core commands shared by Redis and Valkey. `valkey://`
+and `valkeys://` URLs are accepted as aliases for `redis://` and `rediss://`
+before connecting. Very high traffic deployments can opt into hybrid mode,
+which runs a local Governor prefilter before the SQLx or Redis/Valkey store
+while keeping the distributed decision authoritative.
 
 ```rust
 use openauth::{HybridRateLimitOptions, OpenAuth, RateLimitOptions};
@@ -44,6 +44,25 @@ let auth = OpenAuth::builder()
             .window(60)
             .max(100)
             .hybrid(HybridRateLimitOptions::enabled().local_multiplier(2)),
+    )
+    .build()?;
+```
+
+Using Fred directly:
+
+```rust
+use openauth::{OpenAuth, RateLimitOptions};
+use openauth_fred::FredRateLimitStore;
+
+let store = FredRateLimitStore::connect_valkey("valkey://127.0.0.1:6379").await?;
+
+let auth = OpenAuth::builder()
+    .secret("secret-a-at-least-32-chars-long!!")
+    .rate_limit(
+        RateLimitOptions::secondary_storage(store)
+            .enabled(true)
+            .window(60)
+            .max(100),
     )
     .build()?;
 ```

@@ -45,7 +45,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Start database services
-        run: docker compose up -d --wait postgres mysql
+        run: docker compose up -d --wait redis valkey postgres mysql
 
       - name: Verify tests
         run: cargo test --workspace --all-features
@@ -73,6 +73,7 @@ jobs:
             openauth-sso
             openauth-stripe
             openauth-telemetry
+            openauth-fred
             openauth
           )
 
