@@ -54,11 +54,11 @@
 - Modify: `crates/openauth-redis/src/lib.rs`
 - Test: `crates/openauth-redis/tests/redis_rate_limit.rs`
 
-- [ ] Store `ConnectionManager` directly instead of `Arc<Mutex<ConnectionManager>>`.
-- [ ] Clone the manager per consume call before invoking the Lua script.
-- [ ] Keep Lua script as the only atomicity mechanism.
-- [ ] Add or update the concurrent test so calls share one store but are not serialized by a store mutex.
-- [ ] Run `cargo test -p openauth-redis`.
+- [x] Store `ConnectionManager` directly instead of `Arc<Mutex<ConnectionManager>>`.
+- [x] Clone the manager per consume call before invoking the Lua script.
+- [x] Keep Lua script as the only atomicity mechanism.
+- [x] Add or update the concurrent test so calls share one store but are not serialized by a store mutex.
+- [x] Run `cargo test -p openauth-redis`.
 - [ ] Commit: `perf(redis): avoid serializing rate limit consumes`.
 
 ## Task 4: Fix Tokio Memory Retry Metadata

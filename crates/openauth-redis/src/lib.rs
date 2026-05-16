@@ -6,8 +6,6 @@ use openauth_core::options::{
 };
 use redis::aio::ConnectionManager;
 use redis::Script;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 const RATE_LIMIT_SCRIPT: &str = r#"
 local key = KEYS[1]
@@ -51,7 +49,7 @@ impl Default for RedisRateLimitOptions {
 
 #[derive(Clone)]
 pub struct RedisRateLimitStore {
-    manager: Arc<Mutex<ConnectionManager>>,
+    manager: ConnectionManager,
     options: RedisRateLimitOptions,
 }
 
@@ -66,10 +64,7 @@ impl RedisRateLimitStore {
     }
 
     pub fn new(manager: ConnectionManager, options: RedisRateLimitOptions) -> Self {
-        Self {
-            manager: Arc::new(Mutex::new(manager)),
-            options,
-        }
+        Self { manager, options }
     }
 
     fn key(&self, key: &str) -> String {
@@ -82,13 +77,13 @@ impl RateLimitStore for RedisRateLimitStore {
         Box::pin(async move {
             let redis_key = self.key(&input.key);
             let window_ms = input.rule.window.saturating_mul(1000);
-            let mut manager = self.manager.lock().await;
+            let mut manager = self.manager.clone();
             let result: (i64, i64, i64) = Script::new(RATE_LIMIT_SCRIPT)
                 .key(redis_key)
                 .arg(input.now_ms)
                 .arg(window_ms as i64)
                 .arg(input.rule.max as i64)
-                .invoke_async(&mut *manager)
+                .invoke_async(&mut manager)
                 .await
                 .map_err(|error| OpenAuthError::Adapter(error.to_string()))?;
             let permitted = result.0 == 1;
