@@ -98,6 +98,34 @@ async fn openauth_url_sets_production_redirect_uri() -> Result<(), Box<dyn std::
 }
 
 #[tokio::test]
+async fn production_redirect_uri_falls_back_to_context_base_url_without_env(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _env = TestEnv::set([]).await;
+    let router = router(
+        Arc::new(MemoryAdapter::default()),
+        "https://login.example.com/api/auth",
+        OAuthProxyOptions::new(),
+    )?;
+
+    let sign_in = router
+        .handle_async(json_request(
+            Method::POST,
+            "http://preview.example.com/api/auth/sign-in/social",
+            r#"{"provider":"google","callbackURL":"/dashboard"}"#,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(sign_in.body())?;
+    let provider_url = body["url"].as_str().ok_or("missing provider url")?;
+
+    assert_eq!(
+        query_value(provider_url, "redirect_uri").as_deref(),
+        Some("https://login.example.com/api/auth/callback/google")
+    );
+    assert!(query_value(provider_url, "state").is_some());
+    Ok(())
+}
+
+#[tokio::test]
 async fn openauth_url_is_used_for_token_exchange_redirect_uri(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let _env = TestEnv::set([("OPENAUTH_URL", "https://login.example.com")]).await;

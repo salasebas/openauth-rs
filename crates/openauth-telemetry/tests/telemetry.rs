@@ -86,6 +86,23 @@ impl TelemetryHttpTransport for CountingTransport {
     }
 }
 
+struct CapturingTransport {
+    posts: Arc<AtomicUsize>,
+    urls: Arc<Mutex<Vec<String>>>,
+}
+
+impl TelemetryHttpTransport for CapturingTransport {
+    fn post_json<'a>(
+        &'a self,
+        url: &'a str,
+        _body: &'a serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = Result<(), TelemetryHttpError>> + Send + 'a>> {
+        self.posts.fetch_add(1, Ordering::SeqCst);
+        self.urls.lock().expect("lock").push(url.to_owned());
+        Box::pin(async move { Ok(()) })
+    }
+}
+
 fn upstream_style_hooks() -> TelemetryTestHooks {
     TelemetryTestHooks {
         anonymous_id: Some("anon-123".into()),
@@ -116,8 +133,8 @@ fn upstream_style_hooks() -> TelemetryTestHooks {
             "isCI": false,
         })),
         package_manager: Some(Some(DetectionInfo {
-            name: "pnpm".into(),
-            version: "9.0.0".into(),
+            name: "cargo".into(),
+            version: "1.85.0".into(),
         })),
     }
 }
@@ -185,7 +202,7 @@ async fn publishes_init_when_enabled() {
             "runtime": { "name": "node", "version": "test" },
             "database": { "name": "postgresql", "version": "1.0.0" },
             "framework": { "name": "next", "version": "15.0.0" },
-            "packageManager": { "name": "pnpm", "version": "9.0.0" },
+            "packageManager": { "name": "cargo", "version": "1.85.0" },
         }),
         "payload",
     );
@@ -388,6 +405,91 @@ async fn noop_skips_http_transport_when_no_endpoint_and_no_custom_sink() {
 
     let options = OpenAuthOptions {
         base_url: Some("http://localhost".into()),
+        telemetry: TelemetryOptions {
+            enabled: Some(true),
+            debug: false,
+        },
+        ..Default::default()
+    };
+
+    let publisher = create_telemetry(
+        &options,
+        TelemetryContext {
+            skip_test_check: true,
+            http_transport: Some(transport),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    publisher
+        .publish(TelemetryEvent {
+            event_type: "test-event".into(),
+            anonymous_id: None,
+            payload: json!({ "test": "data" }),
+        })
+        .await;
+
+    assert_eq!(posts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn endpoint_env_posts_init_to_configured_collector() {
+    let _guard = telemetry_env_lock().lock().await;
+    let _teardown = EnvRestore::unset(&["OPENAUTH_TELEMETRY", "OPENAUTH_TELEMETRY_ENDPOINT"]);
+    std::env::set_var(
+        "OPENAUTH_TELEMETRY_ENDPOINT",
+        "https://collector.example.com/track",
+    );
+
+    let posts = Arc::new(AtomicUsize::new(0));
+    let urls = Arc::new(Mutex::new(Vec::new()));
+    let transport: Arc<dyn TelemetryHttpTransport> = Arc::new(CapturingTransport {
+        posts: posts.clone(),
+        urls: urls.clone(),
+    });
+
+    let options = OpenAuthOptions {
+        base_url: Some("https://app.example.com".into()),
+        telemetry: TelemetryOptions {
+            enabled: Some(true),
+            debug: false,
+        },
+        ..Default::default()
+    };
+
+    create_telemetry(
+        &options,
+        TelemetryContext {
+            skip_test_check: true,
+            http_transport: Some(transport),
+            test_hooks: Some(upstream_style_hooks()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(posts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        urls.lock().expect("lock").clone(),
+        vec!["https://collector.example.com/track".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn empty_endpoint_env_is_treated_as_missing_endpoint() {
+    let _guard = telemetry_env_lock().lock().await;
+    let _teardown = EnvRestore::unset(&["OPENAUTH_TELEMETRY", "OPENAUTH_TELEMETRY_ENDPOINT"]);
+    std::env::set_var("OPENAUTH_TELEMETRY_ENDPOINT", "");
+
+    let posts = Arc::new(AtomicUsize::new(0));
+    let transport: Arc<dyn TelemetryHttpTransport> = Arc::new(CountingTransport {
+        posts: posts.clone(),
+    });
+
+    let options = OpenAuthOptions {
+        base_url: Some("https://app.example.com".into()),
         telemetry: TelemetryOptions {
             enabled: Some(true),
             debug: false,

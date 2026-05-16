@@ -112,6 +112,85 @@ fn is_wsl() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    const VENDOR_KEYS: &[&str] = &[
+        "CF_PAGES",
+        "CF_PAGES_URL",
+        "CF_ACCOUNT_ID",
+        "VERCEL",
+        "VERCEL_URL",
+        "VERCEL_ENV",
+        "NETLIFY",
+        "NETLIFY_URL",
+        "RENDER",
+        "RENDER_URL",
+        "RENDER_INTERNAL_HOSTNAME",
+        "RENDER_SERVICE_ID",
+        "AWS_LAMBDA_FUNCTION_NAME",
+        "AWS_EXECUTION_ENV",
+        "LAMBDA_TASK_ROOT",
+        "GOOGLE_CLOUD_FUNCTION_NAME",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCP_PROJECT",
+        "K_SERVICE",
+        "AZURE_FUNCTION_NAME",
+        "FUNCTIONS_WORKER_RUNTIME",
+        "WEBSITE_INSTANCE_ID",
+        "WEBSITE_SITE_NAME",
+        "DENO_DEPLOYMENT_ID",
+        "DENO_REGION",
+        "FLY_APP_NAME",
+        "FLY_REGION",
+        "FLY_ALLOC_ID",
+        "RAILWAY_STATIC_URL",
+        "RAILWAY_ENVIRONMENT_NAME",
+        "DYNO",
+        "HEROKU_APP_NAME",
+        "DO_DEPLOYMENT_ID",
+        "DO_APP_NAME",
+        "DIGITALOCEAN",
+        "KOYEB",
+        "KOYEB_DEPLOYMENT_ID",
+        "KOYEB_APP_NAME",
+    ];
+
+    struct EnvRestore(Vec<(&'static str, Option<String>)>);
+
+    impl EnvRestore {
+        fn unset(keys: &[&'static str]) -> Self {
+            let saved = keys
+                .iter()
+                .map(|key| (*key, std::env::var(key).ok()))
+                .collect::<Vec<_>>();
+            for key in keys {
+                std::env::remove_var(key);
+            }
+            Self(saved)
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn lock_env() -> MutexGuard<'static, ()> {
+        env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn system_info_reports_available_rust_host_fields() {
@@ -121,5 +200,23 @@ mod tests {
         assert_eq!(info["systemArchitecture"], std::env::consts::ARCH);
         assert!(info["cpuCount"].as_u64().is_some());
         assert!(info["isTTY"].as_bool().is_some());
+    }
+
+    #[test]
+    fn deployment_vendor_is_none_without_vendor_env() {
+        let _guard = lock_env();
+        let _restore = EnvRestore::unset(VENDOR_KEYS);
+
+        assert_eq!(deployment_vendor(), None);
+    }
+
+    #[test]
+    fn deployment_vendor_detects_mocked_vercel_env() {
+        let _guard = lock_env();
+        let _restore = EnvRestore::unset(VENDOR_KEYS);
+        std::env::set_var("VERCEL_URL", "preview.example.com");
+
+        assert_eq!(deployment_vendor(), Some("vercel"));
+        assert_eq!(detect_system_info()["deploymentVendor"], "vercel");
     }
 }
