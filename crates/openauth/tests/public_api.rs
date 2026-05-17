@@ -160,6 +160,14 @@ fn option_builders_cover_common_nested_configuration() {
     assert_eq!(options.rate_limit.window, 60);
 }
 
+#[cfg(feature = "passkey")]
+#[test]
+fn passkey_feature_reexports_passkey_crate() {
+    let plugin = openauth::passkey::passkey(openauth::passkey::PasskeyOptions::default());
+
+    assert_eq!(plugin.id, "passkey");
+}
+
 #[test]
 fn option_builder_aliases_match_new_constructors() {
     let options = OpenAuthOptions::builder().rate_limit(

@@ -1,0 +1,34 @@
+[package]
+name = "openauth-passkey"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/openauth-passkey"
+readme = "README.md"
+description = "Server-side passkey plugin for OpenAuth."
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+http.workspace = true
+indexmap.workspace = true
+openauth-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+url.workspace = true
+uuid.workspace = true
+webauthn-rs.workspace = true
+
+[dev-dependencies]
+openauth-sqlx = { workspace = true, features = ["sqlite"] }
+sqlx.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
