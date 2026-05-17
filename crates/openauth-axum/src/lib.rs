@@ -1,15 +1,17 @@
 //! Axum integration for OpenAuth.
 
 use std::error::Error as _;
+use std::net::SocketAddr;
 
 use axum::body::{to_bytes, Body};
+use axum::extract::ConnectInfo;
 use axum::extract::State;
 use axum::http::{header, Request, Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::any;
 use axum::Router;
 use http_body_util::LengthLimitError;
-use openauth::{ApiErrorResponse, ApiRequest, OpenAuth, OpenAuthError};
+use openauth::{ApiErrorResponse, ApiRequest, OpenAuth, OpenAuthError, RequestClientIp};
 
 const DEFAULT_BODY_LIMIT: usize = 10 * 1024 * 1024;
 
@@ -18,6 +20,7 @@ const DEFAULT_BODY_LIMIT: usize = 10 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenAuthAxumOptions {
     body_limit: usize,
+    use_connect_info_for_ip: bool,
 }
 
 impl OpenAuthAxumOptions {
@@ -32,8 +35,19 @@ impl OpenAuthAxumOptions {
     }
 
     #[must_use]
+    pub fn use_connect_info_for_ip(mut self, enabled: bool) -> Self {
+        self.use_connect_info_for_ip = enabled;
+        self
+    }
+
+    #[must_use]
     pub fn request_body_limit(&self) -> usize {
         self.body_limit
+    }
+
+    #[must_use]
+    pub fn connect_info_for_ip_enabled(&self) -> bool {
+        self.use_connect_info_for_ip
     }
 }
 
@@ -41,6 +55,7 @@ impl Default for OpenAuthAxumOptions {
     fn default() -> Self {
         Self {
             body_limit: DEFAULT_BODY_LIMIT,
+            use_connect_info_for_ip: true,
         }
     }
 }
@@ -143,7 +158,7 @@ pub async fn handle_with_options(
     options: OpenAuthAxumOptions,
     request: Request<Body>,
 ) -> axum::response::Response {
-    match to_api_request(request, options.body_limit).await {
+    match to_api_request(request, options).await {
         Ok(request) => match auth.handler_async(request).await {
             Ok(response) => from_api_response(response),
             Err(error) => internal_error_response(error),
@@ -161,10 +176,10 @@ async fn route_handler(
 
 async fn to_api_request(
     request: Request<Body>,
-    body_limit: usize,
+    options: OpenAuthAxumOptions,
 ) -> Result<ApiRequest, axum::response::Response> {
     let (parts, body) = request.into_parts();
-    let body = to_bytes(body, body_limit)
+    let body = to_bytes(body, options.body_limit)
         .await
         .map_err(body_error_response)?
         .to_vec();
@@ -182,7 +197,22 @@ async fn to_api_request(
         .body(body)
         .map_err(|_error| bad_request_response())?;
     *request.extensions_mut() = extensions;
+    maybe_insert_client_ip(&mut request, options);
     Ok(request)
+}
+
+fn maybe_insert_client_ip(request: &mut ApiRequest, options: OpenAuthAxumOptions) {
+    if !options.use_connect_info_for_ip || request.extensions().get::<RequestClientIp>().is_some() {
+        return;
+    }
+
+    let client_ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(socket_addr)| socket_addr.ip());
+    if let Some(client_ip) = client_ip {
+        request.extensions_mut().insert(RequestClientIp(client_ip));
+    }
 }
 
 fn from_api_response(response: openauth::ApiResponse) -> axum::response::Response {

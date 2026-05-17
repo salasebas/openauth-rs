@@ -56,6 +56,7 @@ pub use openauth_core::plugin::{
     PluginPasswordValidator, PluginPasswordValidatorFuture, PluginPasswordValidatorHandler,
     PluginRateLimitRule, PluginRequestAction, PluginSchemaContribution,
 };
+pub use openauth_core::rate_limit::RequestClientIp;
 pub use openauth_core::session::{CreateSessionInput, DbSessionStore};
 pub use openauth_core::user::{
     CreateCredentialAccountInput, CreateUserInput, DbUserStore, UpdateUserInput, UserWithAccounts,

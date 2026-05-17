@@ -1,9 +1,11 @@
 mod common;
 
+use axum::extract::ConnectInfo;
 use axum::http::{header, Method, StatusCode};
 use common::*;
-use openauth::{MemoryAdapter, OpenAuthOptions, RateLimitRule};
-use openauth_axum::router;
+use openauth::{AdvancedOptions, IpAddressOptions, MemoryAdapter, OpenAuthOptions, RateLimitRule};
+use openauth_axum::{router, router_with_options, OpenAuthAxumOptions};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -67,5 +69,181 @@ async fn core_rate_limit_runs_without_axum_middleware() -> Result<(), Box<dyn st
             assert!(response.headers().contains_key("X-Retry-After"));
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn axum_rate_limit_uses_connect_info_without_ip_headers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let app = router(auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default().production(true).rate_limit(
+            openauth::RateLimitOptions::new()
+                .enabled(true)
+                .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
+        ),
+    )?)?;
+
+    let first = app
+        .clone()
+        .oneshot(request_with_connect_info(
+            Method::GET,
+            "/api/auth/ok",
+            "192.0.2.50",
+        )?)
+        .await?;
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = app
+        .oneshot(request_with_connect_info(
+            Method::GET,
+            "/api/auth/ok",
+            "192.0.2.50",
+        )?)
+        .await?;
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn axum_rate_limit_ignores_spoofed_forwarded_for_by_default(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let app = router(auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default().production(true).rate_limit(
+            openauth::RateLimitOptions::new()
+                .enabled(true)
+                .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
+        ),
+    )?)?;
+
+    let first = app
+        .clone()
+        .oneshot(request_with_connect_info_and_forwarded_for(
+            Method::GET,
+            "/api/auth/ok",
+            "192.0.2.60",
+            "203.0.113.60",
+        )?)
+        .await?;
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = app
+        .oneshot(request_with_connect_info_and_forwarded_for(
+            Method::GET,
+            "/api/auth/ok",
+            "192.0.2.60",
+            "203.0.113.61",
+        )?)
+        .await?;
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn axum_rate_limit_uses_forwarded_for_when_proxy_headers_are_configured(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let app = router(auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default()
+            .production(true)
+            .advanced(
+                AdvancedOptions::new()
+                    .ip_address(IpAddressOptions::new().headers(["x-forwarded-for"])),
+            )
+            .rate_limit(
+                openauth::RateLimitOptions::new()
+                    .enabled(true)
+                    .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
+            ),
+    )?)?;
+
+    let first = app
+        .clone()
+        .oneshot(request_with_connect_info_and_forwarded_for(
+            Method::GET,
+            "/api/auth/ok",
+            "192.0.2.70",
+            "203.0.113.70",
+        )?)
+        .await?;
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = app
+        .oneshot(request_with_connect_info_and_forwarded_for(
+            Method::GET,
+            "/api/auth/ok",
+            "192.0.2.71",
+            "203.0.113.70",
+        )?)
+        .await?;
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn axum_connect_info_ip_can_be_disabled() -> Result<(), Box<dyn std::error::Error>> {
+    let app = router_with_options(
+        auth_with_adapter(
+            MemoryAdapter::new(),
+            OpenAuthOptions::default().production(true).rate_limit(
+                openauth::RateLimitOptions::new()
+                    .enabled(true)
+                    .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
+            ),
+        )?,
+        OpenAuthAxumOptions::new().use_connect_info_for_ip(false),
+    )?;
+
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(request_with_connect_info(
+                Method::GET,
+                "/api/auth/ok",
+                "192.0.2.80",
+            )?)
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    Ok(())
+}
+
+fn request_with_connect_info(
+    method: Method,
+    path: &str,
+    client_ip: &str,
+) -> Result<axum::http::Request<axum::body::Body>, Box<dyn std::error::Error>> {
+    let mut request = request(method, path, "", None)?;
+    insert_connect_info(&mut request, client_ip)?;
+    Ok(request)
+}
+
+fn request_with_connect_info_and_forwarded_for(
+    method: Method,
+    path: &str,
+    client_ip: &str,
+    forwarded_for: &'static str,
+) -> Result<axum::http::Request<axum::body::Body>, Box<dyn std::error::Error>> {
+    let mut request = request(method, path, "", None)?.with_header(
+        header::HeaderName::from_static("x-forwarded-for"),
+        forwarded_for,
+    )?;
+    insert_connect_info(&mut request, client_ip)?;
+    Ok(request)
+}
+
+fn insert_connect_info(
+    request: &mut axum::http::Request<axum::body::Body>,
+    client_ip: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ip = IpAddr::V4(client_ip.parse::<Ipv4Addr>()?);
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::new(ip, 12345)));
     Ok(())
 }

@@ -83,7 +83,7 @@ pub struct IpAddressOptions {
 impl Default for IpAddressOptions {
     fn default() -> Self {
         Self {
-            headers: vec!["x-forwarded-for".to_owned()],
+            headers: Vec::new(),
             disable_ip_tracking: false,
             ipv6_subnet: Ipv6Subnet::Prefix64,
         }

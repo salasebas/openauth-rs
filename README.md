@@ -103,6 +103,33 @@ let auth = OpenAuth::builder()
 let app = router(auth)?;
 ```
 
+When Axum is exposed directly to clients, run the app with connection info so
+OpenAuth can use the real peer socket IP for rate limiting:
+
+```rust
+let app = openauth_axum::router(auth)?;
+
+axum::serve(
+    listener,
+    app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+).await?;
+```
+
+When OpenAuth is behind a trusted proxy or load balancer, configure the proxy
+to overwrite forwarded IP headers and configure OpenAuth to trust only those
+headers. Do not enable this for traffic that can reach Axum directly, because
+clients can spoof forwarded headers.
+
+```rust
+use openauth::{AdvancedOptions, IpAddressOptions, OpenAuthOptions};
+
+let options = OpenAuthOptions::new().advanced(
+    AdvancedOptions::new().ip_address(
+        IpAddressOptions::new().headers(["x-forwarded-for"])
+    )
+);
+```
+
 For manual composition, nest the unmounted routes at the same path as
 `OpenAuthOptions.base_path`:
 

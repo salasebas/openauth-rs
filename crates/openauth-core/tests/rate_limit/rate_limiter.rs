@@ -3,12 +3,13 @@ use openauth_core::api::{response, ApiRequest, ApiResponse, AuthEndpoint, AuthRo
 use openauth_core::context::create_auth_context;
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
-    DynamicRateLimitPathRule, HybridRateLimitOptions, OpenAuthOptions, RateLimitConsumeInput,
-    RateLimitDecision, RateLimitFuture, RateLimitOptions, RateLimitPathRule, RateLimitRecord,
-    RateLimitRule, RateLimitStorage, RateLimitStore,
+    AdvancedOptions, DynamicRateLimitPathRule, HybridRateLimitOptions, IpAddressOptions,
+    OpenAuthOptions, RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitOptions,
+    RateLimitPathRule, RateLimitRecord, RateLimitRule, RateLimitStorage, RateLimitStore,
 };
-use openauth_core::rate_limit::GovernorMemoryRateLimitStore;
+use openauth_core::rate_limit::{GovernorMemoryRateLimitStore, RequestClientIp};
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -212,22 +213,163 @@ async fn rate_limiter_keeps_client_ips_separate() -> Result<(), Box<dyn std::err
     })?;
     let router = AuthRouter::new(context, vec![endpoint("/ok", Method::GET)]);
 
-    let first_ip = request_for_ip("192.0.2.1")?;
+    let first_ip = request_for_client_ip("192.0.2.1")?;
     assert_eq!(
         router.handle_async(first_ip).await?.status(),
         StatusCode::OK
     );
 
-    let first_ip_again = request_for_ip("192.0.2.1")?;
+    let first_ip_again = request_for_client_ip("192.0.2.1")?;
     assert_eq!(
         router.handle_async(first_ip_again).await?.status(),
         StatusCode::TOO_MANY_REQUESTS
     );
 
-    let second_ip = request_for_ip("192.0.2.2")?;
+    let second_ip = request_for_client_ip("192.0.2.2")?;
     assert_eq!(
         router.handle_async(second_ip).await?.status(),
         StatusCode::OK
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn rate_limiter_ignores_unconfigured_forwarded_headers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(OpenAuthOptions {
+        production: true,
+        rate_limit: RateLimitOptions {
+            enabled: Some(true),
+            window: 10,
+            max: 1,
+            ..RateLimitOptions::default()
+        },
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::new(context, vec![endpoint("/ok", Method::GET)]);
+
+    let first = request_for_client_ip_with_header("192.0.2.10", "203.0.113.1")?;
+    assert_eq!(router.handle_async(first).await?.status(), StatusCode::OK);
+
+    let second = request_for_client_ip_with_header("192.0.2.10", "203.0.113.2")?;
+    assert_eq!(
+        router.handle_async(second).await?.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn rate_limiter_uses_request_client_ip_extension() -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(OpenAuthOptions {
+        production: true,
+        rate_limit: RateLimitOptions {
+            enabled: Some(true),
+            window: 10,
+            max: 1,
+            ..RateLimitOptions::default()
+        },
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::new(context, vec![endpoint("/ok", Method::GET)]);
+
+    assert_eq!(
+        router
+            .handle_async(request_for_client_ip("192.0.2.20")?)
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        router
+            .handle_async(request_for_client_ip("192.0.2.20")?)
+            .await?
+            .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        router
+            .handle_async(request_for_client_ip("192.0.2.21")?)
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn rate_limiter_uses_explicit_forwarded_header_configuration(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(OpenAuthOptions {
+        production: true,
+        advanced: AdvancedOptions::new()
+            .ip_address(IpAddressOptions::new().headers(["x-forwarded-for"])),
+        rate_limit: RateLimitOptions {
+            enabled: Some(true),
+            window: 10,
+            max: 1,
+            ..RateLimitOptions::default()
+        },
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::new(context, vec![endpoint("/ok", Method::GET)]);
+
+    assert_eq!(
+        router
+            .handle_async(request_for_ip("192.0.2.30")?)
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        router
+            .handle_async(request_for_ip("192.0.2.30")?)
+            .await?
+            .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        router
+            .handle_async(request_for_ip("192.0.2.31")?)
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn rate_limiter_falls_back_to_client_ip_when_configured_header_is_invalid(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(OpenAuthOptions {
+        production: true,
+        advanced: AdvancedOptions::new()
+            .ip_address(IpAddressOptions::new().headers(["x-forwarded-for"])),
+        rate_limit: RateLimitOptions {
+            enabled: Some(true),
+            window: 10,
+            max: 1,
+            ..RateLimitOptions::default()
+        },
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::new(context, vec![endpoint("/ok", Method::GET)]);
+
+    let first = request_for_client_ip_with_header("192.0.2.40", "not an ip")?;
+    assert_eq!(router.handle_async(first).await?.status(), StatusCode::OK);
+
+    let second = request_for_client_ip_with_header("192.0.2.40", "still not an ip")?;
+    assert_eq!(
+        router.handle_async(second).await?.status(),
+        StatusCode::TOO_MANY_REQUESTS
     );
 
     Ok(())
@@ -469,14 +611,14 @@ async fn hybrid_local_denial_stops_before_global_store() -> Result<(), Box<dyn s
 
     assert_eq!(
         router
-            .handle_async(request_for_ip("192.0.2.10")?)
+            .handle_async(request_for_client_ip("192.0.2.10")?)
             .await?
             .status(),
         StatusCode::OK
     );
     assert_eq!(
         router
-            .handle_async(request_for_ip("192.0.2.10")?)
+            .handle_async(request_for_client_ip("192.0.2.10")?)
             .await?
             .status(),
         StatusCode::TOO_MANY_REQUESTS
@@ -506,7 +648,9 @@ async fn hybrid_returns_global_denial_when_local_permits() -> Result<(), Box<dyn
     })?;
     let router = AuthRouter::new(context, vec![endpoint("/ok", Method::GET)]);
 
-    let response = router.handle_async(request_for_ip("192.0.2.11")?).await?;
+    let response = router
+        .handle_async(request_for_client_ip("192.0.2.11")?)
+        .await?;
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(
@@ -535,7 +679,9 @@ async fn hybrid_disabled_uses_distributed_store_directly() -> Result<(), Box<dyn
     })?;
     let router = AuthRouter::new(context, vec![endpoint("/ok", Method::GET)]);
 
-    let response = router.handle_async(request_for_ip("192.0.2.12")?).await?;
+    let response = router
+        .handle_async(request_for_client_ip("192.0.2.12")?)
+        .await?;
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(global.calls(), 1);
@@ -557,7 +703,9 @@ async fn custom_store_decision_is_used_with_one_consume_call(
     })?;
     let router = AuthRouter::new(context, vec![endpoint("/ok", Method::GET)]);
 
-    let response = router.handle_async(request_for_ip("192.0.2.13")?).await?;
+    let response = router
+        .handle_async(request_for_client_ip("192.0.2.13")?)
+        .await?;
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(
@@ -577,6 +725,25 @@ fn request_for_ip(ip: &str) -> Result<ApiRequest, http::Error> {
         .uri("http://localhost:3000/api/auth/ok")
         .header("x-forwarded-for", ip)
         .body(Vec::new())
+}
+
+fn request_for_client_ip(ip: &str) -> Result<ApiRequest, Box<dyn std::error::Error>> {
+    request_for_client_ip_with_header(ip, "198.51.100.1")
+}
+
+fn request_for_client_ip_with_header(
+    client_ip: &str,
+    forwarded_for: &str,
+) -> Result<ApiRequest, Box<dyn std::error::Error>> {
+    let mut request = Request::builder()
+        .method(Method::GET)
+        .uri("http://localhost:3000/api/auth/ok")
+        .header("x-forwarded-for", forwarded_for)
+        .body(Vec::new())?;
+    request
+        .extensions_mut()
+        .insert(RequestClientIp(IpAddr::V4(client_ip.parse::<Ipv4Addr>()?)));
+    Ok(request)
 }
 
 #[derive(Debug, Default)]

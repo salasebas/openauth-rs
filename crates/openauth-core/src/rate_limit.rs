@@ -16,6 +16,7 @@ use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use http::Request;
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -26,6 +27,10 @@ pub type Body = Vec<u8>;
 pub struct RateLimitRejection {
     pub retry_after: u64,
 }
+
+/// Framework-neutral client IP resolved by an HTTP adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RequestClientIp(pub IpAddr);
 
 type GovernorLimiter = DefaultKeyedRateLimiter<String, StateInformationMiddleware>;
 
@@ -371,6 +376,15 @@ fn request_ip(context: &AuthContext, request: &Request<Body>) -> Option<String> 
                 ));
             }
         }
+    }
+
+    if let Some(client_ip) = request.extensions().get::<RequestClientIp>() {
+        return Some(normalize_ip_with_options(
+            &client_ip.0.to_string(),
+            NormalizeIpOptions {
+                ipv6_subnet: context.options.advanced.ip_address.ipv6_subnet,
+            },
+        ));
     }
 
     if !context.options.production && !is_production() {

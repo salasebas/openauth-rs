@@ -7,7 +7,7 @@ use http::{Method, Request, StatusCode};
 use openauth_core::api::{create_auth_endpoint, response, AuthEndpointOptions, AuthRouter};
 use openauth_core::context::create_auth_context;
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
+use openauth_core::options::{AdvancedOptions, IpAddressOptions, OpenAuthOptions};
 use openauth_plugins::captcha::{captcha, CaptchaConfigError, CaptchaOptions, CaptchaProvider};
 
 #[test]
@@ -74,7 +74,7 @@ async fn cloudflare_turnstile_sends_json_payload_and_allows_success(
     let plugin = captcha(
         CaptchaOptions::cloudflare_turnstile("secret").site_verify_url_override(server.url()),
     )?;
-    let router = router(plugin, "/sign-in/email")?;
+    let router = router_trusting_forwarded_for(plugin, "/sign-in/email")?;
 
     let response = router
         .handle_async(request(
@@ -120,7 +120,7 @@ async fn google_recaptcha_sends_form_payload_with_remote_ip(
     let server = JsonServer::spawn(200, r#"{"success":true}"#)?;
     let plugin =
         captcha(CaptchaOptions::google_recaptcha("secret").site_verify_url_override(server.url()))?;
-    let router = router(plugin, "/sign-in/email")?;
+    let router = router_trusting_forwarded_for(plugin, "/sign-in/email")?;
 
     let response = router
         .handle_async(request(
@@ -167,7 +167,7 @@ async fn hcaptcha_includes_site_key_and_remote_ip() -> Result<(), Box<dyn std::e
             .site_key("site")
             .site_verify_url_override(server.url()),
     )?;
-    let router = router(plugin, "/sign-in/email")?;
+    let router = router_trusting_forwarded_for(plugin, "/sign-in/email")?;
 
     let response = router
         .handle_async(request(
@@ -194,7 +194,7 @@ async fn captchafox_uses_remote_ip_form_field() -> Result<(), Box<dyn std::error
             .site_key("site")
             .site_verify_url_override(server.url()),
     )?;
-    let router = router(plugin, "/sign-in/email")?;
+    let router = router_trusting_forwarded_for(plugin, "/sign-in/email")?;
 
     let response = router
         .handle_async(request(
@@ -278,13 +278,32 @@ fn router(
     plugin: openauth_core::plugin::AuthPlugin,
     path: &str,
 ) -> Result<AuthRouter, OpenAuthError> {
+    router_with_advanced(plugin, path, AdvancedOptions::default())
+}
+
+fn router_trusting_forwarded_for(
+    plugin: openauth_core::plugin::AuthPlugin,
+    path: &str,
+) -> Result<AuthRouter, OpenAuthError> {
+    router_with_advanced(
+        plugin,
+        path,
+        AdvancedOptions::default().ip_address(IpAddressOptions::new().headers(["x-forwarded-for"])),
+    )
+}
+
+fn router_with_advanced(
+    plugin: openauth_core::plugin::AuthPlugin,
+    path: &str,
+    advanced: AdvancedOptions,
+) -> Result<AuthRouter, OpenAuthError> {
     let context = create_auth_context(OpenAuthOptions {
         plugins: vec![plugin],
         secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
         advanced: AdvancedOptions {
             disable_csrf_check: true,
             disable_origin_check: true,
-            ..AdvancedOptions::default()
+            ..advanced
         },
         ..OpenAuthOptions::default()
     })?;
