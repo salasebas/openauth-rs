@@ -84,6 +84,29 @@ let auth = open_auth(OpenAuthOptions::new()
     .secret("secret-a-at-least-32-chars-long!!"))?;
 ```
 
+## Passkeys
+
+`openauth-passkey` provides the server-side passkey plugin. It uses
+`webauthn-rs`, contributes a `passkeys` table with snake_case columns, and keeps
+WebAuthn ceremony state in server-side verification storage referenced by a
+signed short-lived cookie. Registration/authentication option JSON follows the
+Better Auth server behavior for authenticator selection hints and extensions,
+while verification remains delegated to `webauthn-rs`.
+
+```rust
+use openauth::{OpenAuth, OpenAuthOptions};
+use openauth_passkey::{passkey, PasskeyOptions};
+
+let auth = OpenAuth::builder()
+    .secret("secret-a-at-least-32-chars-long!!")
+    .base_url("https://app.example.com")
+    .plugin(passkey(PasskeyOptions::default()))
+    .build()?;
+```
+
+If you prefer the top-level `openauth` crate, enable its `passkey` feature and
+use `openauth::passkey`.
+
 ## Axum
 
 `openauth-axum` mounts the framework-neutral OpenAuth HTTP core in an Axum
