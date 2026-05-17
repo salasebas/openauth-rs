@@ -75,10 +75,10 @@ jobs:
             openauth-tokio-postgres
             openauth-deadpool-postgres
             openauth-passkey
-            openauth-fred
             openauth-redis
             openauth-oauth-provider
             openauth
+            openauth-fred
             openauth-axum
           )
 

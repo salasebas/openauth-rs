@@ -58,13 +58,14 @@ The current workspace packages must be published in this order:
 12. `openauth-deadpool-postgres` — depends on `openauth-core` and
     `openauth-tokio-postgres`.
 13. `openauth-passkey` — depends on `openauth-core`.
-14. `openauth-fred` — depends on `openauth-core`.
-15. `openauth-redis` — depends on `openauth-core`.
-16. `openauth-oauth-provider` — depends on `openauth-core` and
+14. `openauth-redis` — depends on `openauth-core`.
+15. `openauth-oauth-provider` — depends on `openauth-core` and
     `openauth-plugins`.
-17. `openauth` — depends on `openauth-core`, `openauth-deadpool-postgres`,
+16. `openauth` — depends on `openauth-core`, `openauth-deadpool-postgres`,
     `openauth-passkey`, `openauth-plugins`, `openauth-sqlx`,
     `openauth-telemetry`, and `openauth-tokio-postgres`.
+17. `openauth-fred` — depends on `openauth-core`, and its publish
+    verification uses a dev-dependency on `openauth`.
 18. `openauth-axum` — depends on `openauth`.
 
 ## Crate names
