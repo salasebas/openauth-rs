@@ -1,5 +1,5 @@
 #[cfg(feature = "saml-signed")]
-use crate::saml::xml::{local_name, validate_saml_xml};
+use crate::saml_impl::xml::{local_name, validate_saml_xml};
 #[cfg(feature = "saml-signed")]
 use base64::Engine;
 #[cfg(feature = "saml-signed")]

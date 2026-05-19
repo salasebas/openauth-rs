@@ -16,13 +16,13 @@ use serde::Deserialize;
 use serde_json::json;
 use time::OffsetDateTime;
 
-use crate::linking::provider_matches_email_domain;
-use crate::oidc::flow::oidc_redirect_uri;
-use crate::openapi::sign_in_body_schema;
+use crate::linking_impl::provider_matches_email_domain;
+use crate::oidc_impl::flow::oidc_redirect_uri;
+use crate::openapi::{sign_in_body_schema, sign_in_sso_response};
 use crate::options::{OidcConfig, SamlConfig, SsoOptions, SsoProvider};
 use crate::org::organization_id_by_slug;
-use crate::saml::authn_request::{build_authn_request_redirect, SamlAuthnRequestError};
-use crate::saml::state::authn_request_key;
+use crate::saml_impl::authn_request::{build_authn_request_redirect, SamlAuthnRequestError};
+use crate::saml_impl::state::authn_request_key;
 use crate::state::SsoStateStore;
 use crate::store::SsoProviderStore;
 use crate::utils;
@@ -60,7 +60,11 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
             .operation_id("signInWithSSO")
             .allowed_media_types(["application/json", "application/x-www-form-urlencoded"])
             .body_schema(sign_in_body_schema())
-            .openapi(OpenApiOperation::new("signInWithSSO").tag("SSO")),
+            .openapi(
+                OpenApiOperation::new("signInWithSSO")
+                    .tag("SSO")
+                    .response("200", sign_in_sso_response()),
+            ),
         move |context, request| {
             let options = Arc::clone(&options);
             Box::pin(async move {

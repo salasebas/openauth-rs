@@ -4,11 +4,11 @@ use openauth_core::context::AuthContext;
 
 use crate::audit;
 use crate::options::{SamlConfig, SsoAuditEvent, SsoAuditEventKind, SsoAuditSeverity, SsoOptions};
-use crate::saml::logout::{
+use crate::saml_impl::logout::{
     parse_post_logout_request, parse_post_logout_response, parse_redirect_logout_request,
     parse_redirect_logout_response, ParsedSamlLogoutRequest, ParsedSamlLogoutResponse,
 };
-use crate::saml::signature::{
+use crate::saml_impl::signature::{
     verify_redirect_logout_request, verify_redirect_logout_response, verify_signed_logout_request,
     verify_signed_logout_response, SamlSignatureValidationError,
 };

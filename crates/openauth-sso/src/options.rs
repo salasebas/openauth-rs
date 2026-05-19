@@ -7,7 +7,7 @@ use openauth_core::db::User;
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::RateLimitRule;
 
-use crate::saml::DeprecatedAlgorithmBehavior;
+use crate::saml_impl::DeprecatedAlgorithmBehavior;
 use crate::secrets::SecretString;
 
 #[path = "options/audit.rs"]
@@ -350,7 +350,7 @@ impl Default for SamlOptions {
         Self {
             enable_in_response_to_validation: true,
             allow_idp_initiated: true,
-            request_ttl: Duration::minutes(10),
+            request_ttl: Duration::minutes(5),
             clock_skew: Duration::minutes(5),
             require_timestamps: false,
             max_response_size: 256 * 1024,
@@ -439,6 +439,15 @@ pub struct OidcConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Explicit JWKS endpoint override.
     pub jwks_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional OAuth token revocation endpoint discovered from the IdP.
+    pub revocation_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional OIDC end-session endpoint discovered from the IdP.
+    pub end_session_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional OAuth token introspection endpoint discovered from the IdP.
+    pub introspection_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Token endpoint authentication method.
     pub token_endpoint_authentication: Option<TokenEndpointAuthentication>,

@@ -14,13 +14,16 @@ use serde_json::json;
 use time::OffsetDateTime;
 
 use crate::audit;
-use crate::openapi::{saml_logout_body_schema, saml_slo_body_schema};
+use crate::openapi::{
+    html_response as openapi_html_response, redirect_response, saml_logout_body_schema,
+    saml_slo_body_schema,
+};
 use crate::options::{SamlConfig, SsoAuditEvent, SsoAuditEventKind, SsoAuditSeverity, SsoOptions};
-use crate::saml::logout::{
+use crate::saml_impl::logout::{
     build_logout_request_binding, build_logout_response_binding, ParsedSamlLogoutRequest,
     ParsedSamlLogoutResponse, SamlLogoutBinding, SamlLogoutBindingResponse, SamlLogoutRequestInput,
 };
-use crate::saml::state::{logout_request_key, saml_session_by_id_key, saml_session_key};
+use crate::saml_impl::state::{logout_request_key, saml_session_by_id_key, saml_session_key};
 use crate::state::SsoStateStore;
 use crate::store::{SsoProviderRecord, SsoProviderStore};
 use crate::utils;
@@ -77,7 +80,12 @@ pub(super) fn endpoint(options: Arc<SsoOptions>, method: Method) -> AsyncAuthEnd
     let mut endpoint_options = AuthEndpointOptions::new()
         .operation_id("handleSAMLSLO")
         .allowed_media_types(["application/json", "application/x-www-form-urlencoded"])
-        .openapi(OpenApiOperation::new("handleSAMLSLO").tag("SSO"));
+        .openapi(
+            OpenApiOperation::new("handleSAMLSLO")
+                .tag("SSO")
+                .response("302", redirect_response("SAML SLO redirect"))
+                .response("200", openapi_html_response("SAML SLO POST binding form")),
+        );
     if method == Method::POST {
         endpoint_options = endpoint_options
             .body_schema(saml_slo_body_schema())
@@ -423,7 +431,15 @@ pub(super) fn logout_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
         AuthEndpointOptions::new()
             .operation_id("initiateSAMLSLO")
             .body_schema(saml_logout_body_schema())
-            .openapi(OpenApiOperation::new("initiateSAMLSLO").tag("SSO")),
+            .openapi(
+                OpenApiOperation::new("initiateSAMLSLO")
+                    .tag("SSO")
+                    .response("302", redirect_response("SAML logout redirect"))
+                    .response(
+                        "200",
+                        openapi_html_response("SAML logout POST binding form"),
+                    ),
+            ),
         move |context, request| {
             let options = Arc::clone(&options);
             Box::pin(async move {

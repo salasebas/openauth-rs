@@ -65,6 +65,132 @@ async fn saml_authn_request_state_uses_secondary_storage_when_configured(
 }
 
 #[tokio::test]
+async fn saml_acs_uses_in_response_to_state_when_relay_state_is_missing(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = std::sync::Arc::new(TestSecondaryStorage::default());
+    let (adapter, router) =
+        router_with_options_and_secondary_storage(SsoOptions::default(), storage.clone())?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+
+    let relay_state = saml_sign_in_relay_state(&router).await?;
+    let authn_key = format!("saml-authn-request:{relay_state}");
+    let saml_response = valid_saml_response(&relay_state, "assertion-in-response-to-only")?;
+
+    let callback = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/saml2/sp/acs/saml-okta",
+            &format!(
+                r#"{{"SAMLResponse":{}}}"#,
+                serde_json::to_string(&saml_response)?
+            ),
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(callback.status(), StatusCode::FOUND);
+    assert_eq!(
+        callback.headers().get(header::LOCATION),
+        Some(&http::HeaderValue::from_static("/dashboard"))
+    );
+    assert!(storage.deleted_keys().contains(&authn_key));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn saml_acs_rejects_unknown_in_response_to_without_relay_state(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+    let saml_response = valid_saml_response("missing-request", "assertion-unknown-in-response-to")?;
+
+    let callback = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/saml2/sp/acs/saml-okta",
+            &format!(
+                r#"{{"SAMLResponse":{}}}"#,
+                serde_json::to_string(&saml_response)?
+            ),
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(callback.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(callback)?["code"], "UNKNOWN_AUTHN_REQUEST");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn saml_acs_rejects_in_response_to_state_for_another_provider(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+    SsoProviderStore::new(adapter.as_ref())
+        .create(CreateSsoProviderInput {
+            provider_id: "saml-other".to_owned(),
+            issuer: "https://idp.example.com".to_owned(),
+            domain: "example.com".to_owned(),
+            user_id: "user_1".to_owned(),
+            organization_id: None,
+            oidc_config: None,
+            saml_config: Some(serde_json::to_string(&SamlConfig {
+                issuer: "https://app.example.com/sso/saml2/sp/metadata".to_owned(),
+                entry_point: "https://idp.example.com/saml/sso".to_owned(),
+                cert: "CERTIFICATE".to_owned(),
+                callback_url: "https://app.example.com/sso/saml2/sp/acs/saml-other".to_owned(),
+                acs_url: None,
+                audience: None,
+                idp_metadata: None,
+                sp_metadata: SamlSpMetadata {
+                    entity_id: Some("https://app.example.com/saml/sp".to_owned()),
+                    ..SamlSpMetadata::default()
+                },
+                mapping: None,
+                want_assertions_signed: false,
+                authn_requests_signed: false,
+                signature_algorithm: None,
+                digest_algorithm: None,
+                identifier_format: None,
+                private_key: None,
+                decryption_pvk: None,
+                additional_params: None,
+            })?),
+            domain_verified: None,
+        })
+        .await?;
+
+    let relay_state = saml_sign_in_relay_state(&router).await?;
+    let saml_response = valid_saml_response(&relay_state, "assertion-provider-mismatch")?;
+    let saml_response = tamper_base64_xml(&saml_response, "saml-okta", "saml-other")?;
+
+    let callback = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/saml2/sp/acs/saml-other",
+            &format!(
+                r#"{{"SAMLResponse":{}}}"#,
+                serde_json::to_string(&saml_response)?
+            ),
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(callback.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(callback)?["code"],
+        "SAML_IN_RESPONSE_TO_PROVIDER_MISMATCH"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn saml_acs_rejects_replayed_assertion_id() -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
     let cookie = seed_session(&adapter).await?;
@@ -85,6 +211,33 @@ async fn saml_acs_rejects_replayed_assertion_id() -> Result<(), Box<dyn std::err
         Some(&http::HeaderValue::from_static(
             "/login-error?error=replayed_saml_assertion"
         ))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn saml_replay_key_ttl_uses_assertion_expiration_not_request_ttl(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = std::sync::Arc::new(TestSecondaryStorage::default());
+    let mut options = SsoOptions::default();
+    options.saml.request_ttl = time::Duration::seconds(5);
+    let (adapter, router) = router_with_options_and_secondary_storage(options, storage.clone())?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+
+    let relay_state = saml_sign_in_relay_state(&router).await?;
+    let saml_response = valid_saml_response(&relay_state, "assertion-replay-ttl")?;
+    let callback = post_saml_acs(&router, &saml_response, &relay_state).await?;
+
+    assert_eq!(callback.status(), StatusCode::FOUND);
+    let ttl = storage
+        .ttl_for("saml-used-assertion:assertion-replay-ttl")
+        .flatten()
+        .ok_or("missing replay TTL")?;
+    assert!(
+        ttl > 60,
+        "replay TTL should follow assertion expiration, got {ttl}"
     );
 
     Ok(())

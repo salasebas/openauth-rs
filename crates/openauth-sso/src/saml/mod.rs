@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod assertions;
 pub mod authn_request;
 pub mod encryption;
@@ -14,7 +16,4 @@ pub use security::{
     validate_saml_timestamp, DataEncryptionAlgorithm, DeprecatedAlgorithmBehavior, DigestAlgorithm,
     KeyEncryptionAlgorithm, SamlConditions, SamlRuntimeAlgorithmPolicy, SamlRuntimeAlgorithms,
     SamlSecurityError, SignatureAlgorithm, TimestampValidationOptions,
-};
-pub use signature::{
-    SamlSignatureInfo, SamlSignatureValidationError, SamlSignedElement, VerifiedSamlSignature,
 };

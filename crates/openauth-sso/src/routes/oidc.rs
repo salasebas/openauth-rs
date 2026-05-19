@@ -16,14 +16,15 @@ use openauth_core::oauth::oauth2::{
 };
 use serde_json::Value;
 
-use crate::linking::{
+use crate::linking_impl::{
     assign_organization_from_provider, provider_matches_email_domain, provision_sso_user,
     NormalizedSsoProfile,
 };
-use crate::oidc::discovery::{
+use crate::oidc_impl::discovery::{
     discover_oidc_config_with_origin_validator, PartialOidcDiscoveryConfig,
 };
-use crate::oidc::flow::oidc_redirect_uri;
+use crate::oidc_impl::flow::oidc_redirect_uri;
+use crate::openapi::redirect_response;
 use crate::options::{OidcConfig, OidcMapping, SsoOptions, TokenEndpointAuthentication};
 use crate::store::SsoProviderStore;
 use crate::utils;
@@ -33,12 +34,21 @@ use super::support::{
 };
 
 pub(super) fn callback_endpoint(options: Arc<SsoOptions>, path: &'static str) -> AsyncAuthEndpoint {
+    let operation_id = if path == "/sso/callback" {
+        "handleSSOCallbackShared"
+    } else {
+        "handleSSOCallback"
+    };
     create_auth_endpoint(
         path,
         Method::GET,
         AuthEndpointOptions::new()
-            .operation_id("handleSSOCallback")
-            .openapi(OpenApiOperation::new("handleSSOCallback").tag("SSO")),
+            .operation_id(operation_id)
+            .openapi(
+                OpenApiOperation::new(operation_id)
+                    .tag("SSO")
+                    .response("302", redirect_response("OIDC callback redirect")),
+            ),
         move |context, request| {
             let options = Arc::clone(&options);
             Box::pin(async move { callback(context, &options, request).await })
@@ -242,8 +252,8 @@ async fn callback_provider(
 
 fn oidc_client_authentication(config: &OidcConfig) -> ClientAuthentication {
     match config.token_endpoint_authentication {
-        Some(TokenEndpointAuthentication::ClientSecretBasic) => ClientAuthentication::Basic,
-        Some(TokenEndpointAuthentication::ClientSecretPost) | None => ClientAuthentication::Post,
+        Some(TokenEndpointAuthentication::ClientSecretPost) => ClientAuthentication::Post,
+        Some(TokenEndpointAuthentication::ClientSecretBasic) | None => ClientAuthentication::Basic,
     }
 }
 
@@ -371,7 +381,7 @@ pub(super) async fn ensure_runtime_oidc_config(
     issuer: &str,
     config: OidcConfig,
     requirement: OidcRuntimeRequirement,
-) -> Result<OidcConfig, crate::oidc::discovery::OidcDiscoveryError> {
+) -> Result<OidcConfig, crate::oidc_impl::discovery::OidcDiscoveryError> {
     if requirement.is_satisfied(&config) {
         return Ok(config);
     }
@@ -386,6 +396,9 @@ pub(super) async fn ensure_runtime_oidc_config(
             token_endpoint: config.token_endpoint.as_deref(),
             user_info_endpoint: config.user_info_endpoint.as_deref(),
             jwks_endpoint: config.jwks_endpoint.as_deref(),
+            revocation_endpoint: config.revocation_endpoint.as_deref(),
+            end_session_endpoint: config.end_session_endpoint.as_deref(),
+            introspection_endpoint: config.introspection_endpoint.as_deref(),
             token_endpoint_authentication: config.token_endpoint_authentication,
         },
         |url| is_trusted_oidc_url(context, request, url),
@@ -401,6 +414,9 @@ pub(super) async fn ensure_runtime_oidc_config(
         token_endpoint: Some(hydrated.token_endpoint),
         user_info_endpoint: hydrated.user_info_endpoint,
         jwks_endpoint: Some(hydrated.jwks_endpoint),
+        revocation_endpoint: hydrated.revocation_endpoint,
+        end_session_endpoint: hydrated.end_session_endpoint,
+        introspection_endpoint: hydrated.introspection_endpoint,
         token_endpoint_authentication: Some(hydrated.token_endpoint_authentication),
         scopes: config.scopes.or(hydrated.scopes_supported),
         mapping: config.mapping,

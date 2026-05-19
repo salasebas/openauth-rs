@@ -17,8 +17,8 @@ use openauth_core::api::AsyncAuthEndpoint;
 use serde_json::json;
 
 use crate::options::{SamlConfig, SsoOptions};
-use crate::saml::security::{validate_saml_config_algorithms_with_policy, SamlSecurityError};
-use crate::saml::signature::SamlSignatureValidationError;
+use crate::saml_impl::security::{validate_saml_config_algorithms_with_policy, SamlSecurityError};
+use crate::saml_impl::signature::SamlSignatureValidationError;
 use crate::utils;
 
 pub fn endpoints(options: Arc<SsoOptions>) -> Vec<AsyncAuthEndpoint> {

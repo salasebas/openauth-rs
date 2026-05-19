@@ -6,7 +6,7 @@ use openauth_core::error::OpenAuthError;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::oidc::flow::oidc_redirect_uri;
+use crate::oidc_impl::flow::oidc_redirect_uri;
 use crate::options::{OidcConfig, SamlConfig};
 use crate::schema::SSO_PROVIDER_MODEL;
 use crate::utils::{certificate_metadata, client_id_last_four};
@@ -98,6 +98,12 @@ pub struct SanitizedOidcConfig {
     pub user_info_endpoint: Option<String>,
     /// JWKS endpoint URL.
     pub jwks_endpoint: Option<String>,
+    /// OAuth token revocation endpoint URL.
+    pub revocation_endpoint: Option<String>,
+    /// OIDC end-session endpoint URL.
+    pub end_session_endpoint: Option<String>,
+    /// OAuth token introspection endpoint URL.
+    pub introspection_endpoint: Option<String>,
     /// Configured default scopes.
     pub scopes: Option<Vec<String>>,
 }
@@ -356,6 +362,9 @@ impl SsoProviderRecord {
                 token_endpoint: config.token_endpoint,
                 user_info_endpoint: config.user_info_endpoint,
                 jwks_endpoint: config.jwks_endpoint,
+                revocation_endpoint: config.revocation_endpoint,
+                end_session_endpoint: config.end_session_endpoint,
+                introspection_endpoint: config.introspection_endpoint,
                 scopes: config.scopes,
             });
         let saml_config = self

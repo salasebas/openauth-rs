@@ -11,10 +11,11 @@ use openauth_core::auth::oauth::{
 use openauth_core::context::AuthContext;
 use serde::Deserialize;
 use serde_json::json;
+use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::audit;
-use crate::linking::{
+use crate::linking_impl::{
     assign_organization_from_provider, provider_matches_email_domain, provision_sso_user,
     NormalizedSsoProfile,
 };
@@ -22,16 +23,18 @@ use crate::openapi::saml_acs_body_schema;
 use crate::options::{
     SamlConfig, SamlMapping, SsoAuditEvent, SsoAuditEventKind, SsoAuditSeverity, SsoOptions,
 };
-use crate::saml::assertions::{parse_saml_response_with_decryption_detailed, ParsedSamlResponse};
-use crate::saml::authn_request::assertion_consumer_service_url;
-use crate::saml::security::{
+use crate::saml_impl::assertions::{
+    parse_saml_response_with_decryption_detailed, ParsedSamlResponse,
+};
+use crate::saml_impl::authn_request::assertion_consumer_service_url;
+use crate::saml_impl::security::{
     validate_saml_runtime_algorithms, validate_saml_timestamp, SamlRuntimeAlgorithmPolicy,
     TimestampValidationOptions,
 };
-use crate::saml::signature::{
+use crate::saml_impl::signature::{
     verify_signed_saml_response, SamlSignedElement, VerifiedSamlSignature,
 };
-use crate::saml::state::{
+use crate::saml_impl::state::{
     authn_request_key, saml_session_by_id_key, saml_session_key, used_assertion_key,
 };
 use crate::state::SsoStateStore;
@@ -108,12 +111,15 @@ async fn handle_acs(
                 );
             }
         };
-    let state_store = SsoStateStore::new(context, adapter);
-    let authn_record = match load_authn_record(options.as_ref(), &state_store, relay_state).await? {
-        Ok(record) => record,
-        Err(response) => return Ok(response),
-    };
     let Some(saml_response) = body.saml_response else {
+        let state_store = SsoStateStore::new(context, adapter);
+        let authn_record =
+            match load_authn_record_by_relay_state(options.as_ref(), &state_store, relay_state)
+                .await?
+            {
+                Ok(record) => record,
+                Err(response) => return Ok(response),
+            };
         return acs_error_response(
             context,
             &config,
@@ -122,12 +128,14 @@ async fn handle_acs(
             "MISSING_SAML_RESPONSE",
         );
     };
-    let parsed = match parse_and_validate_saml_response(
+    let state_store = SsoStateStore::new(context, adapter);
+    let validated = match parse_and_validate_saml_response(
         context,
         options.as_ref(),
         &provider,
         &config,
-        authn_record.as_ref(),
+        &state_store,
+        relay_state,
         &saml_response,
     )
     .await?
@@ -135,15 +143,16 @@ async fn handle_acs(
         Ok(parsed) => parsed,
         Err(response) => return Ok(response),
     };
-    let user_info = match saml_user_info(&parsed, config.mapping.as_ref(), options.as_ref()) {
-        Some(user_info) => user_info,
-        None => {
-            return utils::json(
-                http::StatusCode::BAD_REQUEST,
-                &json!({"code": "UNABLE_TO_EXTRACT_SAML_USER"}),
-            );
-        }
-    };
+    let user_info =
+        match saml_user_info(&validated.parsed, config.mapping.as_ref(), options.as_ref()) {
+            Some(user_info) => user_info,
+            None => {
+                return utils::json(
+                    http::StatusCode::BAD_REQUEST,
+                    &json!({"code": "UNABLE_TO_EXTRACT_SAML_USER"}),
+                );
+            }
+        };
     if !provider_matches_email_domain(&provider, &user_info.email) {
         return utils::json(
             http::StatusCode::BAD_REQUEST,
@@ -158,8 +167,8 @@ async fn handle_acs(
         state_store: &state_store,
         provider: &provider,
         config: &config,
-        authn_record: authn_record.as_ref(),
-        parsed: &parsed,
+        authn_record: validated.authn_record.as_ref(),
+        parsed: &validated.parsed,
         user_info,
     })
     .await
@@ -200,7 +209,7 @@ async fn load_saml_provider(
     ))
 }
 
-async fn load_authn_record(
+async fn load_authn_record_by_relay_state(
     options: &SsoOptions,
     state_store: &SsoStateStore<'_>,
     relay_state: Option<&str>,
@@ -233,19 +242,92 @@ async fn load_authn_record(
     Ok(Ok(None))
 }
 
+async fn load_authn_record_for_response(
+    options: &SsoOptions,
+    state_store: &SsoStateStore<'_>,
+    provider_id: &str,
+    relay_state: Option<&str>,
+    parsed: &ParsedSamlResponse,
+) -> Result<
+    Result<Option<super::sign_in::SamlAuthnRequestRecord>, ApiResponse>,
+    openauth_core::error::OpenAuthError,
+> {
+    if !options.saml.enable_in_response_to_validation {
+        return Ok(Ok(None));
+    }
+
+    let in_response_to = parsed.response_in_response_to.as_deref().or_else(|| {
+        parsed
+            .assertion
+            .subject_confirmation
+            .as_ref()
+            .and_then(|confirmation| confirmation.in_response_to.as_deref())
+    });
+    let request_id = relay_state
+        .filter(|value| !value.is_empty())
+        .or(in_response_to);
+
+    if let Some(request_id) = request_id {
+        let identifier = authn_request_key(request_id);
+        let Some(state) = state_store.find(&identifier).await? else {
+            return Ok(Err(utils::json(
+                http::StatusCode::BAD_REQUEST,
+                &json!({"code": "UNKNOWN_AUTHN_REQUEST"}),
+            )?));
+        };
+        let Some(record) =
+            serde_json::from_str::<super::sign_in::SamlAuthnRequestRecord>(&state.value).ok()
+        else {
+            return Ok(Err(utils::json(
+                http::StatusCode::BAD_REQUEST,
+                &json!({"code": "UNKNOWN_AUTHN_REQUEST"}),
+            )?));
+        };
+        if record.provider_id != provider_id {
+            return Ok(Err(utils::json(
+                http::StatusCode::BAD_REQUEST,
+                &json!({"code": "SAML_IN_RESPONSE_TO_PROVIDER_MISMATCH"}),
+            )?));
+        }
+        return Ok(Ok(Some(record)));
+    }
+
+    if !options.saml.allow_idp_initiated {
+        return Ok(Err(utils::json(
+            http::StatusCode::BAD_REQUEST,
+            &json!({"code": "MISSING_RELAY_STATE"}),
+        )?));
+    }
+    Ok(Ok(None))
+}
+
+struct ValidatedSamlResponse {
+    parsed: ParsedSamlResponse,
+    authn_record: Option<super::sign_in::SamlAuthnRequestRecord>,
+}
+
 async fn parse_and_validate_saml_response(
     context: &AuthContext,
     options: &SsoOptions,
     provider: &crate::SsoProviderRecord,
     config: &SamlConfig,
-    authn_record: Option<&super::sign_in::SamlAuthnRequestRecord>,
+    state_store: &SsoStateStore<'_>,
+    relay_state: Option<&str>,
     saml_response: &str,
-) -> Result<Result<ParsedSamlResponse, ApiResponse>, openauth_core::error::OpenAuthError> {
+) -> Result<Result<ValidatedSamlResponse, ApiResponse>, openauth_core::error::OpenAuthError> {
+    let relay_authn_record = if relay_state.is_some_and(|value| !value.is_empty()) {
+        match load_authn_record_by_relay_state(options, state_store, relay_state).await? {
+            Ok(record) => record,
+            Err(response) => return Ok(Err(response)),
+        }
+    } else {
+        None
+    };
     if saml_response.len() > options.saml.max_response_size {
         return Ok(Err(acs_error_response(
             context,
             config,
-            authn_record,
+            relay_authn_record.as_ref(),
             http::StatusCode::PAYLOAD_TOO_LARGE,
             "SAML_RESPONSE_TOO_LARGE",
         )?));
@@ -263,12 +345,37 @@ async fn parse_and_validate_saml_response(
             return Ok(Err(acs_error_response(
                 context,
                 config,
-                authn_record,
+                relay_authn_record.as_ref(),
                 error.status(),
                 error.code(),
             )?));
         }
     };
+    let authn_record = if relay_authn_record.is_some() {
+        relay_authn_record
+    } else {
+        match load_authn_record_for_response(
+            options,
+            state_store,
+            &provider.provider_id,
+            relay_state,
+            &parsed,
+        )
+        .await?
+        {
+            Ok(record) => record,
+            Err(response) => return Ok(Err(response)),
+        }
+    };
+    if authn_record
+        .as_ref()
+        .is_some_and(|record| record.provider_id != provider.provider_id)
+    {
+        return Ok(Err(utils::json(
+            http::StatusCode::BAD_REQUEST,
+            &json!({"code": "SAML_IN_RESPONSE_TO_PROVIDER_MISMATCH"}),
+        )?));
+    }
     if let Err(error) = validate_saml_runtime_algorithms(
         &parsed.algorithms,
         SamlRuntimeAlgorithmPolicy {
@@ -294,7 +401,7 @@ async fn parse_and_validate_saml_response(
         return Ok(Err(acs_error_response(
             context,
             config,
-            authn_record,
+            authn_record.as_ref(),
             http::StatusCode::BAD_REQUEST,
             super::saml_runtime_algorithm_error_code(&error),
         )?));
@@ -312,18 +419,21 @@ async fn parse_and_validate_saml_response(
         config,
         &context.base_url,
         options,
-        authn_record,
+        authn_record.as_ref(),
         verified_signature.as_ref(),
     ) {
         return Ok(Err(acs_error_response(
             context,
             config,
-            authn_record,
+            authn_record.as_ref(),
             http::StatusCode::BAD_REQUEST,
             code,
         )?));
     }
-    Ok(Ok(parsed))
+    Ok(Ok(ValidatedSamlResponse {
+        parsed,
+        authn_record,
+    }))
 }
 
 async fn verify_saml_signature(
@@ -404,7 +514,7 @@ async fn complete_saml_login(
         .create(
             assertion_identifier,
             input.provider.provider_id.clone(),
-            OffsetDateTime::now_utc() + input.options.saml.request_ttl,
+            assertion_replay_expires_at(input.parsed, input.options),
         )
         .await?;
     if let Some(record) = input.authn_record {
@@ -470,6 +580,28 @@ async fn complete_saml_login(
         .unwrap_or_else(|| input.context.base_url.clone());
     let cookies = session_cookies(input.context, &data.session, &data.user, false)?;
     redirect_with_cookies(&target_url, cookies)
+}
+
+fn assertion_replay_expires_at(
+    parsed: &ParsedSamlResponse,
+    options: &SsoOptions,
+) -> OffsetDateTime {
+    parsed
+        .assertion
+        .conditions
+        .as_ref()
+        .and_then(|conditions| conditions.not_on_or_after.as_deref())
+        .or_else(|| {
+            parsed
+                .assertion
+                .subject_confirmation
+                .as_ref()
+                .and_then(|confirmation| confirmation.conditions.as_ref())
+                .and_then(|conditions| conditions.not_on_or_after.as_deref())
+        })
+        .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+        .map(|expires_at| expires_at + options.saml.clock_skew)
+        .unwrap_or_else(|| OffsetDateTime::now_utc() + time::Duration::minutes(15))
 }
 
 fn saml_callback_url(

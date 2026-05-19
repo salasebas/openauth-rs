@@ -10,9 +10,9 @@ use time::OffsetDateTime;
 use url::Url;
 
 use crate::options::SamlConfig;
-use crate::saml::metadata::first_single_logout_service_location;
-use crate::saml::signature::SamlSignatureInfo;
-use crate::saml::xml::{local_name, validate_saml_xml};
+use crate::saml_impl::metadata::first_single_logout_service_location;
+use crate::saml_impl::signature::SamlSignatureInfo;
+use crate::saml_impl::xml::{local_name, validate_saml_xml};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SamlLogoutRequest {

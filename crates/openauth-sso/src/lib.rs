@@ -9,7 +9,9 @@
 //! - `saml-signed`: enables native XMLDSig and encrypted assertion handling
 //!   through the internal SAML backend. The default build keeps native XML
 //!   security dependencies out of the dependency graph and rejects signed or
-//!   encrypted SAML messages fail-closed.
+//!   encrypted SAML messages fail-closed. Signed XML validation currently uses
+//!   the system `xmlsec1` command, so deployments that enable this feature must
+//!   provide `xmlsec1`, libxml2, and OpenSSL-compatible crypto support.
 //!
 //! # Example
 //!
@@ -23,22 +25,67 @@
 mod audit;
 mod errors;
 mod hooks;
+#[path = "linking.rs"]
+mod linking_impl;
+#[path = "oidc/mod.rs"]
+mod oidc_impl;
 mod openapi;
 mod options;
 mod org;
 mod routes;
+#[path = "saml/mod.rs"]
+mod saml_impl;
 mod schema;
 mod secrets;
 mod state;
 mod store;
 mod utils;
 
-#[doc(hidden)]
-pub mod linking;
-#[doc(hidden)]
-pub mod oidc;
-#[doc(hidden)]
-pub mod saml;
+/// Stable SSO account-linking helpers.
+pub mod linking {
+    pub use crate::linking_impl::{
+        assign_organization_by_domain, assign_organization_from_provider,
+        provider_matches_email_domain, validate_provider_domains, NormalizedSsoProfile,
+    };
+}
+
+/// Stable OIDC helpers used by the SSO plugin.
+pub mod oidc {
+    /// OIDC discovery URL helpers.
+    pub mod discovery {
+        pub use crate::oidc_impl::discovery::{compute_discovery_url, normalize_url};
+    }
+
+    /// OIDC redirect URI helpers.
+    pub mod flow {
+        pub use crate::oidc_impl::flow::oidc_redirect_uri;
+    }
+}
+
+/// Stable SAML validation helpers used by the SSO plugin.
+pub mod saml {
+    /// SAML assertion parsing and structural validation helpers.
+    pub mod assertions {
+        pub use crate::saml_impl::assertions::{
+            count_assertions, parse_saml_response, parse_saml_response_with_decryption,
+            validate_single_assertion, AssertionCounts, ParsedSamlAssertion, ParsedSamlResponse,
+            ParsedSubjectConfirmation, SamlResponseParseError,
+        };
+    }
+
+    /// SAML XML well-formedness and parser boundary helpers.
+    pub mod xml {
+        pub use crate::saml_impl::xml::validate_saml_xml;
+    }
+
+    pub use crate::saml_impl::{
+        collect_saml_runtime_algorithms, validate_saml_config_algorithms,
+        validate_saml_config_algorithms_with_policy, validate_saml_runtime_algorithms,
+        validate_saml_timestamp, DataEncryptionAlgorithm, DeprecatedAlgorithmBehavior,
+        DigestAlgorithm, KeyEncryptionAlgorithm, SamlConditions, SamlRuntimeAlgorithmPolicy,
+        SamlRuntimeAlgorithms, SamlSecurityError, SignatureAlgorithm, TimestampValidationOptions,
+    };
+}
 
 pub use errors::{sso_error_category, sso_error_descriptors, SsoErrorCategory, SsoErrorDescriptor};
 pub use linking::NormalizedSsoProfile;

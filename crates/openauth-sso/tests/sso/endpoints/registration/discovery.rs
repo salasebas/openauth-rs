@@ -45,6 +45,18 @@ async fn register_discovers_oidc_endpoints_when_skip_discovery_is_false(
         body["oidcConfig"]["jwksEndpoint"],
         format!("{}/keys", oidc.base_url)
     );
+    assert_eq!(
+        body["oidcConfig"]["revocationEndpoint"],
+        format!("{}/revoke", oidc.base_url)
+    );
+    assert_eq!(
+        body["oidcConfig"]["endSessionEndpoint"],
+        format!("{}/endsession", oidc.base_url)
+    );
+    assert_eq!(
+        body["oidcConfig"]["introspectionEndpoint"],
+        format!("{}/introspection", oidc.base_url)
+    );
 
     let records = adapter.records("ssoProvider").await;
     let Some(DbValue::String(config)) = records[0].get("oidcConfig") else {
@@ -52,6 +64,18 @@ async fn register_discovers_oidc_endpoints_when_skip_discovery_is_false(
     };
     assert!(config.contains(&format!(
         r#""authorizationEndpoint":"{}/authorize""#,
+        oidc.base_url
+    )));
+    assert!(config.contains(&format!(
+        r#""revocationEndpoint":"{}/revoke""#,
+        oidc.base_url
+    )));
+    assert!(config.contains(&format!(
+        r#""endSessionEndpoint":"{}/endsession""#,
+        oidc.base_url
+    )));
+    assert!(config.contains(&format!(
+        r#""introspectionEndpoint":"{}/introspection""#,
         oidc.base_url
     )));
     assert!(config.contains(r#""tokenEndpointAuthentication":"client_secret_basic""#));

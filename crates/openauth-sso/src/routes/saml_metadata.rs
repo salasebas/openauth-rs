@@ -6,8 +6,9 @@ use openauth_core::api::{
 };
 use serde_json::json;
 
+use crate::openapi::saml_metadata_response;
 use crate::options::{SamlConfig, SsoOptions};
-use crate::saml::metadata::service_provider_metadata;
+use crate::saml_impl::metadata::service_provider_metadata;
 use crate::store::SsoProviderStore;
 use crate::utils;
 
@@ -19,19 +20,14 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
         Method::GET,
         AuthEndpointOptions::new()
             .operation_id("getSSOServiceProviderMetadata")
-            .openapi(OpenApiOperation::new("getSSOServiceProviderMetadata").tag("SSO")),
+            .openapi(
+                OpenApiOperation::new("getSSOServiceProviderMetadata")
+                    .tag("SSO")
+                    .response("200", saml_metadata_response()),
+            ),
         move |context, request| {
             let options = Arc::clone(&options);
             Box::pin(async move {
-                if query_param(&request, "format").as_deref() == Some("json") {
-                    return utils::json(
-                        http::StatusCode::BAD_REQUEST,
-                        &json!({
-                            "code": "UNSUPPORTED_METADATA_FORMAT",
-                            "message": "SAML metadata is only available as XML"
-                        }),
-                    );
-                }
                 let Some(provider_id) = query_param(&request, "providerId") else {
                     return utils::json(
                         http::StatusCode::BAD_REQUEST,

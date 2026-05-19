@@ -6,7 +6,7 @@ use openauth_core::db::User;
 use openauth_core::error::OpenAuthError;
 use openauth_core::oauth::oauth2::OAuth2Tokens;
 
-use crate::linking::NormalizedSsoProfile;
+use crate::linking_impl::NormalizedSsoProfile;
 use crate::store::SsoProviderRecord;
 
 type TxtResolverFuture = Pin<Box<dyn Future<Output = Result<Vec<String>, OpenAuthError>> + Send>>;

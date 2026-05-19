@@ -8,9 +8,9 @@ use openauth_core::error::OpenAuthError;
 use openauth_core::plugin::{PluginAfterHookAction, PluginBeforeHookAction};
 use std::sync::Arc;
 
-use crate::linking::assign_organization_by_domain;
+use crate::linking_impl::assign_organization_by_domain;
 use crate::options::SsoOptions;
-use crate::saml::state::{saml_session_by_id_key, SESSION_PREFIX};
+use crate::saml_impl::state::{saml_session_by_id_key, SESSION_PREFIX};
 use crate::state::SsoStateStore;
 
 #[derive(Debug, Clone)]

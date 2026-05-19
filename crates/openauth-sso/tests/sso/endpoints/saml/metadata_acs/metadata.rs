@@ -194,7 +194,7 @@ async fn saml_metadata_endpoint_enriches_generated_sp_metadata(
 }
 
 #[tokio::test]
-async fn saml_metadata_endpoint_rejects_json_format_explicitly(
+async fn saml_metadata_endpoint_accepts_json_format_like_upstream(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
     let cookie = seed_session(&adapter).await?;
@@ -209,8 +209,13 @@ async fn saml_metadata_endpoint_rejects_json_format_explicitly(
         )?)
         .await?;
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(response)?["code"], "UNSUPPORTED_METADATA_FORMAT");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(http::header::CONTENT_TYPE),
+        Some(&http::HeaderValue::from_static("application/xml"))
+    );
+    let body = String::from_utf8(response.body().clone())?;
+    assert!(body.contains("<EntityDescriptor"));
 
     Ok(())
 }

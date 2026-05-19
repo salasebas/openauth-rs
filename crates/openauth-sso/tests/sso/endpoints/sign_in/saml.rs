@@ -48,7 +48,7 @@ async fn sign_in_sso_with_saml_provider_returns_authn_request_redirect(
 }
 
 #[tokio::test]
-async fn sign_in_sso_with_saml_provider_stores_ten_minute_relay_state(
+async fn sign_in_sso_with_saml_provider_stores_five_minute_relay_state(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
     let cookie = seed_session(&adapter).await?;
@@ -86,7 +86,7 @@ async fn sign_in_sso_with_saml_provider_stores_ten_minute_relay_state(
     let created_at = payload["createdAt"].as_i64().ok_or("missing createdAt")?;
     let expires_at = payload["expiresAt"].as_i64().ok_or("missing expiresAt")?;
 
-    assert_eq!(expires_at - created_at, 600);
+    assert_eq!(expires_at - created_at, 300);
 
     Ok(())
 }

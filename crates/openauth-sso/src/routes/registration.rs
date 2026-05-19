@@ -12,12 +12,12 @@ use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
 use crate::audit;
-use crate::linking::validate_provider_domains;
-use crate::oidc::discovery::{
+use crate::linking_impl::validate_provider_domains;
+use crate::oidc_impl::discovery::{
     compute_discovery_url, discover_oidc_config_with_origin_validator, validate_issuer_url,
     PartialOidcDiscoveryConfig,
 };
-use crate::openapi::register_body_schema;
+use crate::openapi::{register_body_schema, sso_provider_response};
 use crate::options::{
     OidcConfig, OidcMapping, SamlConfig, SsoAuditEvent, SsoAuditEventKind, SsoAuditSeverity,
     SsoOptions, TokenEndpointAuthentication,
@@ -55,6 +55,9 @@ struct RegisterOidcConfig {
     user_info_endpoint: Option<String>,
     token_endpoint_authentication: Option<TokenEndpointAuthentication>,
     jwks_endpoint: Option<String>,
+    revocation_endpoint: Option<String>,
+    end_session_endpoint: Option<String>,
+    introspection_endpoint: Option<String>,
     discovery_endpoint: Option<String>,
     #[serde(default)]
     skip_discovery: bool,
@@ -71,7 +74,11 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
             .operation_id("registerSSOProvider")
             .allowed_media_types(["application/json", "application/x-www-form-urlencoded"])
             .body_schema(register_body_schema())
-            .openapi(OpenApiOperation::new("registerSSOProvider").tag("SSO")),
+            .openapi(
+                OpenApiOperation::new("registerSSOProvider")
+                    .tag("SSO")
+                    .response("200", sso_provider_response("Registered SSO provider")),
+            ),
         move |context, request| {
             let options = Arc::clone(&options);
             Box::pin(async move {
@@ -260,6 +267,9 @@ async fn build_oidc_config(
             token_endpoint: input.token_endpoint,
             user_info_endpoint: input.user_info_endpoint,
             jwks_endpoint: input.jwks_endpoint,
+            revocation_endpoint: input.revocation_endpoint,
+            end_session_endpoint: input.end_session_endpoint,
+            introspection_endpoint: input.introspection_endpoint,
             token_endpoint_authentication: Some(
                 input
                     .token_endpoint_authentication
@@ -278,6 +288,9 @@ async fn build_oidc_config(
                 token_endpoint: input.token_endpoint.as_deref(),
                 user_info_endpoint: input.user_info_endpoint.as_deref(),
                 jwks_endpoint: input.jwks_endpoint.as_deref(),
+                revocation_endpoint: input.revocation_endpoint.as_deref(),
+                end_session_endpoint: input.end_session_endpoint.as_deref(),
+                introspection_endpoint: input.introspection_endpoint.as_deref(),
                 token_endpoint_authentication: input.token_endpoint_authentication,
                 ..PartialOidcDiscoveryConfig::default()
             },
@@ -295,6 +308,9 @@ async fn build_oidc_config(
             token_endpoint: Some(hydrated.token_endpoint),
             user_info_endpoint: hydrated.user_info_endpoint,
             jwks_endpoint: Some(hydrated.jwks_endpoint),
+            revocation_endpoint: hydrated.revocation_endpoint,
+            end_session_endpoint: hydrated.end_session_endpoint,
+            introspection_endpoint: hydrated.introspection_endpoint,
             token_endpoint_authentication: Some(hydrated.token_endpoint_authentication),
             scopes: input.scopes.or(hydrated.scopes_supported),
             mapping: input.mapping,
@@ -318,12 +334,12 @@ async fn build_oidc_config(
 
 #[derive(Debug)]
 enum BuildOidcConfigError {
-    Discovery(crate::oidc::discovery::OidcDiscoveryError),
+    Discovery(crate::oidc_impl::discovery::OidcDiscoveryError),
     Api(String),
 }
 
 fn oidc_discovery_error_response(
-    error: crate::oidc::discovery::OidcDiscoveryError,
+    error: crate::oidc_impl::discovery::OidcDiscoveryError,
 ) -> Result<openauth_core::api::ApiResponse, openauth_core::error::OpenAuthError> {
     utils::json(
         error.status(),
@@ -341,5 +357,8 @@ fn is_valid_register_oidc_config_urls(issuer: &str, config: &RegisterOidcConfig)
         && super::optional_http_url(config.token_endpoint.as_deref())
         && super::optional_http_url(config.user_info_endpoint.as_deref())
         && super::optional_http_url(config.jwks_endpoint.as_deref())
+        && super::optional_http_url(config.revocation_endpoint.as_deref())
+        && super::optional_http_url(config.end_session_endpoint.as_deref())
+        && super::optional_http_url(config.introspection_endpoint.as_deref())
         && super::is_valid_http_url(&discovery_endpoint)
 }

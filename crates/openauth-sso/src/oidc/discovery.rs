@@ -14,6 +14,9 @@ pub struct OidcDiscoveryDocument {
     #[serde(default)]
     pub jwks_uri: String,
     pub userinfo_endpoint: Option<String>,
+    pub revocation_endpoint: Option<String>,
+    pub end_session_endpoint: Option<String>,
+    pub introspection_endpoint: Option<String>,
     pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
     pub scopes_supported: Option<Vec<String>>,
 }
@@ -41,6 +44,9 @@ pub struct HydratedOidcDiscovery {
     pub token_endpoint: String,
     pub jwks_endpoint: String,
     pub user_info_endpoint: Option<String>,
+    pub revocation_endpoint: Option<String>,
+    pub end_session_endpoint: Option<String>,
+    pub introspection_endpoint: Option<String>,
     pub token_endpoint_authentication: TokenEndpointAuthentication,
     pub scopes_supported: Option<Vec<String>>,
 }
@@ -100,6 +106,18 @@ where
             .user_info_endpoint
             .map(str::to_owned)
             .or(normalized.userinfo_endpoint),
+        revocation_endpoint: existing
+            .revocation_endpoint
+            .map(str::to_owned)
+            .or(normalized.revocation_endpoint),
+        end_session_endpoint: existing
+            .end_session_endpoint
+            .map(str::to_owned)
+            .or(normalized.end_session_endpoint),
+        introspection_endpoint: existing
+            .introspection_endpoint
+            .map(str::to_owned)
+            .or(normalized.introspection_endpoint),
         token_endpoint_authentication,
         scopes_supported: normalized.scopes_supported,
     };
@@ -117,6 +135,27 @@ where
     if let Some(user_info_endpoint) = &hydrated.user_info_endpoint {
         validate_trusted_url("userinfo_endpoint", user_info_endpoint, &is_trusted_origin)?;
     }
+    if let Some(revocation_endpoint) = &hydrated.revocation_endpoint {
+        validate_trusted_url(
+            "revocation_endpoint",
+            revocation_endpoint,
+            &is_trusted_origin,
+        )?;
+    }
+    if let Some(end_session_endpoint) = &hydrated.end_session_endpoint {
+        validate_trusted_url(
+            "end_session_endpoint",
+            end_session_endpoint,
+            &is_trusted_origin,
+        )?;
+    }
+    if let Some(introspection_endpoint) = &hydrated.introspection_endpoint {
+        validate_trusted_url(
+            "introspection_endpoint",
+            introspection_endpoint,
+            &is_trusted_origin,
+        )?;
+    }
     Ok(hydrated)
 }
 
@@ -128,6 +167,9 @@ pub struct PartialOidcDiscoveryConfig<'a> {
     pub token_endpoint: Option<&'a str>,
     pub user_info_endpoint: Option<&'a str>,
     pub jwks_endpoint: Option<&'a str>,
+    pub revocation_endpoint: Option<&'a str>,
+    pub end_session_endpoint: Option<&'a str>,
+    pub introspection_endpoint: Option<&'a str>,
     pub token_endpoint_authentication: Option<TokenEndpointAuthentication>,
 }
 
@@ -141,8 +183,8 @@ pub enum OidcDiscoveryError {
     Timeout,
     #[error("OIDC discovery endpoint returned invalid JSON: {0}")]
     InvalidJson(String),
-    #[error("OIDC discovery URL is not trusted: {0}")]
-    UntrustedOrigin(String),
+    #[error("OIDC discovery document contains untrusted URL for `{field}`: {url}")]
+    UntrustedOrigin { field: &'static str, url: String },
     #[error("OIDC discovery document is missing required field `{0}`")]
     MissingField(&'static str),
     #[error("OIDC discovery document is missing required fields: {0:?}")]
@@ -160,7 +202,7 @@ impl OidcDiscoveryError {
             Self::NotFound => "discovery_not_found",
             Self::InvalidJson(_) => "discovery_invalid_json",
             Self::InvalidUrl { .. } => "discovery_invalid_url",
-            Self::UntrustedOrigin(_) => "discovery_untrusted_origin",
+            Self::UntrustedOrigin { .. } => "discovery_untrusted_origin",
             Self::IssuerMismatch => "issuer_mismatch",
             Self::MissingField(_) | Self::MissingFields(_) => "discovery_incomplete",
             Self::Request(_) => "discovery_unexpected_error",
@@ -173,7 +215,7 @@ impl OidcDiscoveryError {
             Self::NotFound
             | Self::InvalidJson(_)
             | Self::InvalidUrl { .. }
-            | Self::UntrustedOrigin(_)
+            | Self::UntrustedOrigin { .. }
             | Self::IssuerMismatch
             | Self::MissingField(_)
             | Self::MissingFields(_) => http::StatusCode::BAD_REQUEST,
@@ -264,6 +306,21 @@ fn normalize_discovery_document(
         .as_deref()
         .map(|endpoint| normalize_endpoint("userinfo_endpoint", endpoint, issuer))
         .transpose()?;
+    document.revocation_endpoint = document
+        .revocation_endpoint
+        .as_deref()
+        .map(|endpoint| normalize_endpoint("revocation_endpoint", endpoint, issuer))
+        .transpose()?;
+    document.end_session_endpoint = document
+        .end_session_endpoint
+        .as_deref()
+        .map(|endpoint| normalize_endpoint("end_session_endpoint", endpoint, issuer))
+        .transpose()?;
+    document.introspection_endpoint = document
+        .introspection_endpoint
+        .as_deref()
+        .map(|endpoint| normalize_endpoint("introspection_endpoint", endpoint, issuer))
+        .transpose()?;
     Ok(document)
 }
 
@@ -310,7 +367,10 @@ where
         });
     }
     if !is_trusted_origin(value) {
-        return Err(OidcDiscoveryError::UntrustedOrigin(value.to_owned()));
+        return Err(OidcDiscoveryError::UntrustedOrigin {
+            field,
+            url: value.to_owned(),
+        });
     }
     Ok(())
 }
@@ -358,6 +418,33 @@ mod tests {
         assert_eq!(
             normalize_endpoint("jwks_uri", "/keys", "https://idp.example.com/tenant")?,
             "https://idp.example.com/tenant/keys"
+        );
+        let document = normalize_discovery_document(
+            OidcDiscoveryDocument {
+                issuer: "https://idp.example.com/tenant".to_owned(),
+                authorization_endpoint: "authorize".to_owned(),
+                token_endpoint: "token".to_owned(),
+                jwks_uri: "keys".to_owned(),
+                userinfo_endpoint: Some("userinfo".to_owned()),
+                revocation_endpoint: Some("revoke".to_owned()),
+                end_session_endpoint: Some("endsession".to_owned()),
+                introspection_endpoint: Some("introspect".to_owned()),
+                token_endpoint_auth_methods_supported: None,
+                scopes_supported: None,
+            },
+            "https://idp.example.com/tenant",
+        )?;
+        assert_eq!(
+            document.revocation_endpoint.as_deref(),
+            Some("https://idp.example.com/tenant/revoke")
+        );
+        assert_eq!(
+            document.end_session_endpoint.as_deref(),
+            Some("https://idp.example.com/tenant/endsession")
+        );
+        assert_eq!(
+            document.introspection_endpoint.as_deref(),
+            Some("https://idp.example.com/tenant/introspect")
         );
         Ok(())
     }
@@ -511,6 +598,62 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(error.code(), "discovery_untrusted_origin");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_rejects_untrusted_optional_endpoint_origins(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let base_url = format!("http://{address}");
+        let server_base_url = base_url.clone();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let server_base_url = server_base_url.clone();
+                tokio::spawn(async move {
+                    let mut buffer = [0_u8; 1024];
+                    let Ok(read) = tokio::io::AsyncReadExt::read(&mut stream, &mut buffer).await
+                    else {
+                        return;
+                    };
+                    let request = String::from_utf8_lossy(&buffer[..read]);
+                    let body = if request.starts_with("GET /.well-known/openid-configuration ") {
+                        format!(
+                            r#"{{
+                                "issuer":"{server_base_url}",
+                                "authorization_endpoint":"{server_base_url}/authorize",
+                                "token_endpoint":"{server_base_url}/token",
+                                "jwks_uri":"{server_base_url}/keys",
+                                "revocation_endpoint":"https://untrusted.example.com/revoke"
+                            }}"#
+                        )
+                    } else {
+                        r#"{"error":"not_found"}"#.to_owned()
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ =
+                        tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes()).await;
+                });
+            }
+        });
+
+        let error = match discover_oidc_config_with_origin_validator(
+            &base_url,
+            None,
+            PartialOidcDiscoveryConfig::default(),
+            |url| url.starts_with(&base_url),
+        )
+        .await
+        {
+            Ok(_) => return Err("expected untrusted optional endpoint to fail".into()),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "discovery_untrusted_origin");
+        assert!(error.to_string().contains("revocation_endpoint"));
         Ok(())
     }
 

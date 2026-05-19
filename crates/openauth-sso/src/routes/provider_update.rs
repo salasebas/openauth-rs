@@ -9,14 +9,14 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::audit;
-use crate::linking::validate_provider_domains;
-use crate::oidc::discovery::validate_issuer_url;
-use crate::openapi::update_provider_body_schema;
+use crate::linking_impl::validate_provider_domains;
+use crate::oidc_impl::discovery::validate_issuer_url;
+use crate::openapi::{sso_provider_response, update_provider_body_schema};
 use crate::options::{
     OidcConfig, OidcMapping, SamlConfig, SamlMapping, SsoAuditEvent, SsoAuditEventKind,
     SsoAuditSeverity, SsoOptions, TokenEndpointAuthentication,
 };
-use crate::org::can_manage_provider;
+use crate::org::{can_manage_provider, can_register_for_organization};
 use crate::store::{SsoProviderStore, UpdateSsoProviderInput};
 use crate::utils;
 
@@ -55,6 +55,9 @@ struct UpdateOidcConfig {
     user_info_endpoint: Option<String>,
     token_endpoint_authentication: Option<TokenEndpointAuthentication>,
     jwks_endpoint: Option<String>,
+    revocation_endpoint: Option<String>,
+    end_session_endpoint: Option<String>,
+    introspection_endpoint: Option<String>,
     discovery_endpoint: Option<String>,
     scopes: Option<Vec<String>>,
     mapping: Option<OidcMapping>,
@@ -90,7 +93,11 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
         AuthEndpointOptions::new()
             .operation_id("updateSSOProvider")
             .body_schema(update_provider_body_schema())
-            .openapi(OpenApiOperation::new("updateSSOProvider").tag("SSO")),
+            .openapi(
+                OpenApiOperation::new("updateSSOProvider")
+                    .tag("SSO")
+                    .response("200", sso_provider_response("Updated SSO provider")),
+            ),
         move |context, request| {
             let options = Arc::clone(&options);
             Box::pin(async move {
@@ -127,6 +134,24 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                         return utils::json(
                             http::StatusCode::BAD_REQUEST,
                             &json!({"code": "INVALID_DOMAIN"}),
+                        );
+                    }
+                }
+                if let Some(organization_id) = &body.organization_id {
+                    if !can_register_for_organization(
+                        context,
+                        adapter.as_ref(),
+                        &user_id,
+                        organization_id,
+                    )
+                    .await?
+                    {
+                        return utils::json(
+                            http::StatusCode::BAD_REQUEST,
+                            &json!({
+                                "code": "ORGANIZATION_MEMBERSHIP_REQUIRED",
+                                "message": "You are not a member of the organization"
+                            }),
                         );
                     }
                 }
@@ -253,6 +278,15 @@ fn merge_oidc_config(mut existing: OidcConfig, update: UpdateOidcConfig) -> Oidc
     if update.jwks_endpoint.is_some() {
         existing.jwks_endpoint = update.jwks_endpoint;
     }
+    if update.revocation_endpoint.is_some() {
+        existing.revocation_endpoint = update.revocation_endpoint;
+    }
+    if update.end_session_endpoint.is_some() {
+        existing.end_session_endpoint = update.end_session_endpoint;
+    }
+    if update.introspection_endpoint.is_some() {
+        existing.introspection_endpoint = update.introspection_endpoint;
+    }
     if let Some(value) = update.discovery_endpoint {
         existing.discovery_endpoint = value;
     }
@@ -274,6 +308,9 @@ fn is_valid_oidc_config_urls(config: &OidcConfig) -> bool {
         && super::optional_http_url(config.token_endpoint.as_deref())
         && super::optional_http_url(config.user_info_endpoint.as_deref())
         && super::optional_http_url(config.jwks_endpoint.as_deref())
+        && super::optional_http_url(config.revocation_endpoint.as_deref())
+        && super::optional_http_url(config.end_session_endpoint.as_deref())
+        && super::optional_http_url(config.introspection_endpoint.as_deref())
         && super::is_valid_http_url(&config.discovery_endpoint)
 }
 

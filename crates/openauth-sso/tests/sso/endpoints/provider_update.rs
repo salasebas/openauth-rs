@@ -46,6 +46,44 @@ async fn update_provider_applies_owner_scope_and_resets_domain_verification(
 }
 
 #[tokio::test]
+async fn update_provider_rejects_organization_id_without_membership(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options_and_extra_plugins(
+        SsoOptions::default(),
+        vec![AuthPlugin::new("organization")],
+    )?;
+    let cookie = seed_session(&adapter).await?;
+    seed_organization(&adapter, "org_1", "acme").await?;
+    router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/register",
+            r#"{"providerId":"okta","issuer":"https://idp.example.com","domain":"example.com"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/update-provider",
+            r#"{"providerId":"okta","organizationId":"org_1"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(response)?["code"],
+        "ORGANIZATION_MEMBERSHIP_REQUIRED"
+    );
+    let records = adapter.records("ssoProvider").await;
+    assert_eq!(records[0].get("organizationId"), Some(&DbValue::Null));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn update_provider_rejects_saml_config_with_unknown_digest_algorithm(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
@@ -155,6 +193,9 @@ async fn update_provider_merges_partial_oidc_config_and_keeps_secret(
                 "providerId":"okta",
                 "oidcConfig":{
                     "pkce":false,
+                    "revocationEndpoint":"https://idp.example.com/revoke",
+                    "endSessionEndpoint":"https://idp.example.com/endsession",
+                    "introspectionEndpoint":"https://idp.example.com/introspection",
                     "scopes":["openid","profile"]
                 }
             }"#,
@@ -165,6 +206,18 @@ async fn update_provider_merges_partial_oidc_config_and_keeps_secret(
     assert_eq!(response.status(), StatusCode::OK);
     let body = json_body(response)?;
     assert_eq!(body["oidcConfig"]["pkce"], false);
+    assert_eq!(
+        body["oidcConfig"]["revocationEndpoint"],
+        "https://idp.example.com/revoke"
+    );
+    assert_eq!(
+        body["oidcConfig"]["endSessionEndpoint"],
+        "https://idp.example.com/endsession"
+    );
+    assert_eq!(
+        body["oidcConfig"]["introspectionEndpoint"],
+        "https://idp.example.com/introspection"
+    );
     assert_eq!(body["oidcConfig"]["scopes"], json!(["openid", "profile"]));
     assert_eq!(body["oidcConfig"]["clientIdLastFour"], "****3456");
 
@@ -174,6 +227,9 @@ async fn update_provider_merges_partial_oidc_config_and_keeps_secret(
     };
     assert!(config.contains(r#""clientSecret":"super-secret""#));
     assert!(config.contains(r#""pkce":false"#));
+    assert!(config.contains(r#""revocationEndpoint":"https://idp.example.com/revoke""#));
+    assert!(config.contains(r#""endSessionEndpoint":"https://idp.example.com/endsession""#));
+    assert!(config.contains(r#""introspectionEndpoint":"https://idp.example.com/introspection""#));
 
     Ok(())
 }

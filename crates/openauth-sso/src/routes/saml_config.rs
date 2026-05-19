@@ -63,7 +63,7 @@ fn configured_idp_entry_point(config: &SamlConfig) -> Option<String> {
     metadata
         .metadata
         .as_deref()
-        .and_then(|xml| crate::saml::metadata::first_single_sign_on_service_location(xml).ok())
+        .and_then(|xml| crate::saml_impl::metadata::first_single_sign_on_service_location(xml).ok())
         .flatten()
         .and_then(|location| valid_location(&location))
 }

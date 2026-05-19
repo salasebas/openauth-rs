@@ -73,6 +73,9 @@ impl MockOidcServer {
                                 "token_endpoint":"{issuer}/token",
                                 "jwks_uri":"{issuer}/keys",
                                 "userinfo_endpoint":"{issuer}/userinfo",
+                                "revocation_endpoint":"{issuer}/revoke",
+                                "end_session_endpoint":"{issuer}/endsession",
+                                "introspection_endpoint":"{issuer}/introspection",
                                 "token_endpoint_auth_methods_supported":["client_secret_basic","client_secret_post"],
                                 "scopes_supported":["openid","email","profile"]
                             }}"#

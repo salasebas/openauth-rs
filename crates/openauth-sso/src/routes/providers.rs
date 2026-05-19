@@ -8,12 +8,15 @@ use openauth_core::api::{
 use serde_json::json;
 
 use crate::audit;
+use crate::openapi::{
+    provider_id_body_schema, sso_provider_list_response, sso_provider_response, success_response,
+};
 use crate::options::{SsoAuditEvent, SsoAuditEventKind, SsoAuditSeverity, SsoOptions};
 use crate::org::{accessible_providers, can_manage_provider};
 use crate::store::SsoProviderStore;
 use crate::utils;
 
-use super::support::{authenticated_user, provider_id_options, unauthorized, ProviderIdBody};
+use super::support::{authenticated_user, unauthorized, ProviderIdBody};
 
 pub(super) fn list_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
     create_auth_endpoint(
@@ -21,7 +24,11 @@ pub(super) fn list_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
         Method::GET,
         AuthEndpointOptions::new()
             .operation_id("listSSOProviders")
-            .openapi(OpenApiOperation::new("listSSOProviders").tag("SSO")),
+            .openapi(
+                OpenApiOperation::new("listSSOProviders")
+                    .tag("SSO")
+                    .response("200", sso_provider_list_response()),
+            ),
         move |context, request| {
             let options = Arc::clone(&options);
             Box::pin(async move {
@@ -48,7 +55,15 @@ pub(super) fn get_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/sso/get-provider",
         Method::GET,
-        provider_id_options("getSSOProvider"),
+        AuthEndpointOptions::new()
+            .operation_id("getSSOProvider")
+            .allowed_media_types(["application/json", "application/x-www-form-urlencoded"])
+            .body_schema(provider_id_body_schema())
+            .openapi(
+                OpenApiOperation::new("getSSOProvider")
+                    .tag("SSO")
+                    .response("200", sso_provider_response("SSO provider")),
+            ),
         move |context, request| {
             let options = Arc::clone(&options);
             Box::pin(async move {
@@ -81,7 +96,15 @@ pub(super) fn delete_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/sso/delete-provider",
         Method::POST,
-        provider_id_options("deleteSSOProvider"),
+        AuthEndpointOptions::new()
+            .operation_id("deleteSSOProvider")
+            .allowed_media_types(["application/json", "application/x-www-form-urlencoded"])
+            .body_schema(provider_id_body_schema())
+            .openapi(
+                OpenApiOperation::new("deleteSSOProvider")
+                    .tag("SSO")
+                    .response("200", success_response("Provider deleted")),
+            ),
         move |context, request| {
             let options = Arc::clone(&options);
             Box::pin(async move {

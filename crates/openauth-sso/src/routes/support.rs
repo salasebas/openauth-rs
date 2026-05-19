@@ -1,16 +1,13 @@
 use std::sync::Arc;
 
 use http::{header, HeaderValue};
-use openauth_core::api::{
-    serialize_cookie, ApiRequest, ApiResponse, AuthEndpointOptions, OpenApiOperation, PathParams,
-};
+use openauth_core::api::{serialize_cookie, ApiRequest, ApiResponse, PathParams};
 use openauth_core::auth::session::{GetSessionInput, SessionAuth};
 use openauth_core::context::AuthContext;
 use openauth_core::db::{DbAdapter, User};
 use openauth_core::error::OpenAuthError;
 use serde_json::json;
 
-use crate::openapi::provider_id_body_schema;
 use crate::utils;
 
 #[derive(Debug, serde::Serialize)]
@@ -211,12 +208,4 @@ pub(super) async fn authenticated_session_user(
 #[serde(rename_all = "camelCase")]
 pub(super) struct ProviderIdBody {
     pub(super) provider_id: String,
-}
-
-pub(super) fn provider_id_options(operation_id: &'static str) -> AuthEndpointOptions {
-    AuthEndpointOptions::new()
-        .operation_id(operation_id)
-        .allowed_media_types(["application/json", "application/x-www-form-urlencoded"])
-        .body_schema(provider_id_body_schema())
-        .openapi(OpenApiOperation::new(operation_id).tag("SSO"))
 }

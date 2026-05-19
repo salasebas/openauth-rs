@@ -1,19 +1,26 @@
 use std::sync::{Arc, OnceLock};
 
 use http::Method;
-use openauth_core::api::{create_auth_endpoint, parse_request_body, AsyncAuthEndpoint};
+use openauth_core::api::{
+    create_auth_endpoint, parse_request_body, AsyncAuthEndpoint, AuthEndpointOptions,
+    OpenApiOperation,
+};
 use openauth_core::crypto::random::generate_random_string;
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
 use crate::audit;
+use crate::openapi::{
+    domain_verification_token_response, error_code_response, provider_id_body_schema,
+    success_response,
+};
 use crate::options::{SsoAuditEvent, SsoAuditEventKind, SsoAuditSeverity, SsoOptions};
 use crate::org::can_verify_provider_domain;
 use crate::state::SsoStateStore;
 use crate::store::SsoProviderStore;
 use crate::utils;
 
-use super::support::{authenticated_user, provider_id_options, unauthorized, ProviderIdBody};
+use super::support::{authenticated_user, unauthorized, ProviderIdBody};
 
 const DNS_LABEL_MAX_LENGTH: usize = 63;
 
@@ -23,7 +30,19 @@ pub(super) fn request_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/sso/request-domain-verification",
         Method::POST,
-        provider_id_options("requestDomainVerification"),
+        AuthEndpointOptions::new()
+            .operation_id("requestDomainVerification")
+            .allowed_media_types(["application/json", "application/x-www-form-urlencoded"])
+            .body_schema(provider_id_body_schema())
+            .openapi(
+                OpenApiOperation::new("requestDomainVerification")
+                    .tag("SSO")
+                    .response(
+                        "201",
+                        domain_verification_token_response("Domain verification token"),
+                    )
+                    .response("404", error_code_response("Provider not found")),
+            ),
         move |context, request| {
             let options = Arc::clone(&options);
             Box::pin(async move {
@@ -105,7 +124,18 @@ pub(super) fn verify_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/sso/verify-domain",
         Method::POST,
-        provider_id_options("verifyDomain"),
+        AuthEndpointOptions::new()
+            .operation_id("verifyDomain")
+            .allowed_media_types(["application/json", "application/x-www-form-urlencoded"])
+            .body_schema(provider_id_body_schema())
+            .openapi(
+                OpenApiOperation::new("verifyDomain")
+                    .tag("SSO")
+                    .response("200", success_response("Domain verified"))
+                    .response("404", error_code_response("Provider or token not found"))
+                    .response("409", error_code_response("Domain already verified"))
+                    .response("502", error_code_response("DNS verification failed")),
+            ),
         move |context, request| {
             let options = Arc::clone(&options);
             Box::pin(async move {

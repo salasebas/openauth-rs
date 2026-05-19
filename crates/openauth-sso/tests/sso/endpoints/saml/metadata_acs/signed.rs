@@ -179,6 +179,15 @@ async fn saml_acs_decrypts_encrypted_assertion_when_private_key_is_configured(
         String::from_utf8_lossy(register.body())
     );
 
+    let relay_state = saml_sign_in_relay_state(&router).await?;
+    let response_in_response_to = parsed
+        .response_in_response_to
+        .as_deref()
+        .ok_or("encrypted response fixture missing InResponseTo")?;
+    let encrypted_xml = encrypted_xml.replace(
+        &format!(r#"InResponseTo="{response_in_response_to}""#),
+        &format!(r#"InResponseTo="{relay_state}""#),
+    );
     let encrypted_response = base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD,
         encrypted_xml.as_bytes(),
@@ -195,7 +204,7 @@ async fn saml_acs_decrypts_encrypted_assertion_when_private_key_is_configured(
     assert_eq!(response.status(), StatusCode::FOUND);
     assert_eq!(
         response.headers().get(header::LOCATION),
-        Some(&http::HeaderValue::from_static("https://app.example.com"))
+        Some(&http::HeaderValue::from_static("/dashboard"))
     );
     assert!(adapter.records("user").await.iter().any(|record| {
         record.get("email") == Some(&DbValue::String(email.to_ascii_lowercase()))

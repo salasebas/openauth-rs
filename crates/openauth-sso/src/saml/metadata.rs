@@ -1,6 +1,6 @@
 use crate::options::SamlConfig;
-use crate::saml::authn_request::assertion_consumer_service_url;
-use crate::saml::xml::{local_name, validate_saml_xml};
+use crate::saml_impl::authn_request::assertion_consumer_service_url;
+use crate::saml_impl::xml::{local_name, validate_saml_xml};
 use openauth_core::error::OpenAuthError;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
