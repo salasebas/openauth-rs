@@ -2619,7 +2619,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "openauth"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "http",
  "openauth-core",
@@ -2637,7 +2637,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-axum"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "axum",
  "http-body-util",
@@ -2651,7 +2651,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-cli"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "assert_cmd",
  "base64 0.22.1",
@@ -2681,7 +2681,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-core"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
@@ -2709,7 +2709,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-deadpool-postgres"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "deadpool-postgres",
  "http",
@@ -2722,8 +2722,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "openauth-example-full-app"
+version = "0.0.5"
+dependencies = [
+ "axum",
+ "http",
+ "openauth",
+ "openauth-axum",
+ "openauth-fred",
+ "openauth-redis",
+ "openauth-sqlx",
+ "redis",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "time",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "openauth-fred"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "fred",
  "http",
@@ -2734,7 +2754,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-i18n"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "http",
  "indexmap 2.14.0",
@@ -2748,7 +2768,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-oauth"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "base64 0.22.1",
  "josekit",
@@ -2764,7 +2784,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-oauth-provider"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "base64 0.22.1",
  "data-encoding",
@@ -2787,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-passkey"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "http",
  "indexmap 2.14.0",
@@ -2805,7 +2825,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-plugins"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "base64 0.22.1",
  "data-encoding",
@@ -2833,7 +2853,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-redis"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "openauth-core",
  "redis",
@@ -2843,14 +2863,14 @@ dependencies = [
 
 [[package]]
 name = "openauth-scim"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "openauth-social-providers"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "base64 0.22.1",
  "josekit",
@@ -2865,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-sqlx"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "http",
  "indexmap 2.14.0",
@@ -2878,7 +2898,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-sso"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -2909,14 +2929,14 @@ dependencies = [
 
 [[package]]
 name = "openauth-stripe"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "openauth-telemetry"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "base64 0.22.1",
  "openauth-core",
@@ -2930,7 +2950,7 @@ dependencies = [
 
 [[package]]
 name = "openauth-tokio-postgres"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "http",
  "openauth-core",

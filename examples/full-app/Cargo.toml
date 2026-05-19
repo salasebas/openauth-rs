@@ -1,0 +1,26 @@
+[package]
+name = "openauth-example-full-app"
+version = "0.0.5"
+edition.workspace = true
+publish = false
+
+[dependencies]
+axum.workspace = true
+http.workspace = true
+openauth = { path = "../../crates/openauth", features = ["sqlx"] }
+openauth-axum = { path = "../../crates/openauth-axum" }
+openauth-fred = { path = "../../crates/openauth-fred" }
+openauth-redis = { path = "../../crates/openauth-redis" }
+openauth-sqlx = { path = "../../crates/openauth-sqlx", features = ["mysql", "postgres", "sqlite"] }
+redis = { version = "0.32", default-features = false, features = ["tokio-comp"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sqlx = { workspace = true, features = ["mysql", "postgres", "sqlite"] }
+time = { workspace = true, features = ["formatting"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

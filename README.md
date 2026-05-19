@@ -1,181 +1,62 @@
-# OpenAuth
+# OpenAuth-RS
 
-OpenAuth is a Rust authentication toolkit.
+OpenAuth-RS is an unofficial Rust authentication toolkit inspired by Better
+Auth. It is server-first: the crates focus on authentication primitives,
+storage contracts, HTTP endpoints, OAuth/OIDC, SSO, SCIM, SAML, passkeys,
+plugins, adapters, and integrations that belong on the Rust server side.
 
 ## Status
 
-OpenAuth is experimental. APIs, crate boundaries, and behavior may change before
-the project reaches a stable release.
+OpenAuth-RS is in experimental beta. APIs, crate boundaries, endpoint behavior,
+and storage contracts can change before a stable release. Treat it as a project
+for early adopters and contributors, not as a frozen production interface.
 
-## Rate Limiting
-
-OpenAuth rate limiting is route-aware and uses an async atomic consume contract.
-The default `Memory` backend is a Governor-backed local limiter and is best for
-development, tests, and single-instance deployments.
-
-```rust
-use openauth::{OpenAuth, RateLimitOptions};
-
-let auth = OpenAuth::builder()
-    .secret("secret-a-at-least-32-chars-long!!")
-    .rate_limit(RateLimitOptions::memory().enabled(true).window(60).max(100))
-    .build()?;
-```
-
-For multi-instance deployments, use a distributed `RateLimitStore` instead of
-local memory. `openauth-sqlx` provides SQLx-backed stores when the application
-already depends on a SQL database. For Postgres without SQLx,
-`openauth-deadpool-postgres` is the recommended pooled production adapter, while
-`openauth-tokio-postgres` is the minimal no-pool adapter for applications that
-already own a `tokio_postgres::Client`. `openauth-redis` provides a Redis/Valkey
-store for higher-throughput shared enforcement. `openauth-fred` provides the
-same rate-limit storage contract for projects that prefer the `fred` client.
-Both Redis crates use RESP-compatible servers, Lua scripting for the atomic
-consume operation, and core commands shared by Redis and Valkey. `valkey://`
-and `valkeys://` URLs are accepted as aliases for `redis://` and `rediss://`
-before connecting. Very high traffic deployments can opt into hybrid mode,
-which runs a local Governor prefilter before the SQLx or Redis/Valkey store
-while keeping the distributed decision authoritative.
-
-```rust
-use openauth::{HybridRateLimitOptions, OpenAuth, RateLimitOptions};
-
-let auth = OpenAuth::builder()
-    .secret("secret-a-at-least-32-chars-long!!")
-    .rate_limit(
-        RateLimitOptions::secondary_storage(redis_store)
-            .window(60)
-            .max(100)
-            .hybrid(HybridRateLimitOptions::enabled().local_multiplier(2)),
-    )
-    .build()?;
-```
-
-Using Fred directly:
-
-```rust
-use openauth::{OpenAuth, RateLimitOptions};
-use openauth_fred::FredRateLimitStore;
-
-let store = FredRateLimitStore::connect_valkey("valkey://127.0.0.1:6379").await?;
-
-let auth = OpenAuth::builder()
-    .secret("secret-a-at-least-32-chars-long!!")
-    .rate_limit(
-        RateLimitOptions::secondary_storage(store)
-            .enabled(true)
-            .window(60)
-            .max(100),
-    )
-    .build()?;
-```
-
-Custom stores should implement `RateLimitStore::consume` atomically. The legacy
-`RateLimitStorage` `get`/`set` adapter is kept for compatibility, but it is not
-safe for distributed enforcement unless the underlying implementation provides
-its own atomicity.
-
-The existing initializer helpers remain available:
+## Basic Usage
 
 ```rust
 use openauth::{open_auth, OpenAuthOptions};
 
-let auth = open_auth(OpenAuthOptions::new()
-    .secret("secret-a-at-least-32-chars-long!!"))?;
-```
-
-## Passkeys
-
-`openauth-passkey` provides the server-side passkey plugin. It uses
-`webauthn-rs`, contributes a `passkeys` table with snake_case columns, and keeps
-WebAuthn ceremony state in server-side verification storage referenced by a
-signed short-lived cookie. Registration/authentication option JSON follows the
-Better Auth server behavior for authenticator selection hints and extensions,
-while verification remains delegated to `webauthn-rs`.
-
-```rust
-use openauth::{OpenAuth, OpenAuthOptions};
-use openauth_passkey::{passkey, PasskeyOptions};
-
-let auth = OpenAuth::builder()
-    .secret("secret-a-at-least-32-chars-long!!")
-    .base_url("https://app.example.com")
-    .plugin(passkey(PasskeyOptions::default()))
-    .build()?;
-```
-
-If you prefer the top-level `openauth` crate, enable its `passkey` feature and
-use `openauth::passkey`.
-
-## Axum
-
-`openauth-axum` mounts the framework-neutral OpenAuth HTTP core in an Axum
-application. It uses a catch-all route under the configured auth base path, so
-core routes, custom endpoints, and plugin-provided endpoints are all handled by
-OpenAuth's router.
-
-```rust
-use openauth::OpenAuth;
-use openauth_axum::router;
-
-let auth = OpenAuth::builder()
-    .secret("secret-a-at-least-32-chars-long!!")
-    .base_url("https://app.example.com/api/auth")
-    .build()?;
-
-let app = router(auth)?;
-```
-
-When Axum is exposed directly to clients, run the app with connection info so
-OpenAuth can use the real peer socket IP for rate limiting:
-
-```rust
-let app = openauth_axum::router(auth)?;
-
-axum::serve(
-    listener,
-    app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-).await?;
-```
-
-When OpenAuth is behind a trusted proxy or load balancer, configure the proxy
-to overwrite forwarded IP headers and configure OpenAuth to trust only those
-headers. Do not enable this for traffic that can reach Axum directly, because
-clients can spoof forwarded headers.
-
-```rust
-use openauth::{AdvancedOptions, IpAddressOptions, OpenAuthOptions};
-
-let options = OpenAuthOptions::new().advanced(
-    AdvancedOptions::new().ip_address(
-        IpAddressOptions::new().headers(["x-forwarded-for"])
-    )
-);
-```
-
-For manual composition, nest the unmounted routes at the same path as
-`OpenAuthOptions.base_path`:
-
-```rust
-use axum::Router;
-use openauth_axum::OpenAuthAxumExt;
-
-let app = Router::new().nest("/api/auth", auth.into_routes());
-```
-
-The adapter has its own request body limit. The default is 10 MiB and can be
-overridden without changing core OpenAuth options. Requests that exceed this
-limit return `413 Payload Too Large`.
-
-```rust
-use openauth_axum::{router_with_options, OpenAuthAxumOptions};
-
-let app = router_with_options(
-    auth,
-    OpenAuthAxumOptions::new().body_limit(2 * 1024 * 1024),
+let auth = open_auth(
+    OpenAuthOptions::new()
+        .secret("secret-a-at-least-32-chars-long!!")
+        .base_url("https://app.example.com/api/auth"),
 )?;
 ```
 
+Most applications will combine the top-level `openauth` crate with a web
+adapter, a database adapter, and whichever plugins or provider crates they need.
+
+## Package Guide
+
+Markdown links can point directly to each package README. Start with the
+top-level crate, then add feature crates as your application needs them.
+
+| Package | Purpose |
+| --- | --- |
+| [OpenAuth](crates/openauth/README.md) | Public entry crate and re-export surface. |
+| [OpenAuth Core](crates/openauth-core/README.md) | Shared contracts, errors, options, cookies, sessions, storage, and routing primitives. |
+| [OpenAuth Axum](crates/openauth-axum/README.md) | Axum router integration for the framework-neutral HTTP core. |
+| [OpenAuth CLI](crates/openauth-cli/README.md) | Command-line helpers for init, diagnostics, secrets, schemas, migrations, and plugins. |
+| [OpenAuth Plugins](crates/openauth-plugins/README.md) | Official server-side plugin modules such as admin, organization, JWT, API keys, email OTP, magic link, and more. |
+| [OpenAuth Passkey](crates/openauth-passkey/README.md) | Server-side WebAuthn/passkey plugin backed by `webauthn-rs`. |
+| [OpenAuth OAuth](crates/openauth-oauth/README.md) | OAuth client primitives and request/response helpers. |
+| [OpenAuth OAuth Provider](crates/openauth-oauth-provider/README.md) | OAuth 2.1 and OpenID Connect provider support. |
+| [OpenAuth Social Providers](crates/openauth-social-providers/README.md) | Social OAuth provider definitions for GitHub, Google, Discord, Slack, and other providers. |
+| [OpenAuth SSO](crates/openauth-sso/README.md) | Enterprise SSO, OIDC, SAML, provider management, and domain verification. |
+| [OpenAuth SCIM](crates/openauth-scim/README.md) | SCIM support surface. |
+| [OpenAuth Stripe](crates/openauth-stripe/README.md) | Stripe billing and webhook integration surface. |
+| [OpenAuth i18n](crates/openauth-i18n/README.md) | Internationalization plugin for localized auth responses. |
+| [OpenAuth Telemetry](crates/openauth-telemetry/README.md) | Optional telemetry payload generation and publishing hooks. |
+| [OpenAuth SQLx](crates/openauth-sqlx/README.md) | SQLx adapters for SQLite, Postgres, MySQL, and SQL-backed rate limiting. |
+| [OpenAuth Deadpool Postgres](crates/openauth-deadpool-postgres/README.md) | Pooled Postgres adapter recommended for production Postgres deployments. |
+| [OpenAuth Tokio Postgres](crates/openauth-tokio-postgres/README.md) | Minimal `tokio-postgres` adapter for apps that already own a client. |
+| [OpenAuth Redis](crates/openauth-redis/README.md) | Redis/Valkey rate-limit store using `redis-rs`. |
+| [OpenAuth Fred](crates/openauth-fred/README.md) | Redis/Valkey rate-limit store using the `fred` client. |
+
+## Repository
+
+Source code lives at [sebasxsala/openauth-rs](https://github.com/sebasxsala/openauth-rs).
+
 ## License
 
-OpenAuth is licensed under the MIT License. See [LICENSE](LICENSE).
+OpenAuth-RS is licensed under the MIT License. See [LICENSE](LICENSE).
