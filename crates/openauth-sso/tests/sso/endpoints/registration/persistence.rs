@@ -1,0 +1,35 @@
+use super::*;
+
+#[tokio::test]
+async fn register_persists_provider_for_session_user() -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) =
+        router_with_options(SsoOptions::default().domain_verification_enabled(true))?;
+    let cookie = seed_session(&adapter).await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/register",
+            r#"{"providerId":"okta","issuer":"https://idp.example.com","domain":"example.com"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response)?;
+    assert_eq!(body["providerId"], "okta");
+    assert_eq!(body["domainVerified"], false);
+
+    let records = adapter.records("ssoProvider").await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].get("providerId"),
+        Some(&openauth_core::db::DbValue::String("okta".to_owned()))
+    );
+    assert_eq!(
+        records[0].get("userId"),
+        Some(&openauth_core::db::DbValue::String("user_1".to_owned()))
+    );
+
+    Ok(())
+}
