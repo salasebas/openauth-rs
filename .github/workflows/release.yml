@@ -28,6 +28,11 @@ jobs:
       - name: Show Rust toolchain
         run: rustup show
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config xmlsec1 libxmlsec1-dev libxmlsec1-openssl
+
       - name: Validate tag matches workspace version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -63,22 +68,22 @@ jobs:
           version="$(cargo metadata --no-deps --format-version 1 | jq -r '.workspace_members[0] as $first | .packages[] | select(.id == $first) | .version')"
           crates=(
             openauth-oauth
-            openauth-scim
-            openauth-sso
-            openauth-stripe
             openauth-social-providers
             openauth-core
-            openauth-i18n
-            openauth-plugins
+            openauth-scim
+            openauth-stripe
             openauth-sqlx
-            openauth-telemetry
             openauth-tokio-postgres
             openauth-deadpool-postgres
+            openauth-i18n
+            openauth-plugins
+            openauth-sso
+            openauth-telemetry
             openauth-passkey
             openauth-redis
+            openauth-fred
             openauth-oauth-provider
             openauth
-            openauth-fred
             openauth-axum
             openauth-cli
           )
