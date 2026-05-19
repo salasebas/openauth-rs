@@ -37,13 +37,14 @@ Implemented and covered:
 - Provider registration/list/get/update/delete for user-owned providers.
 - OIDC registration with discovery hydration, explicit endpoint mode, client
   secret sanitization, authorization URL generation, code exchange, UserInfo
-  mapping, ID token/JWKS validation, account linking, session creation, and
-  shared redirect URI support.
+  mapping, ID token/JWKS validation, optional OP endpoint normalization,
+  account linking, session creation, and shared redirect URI support.
 - Domain verification endpoint registration, token request/reuse, DNS TXT
   verification, custom resolver support, public-suffix domain rejection, and
   `domainVerified` reset when domains change.
 - SAML SP metadata, AuthnRequest redirect generation, RelayState/AuthnRequest
-  verification storage, ACS parsing, timestamp validation, replay protection,
+  verification storage, ACS parsing, `InResponseTo` state lookup from XML,
+  timestamp validation, replay protection through assertion expiration,
   unsigned flow when explicitly allowed, signed ACS validation behind
   `saml-signed`, SLO request/response parsing, and signed SLO validation.
 - SAML provider sanitization without raw certificate exposure, including
@@ -58,18 +59,20 @@ Implemented and covered:
   internal logging: provider lifecycle changes, domain verification,
   SAML replay rejection, SAML signature failure, and SLO session cleanup.
 
-## Remaining Requirements By Area
+## Requirements By Area
 
 ### Provider Access And Organization Integration
 
-- Provider management must support organization-linked providers when the
-  organization plugin is enabled:
+- Provider management supports organization-linked providers when the
+  organization plugin is enabled and must keep this policy stable:
   - List org providers for users with `owner` or `admin` roles.
   - Accept comma-separated roles and trim whitespace.
   - Reject regular members for get/update/delete.
   - Preserve user-owned behavior when no organization plugin is installed.
 - Registration with `organizationId` must verify that the current user belongs
   to that organization before persisting the provider.
+- Update with `organizationId` must verify that the current user belongs to the
+  target organization before changing provider ownership.
 - `/sign-in/sso` must resolve `organizationSlug` to `organizationId` and select
   the matching provider.
 - Domain-based organization assignment for non-SSO sign-up/sign-in flows must
@@ -107,19 +110,24 @@ Implemented and covered:
 
 ### OIDC Discovery And Callback
 
-- Runtime discovery must hydrate incomplete stored OIDC config during sign-in
-  and callback, not only during registration.
-- Discovery must produce stable error codes matching upstream semantics:
+- Runtime discovery hydrates incomplete stored OIDC config during sign-in and
+  callback, not only during registration.
+- Discovery produces stable error codes matching upstream semantics:
   `discovery_invalid_url`, `discovery_untrusted_origin`,
   `discovery_not_found`, `discovery_timeout`, `discovery_invalid_json`,
   `discovery_incomplete`, `issuer_mismatch`, and
   `discovery_unexpected_error`.
-- Discovery URL validation must reject untrusted origins using OpenAuth trusted
+- Discovery URL validation rejects untrusted origins using OpenAuth trusted
   origin policy, and discovered endpoints must remain on trusted origins.
-- Discovery fetch must have the upstream 10 second timeout behavior.
-- OIDC callback must support ID-token-only profile extraction when
+- Discovery fetch has the upstream 10 second timeout behavior.
+- OIDC callback supports ID-token-only profile extraction when
   `userInfoEndpoint` is absent.
-- OIDC callback must redirect new users to `newUserCallbackURL` when provided.
+- OIDC callback redirects new users to `newUserCallbackURL` when provided.
+- OIDC callback must default missing `tokenEndpointAuthentication` /
+  `token_endpoint_authentication` to `client_secret_basic`.
+- OIDC discovery must normalize, trusted-origin validate, persist, and expose
+  optional provider metadata endpoints for revocation, end-session, and
+  introspection when supplied by the IdP.
 - OIDC callback must preserve mapped `extraFields` once OpenAuth core exposes a
   typed place for raw provider attributes.
 
@@ -130,20 +138,25 @@ Implemented and covered:
   back into callback/ACS paths.
 - RelayState should use OpenAuth generic state/cookie semantics where possible,
   with cross-site POST cookie checks intentionally skipped for ACS.
-- SAML callback GET parity is still missing: upstream uses it for browser flow
-  session/RelayState handling.
+- SAML callback GET handles upstream browser flow session/RelayState behavior.
+- ACS must validate the stored AuthnRequest by XML `InResponseTo` when
+  `RelayState` is absent, and must reject unknown, expired, or provider-mismatched
+  AuthnRequest state before account/session creation.
 - ACS must convert structural 400 flow errors to browser redirects with error
   query parameters where upstream does, while preserving true 404/401/403
   failures.
-- SAML AuthnRequest signing must use SP private key material behind the SAML
+- SAML AuthnRequest signing uses SP private key material behind the SAML
   signature boundary and include `Signature`/`SigAlg` in Redirect binding URLs.
-- Encrypted assertions must fail closed in default builds. With `saml-signed`
+- Encrypted assertions fail closed in default builds. With `saml-signed`
   and explicit `decryptionPvk`, ACS must decrypt exactly one encrypted
   assertion before user provisioning and reject missing/invalid keys before
   creating users or sessions.
-- Runtime SAML algorithm validation must inspect parsed responses for signature,
+- Runtime SAML algorithm validation inspects parsed responses for signature,
   digest, key-encryption, and data-encryption algorithms, not only configured
   provider fields.
+- Replay protection stores `saml-used-assertion:*` until
+  `Assertion.NotOnOrAfter + clockSkew`; when no assertion expiration is
+  available, it uses an explicit 15-minute fallback.
 
 ### SAML Metadata And SLO
 
@@ -152,14 +165,14 @@ Implemented and covered:
   bindings when SLO is enabled.
 - Generated SP metadata must include `wantMessageSigned`,
   `authnRequestsSigned`, and configured `NameIDFormat`.
-- Metadata endpoint query `format=json` should either be implemented or
-  explicitly rejected/tested as unsupported.
+- Metadata endpoint query `format=json` is accepted for upstream schema
+  compatibility but still returns XML from `sp.getMetadata()`, matching
+  upstream's effective behavior.
 - SLO should use configured IdP SLO service endpoints when present, instead of
   assuming `entryPoint`.
-- SLO POST-form responses are not implemented; current behavior is redirect
-  only.
-- The global sign-out hook that clears SAML session lookup records is still
-  pending.
+- SLO POST-form responses must stay covered for request and response bindings.
+- The global sign-out hook clears SAML session lookup records after normal
+  OpenAuth sign-out.
 
 ### Domain Verification And State Storage
 
@@ -172,11 +185,14 @@ Implemented and covered:
 
 ### OpenAPI And Modularization
 
-- OpenAPI metadata is still minimal. Each endpoint needs upstream-equivalent
-  summaries, descriptions, request schemas, response descriptions, and hidden
-  metadata for browser callbacks/SLO where appropriate.
-- `routes/mod.rs` is intentionally functional but too large now. Split it into
-  focused route modules before adding more behavior:
-  `routes::registration`, `routes::providers`, `routes::sign_in`,
-  `routes::oidc`, `routes::saml_acs`, `routes::slo`, and
+- OpenAPI metadata must keep unique operation IDs, including
+  `handleSSOCallbackShared` for `/sso/callback` and `handleSSOCallback` for
+  `/sso/callback/:providerId`.
+- Public OpenAPI metadata must include concrete success response schemas for
+  provider CRUD, registration, sign-in, domain verification, SAML metadata,
+  OIDC callback redirects, and SLO redirect/POST-form responses.
+- Endpoint modules must remain split by route family:
+  `routes::registration`, `routes::providers`, `routes::provider_update`,
+  `routes::sign_in`, `routes::oidc`, `routes::saml_acs`,
+  `routes::saml_metadata`, `routes::slo`, and
   `routes::domain_verification`.

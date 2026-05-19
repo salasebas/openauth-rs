@@ -315,10 +315,14 @@
 - [x] Decide OIDC discovery optional endpoint storage.
   - Files: `crates/openauth-sso/src/options.rs`,
     `crates/openauth-sso/src/oidc/discovery.rs`,
+    `crates/openauth-sso/src/routes/registration.rs`,
+    `crates/openauth-sso/src/routes/provider_update.rs`,
+    `crates/openauth-sso/src/store.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/registration/discovery.rs`,
     `docs/superpowers/specs/openauth-sso/design.md`.
-  - Documented that optional revocation, end-session, and introspection
-    endpoints are intentionally not persisted until OpenAuth SSO owns behavior
-    that consumes them.
+  - Optional revocation, end-session, and introspection endpoints are now
+    normalized, trusted-origin validated, persisted in `OidcConfig`, and
+    exposed in sanitized provider responses for upstream discovery parity.
 
 ## Priority 5: SAML Config, Metadata, And ACS Parity
 
@@ -347,10 +351,9 @@
   - Generated metadata now includes SLO Redirect/POST services when SLO is
     enabled, `AuthnRequestsSigned`, `WantAssertionsSigned`, and configured
     `NameIDFormat`.
-- [x] Decide and test metadata `format=json`: either support JSON metadata or
-  return a clear unsupported-format error.
-  - Current behavior rejects `format=json` explicitly in
-    `saml_metadata_endpoint_rejects_json_format_explicitly`.
+- [x] Decide and test metadata `format=json`.
+  - Current behavior accepts `format=json` for upstream schema compatibility and
+    still returns XML, matching upstream's effective `sp.getMetadata()` path.
 - [x] Implement SAML AuthnRequest signing when private key material is present.
   - Keep behind the existing SAML signature boundary.
   - Files: `crates/openauth-sso/src/saml/authn_request.rs`,
@@ -375,9 +378,9 @@
     `crates/openauth-sso/tests/sso/endpoints/saml/metadata_acs.rs`.
   - Cover callbackURL, errorCallbackURL, newUserCallbackURL, requestSignUp,
     account-linking data, PKCE/code-verifier data if applicable, and the
-    upstream 10-minute RelayState expiration behavior.
+    upstream 5-minute RelayState expiration behavior.
   - Covered stored callback/error/new-user URLs, explicit sign-up intent,
-    account creation/linking from the SAML response, and 10-minute RelayState
+    account creation/linking from the SAML response, and 5-minute RelayState
     expiration. PKCE/code verifier state is not applicable to SAML AuthnRequest
     flow.
 - [x] Use `idpMetadata.entityID` when building SAML IdP config.
@@ -459,7 +462,7 @@
   - `saml::xml` now rejects invalid XML and `DOCTYPE` early, centralizes local
     name extraction, validates SAML response/logout/metadata parsing boundaries,
     and documents the schema-validation equivalent OpenAuth uses instead of
-    upstream `samlify` schema validation.
+    upstream's `samlify` plus `fast-xml-parser` well-formed XML validation.
 - [x] Add ACS origin-bypass coverage for IdP POSTs.
   - Files: `crates/openauth-sso/tests/sso/endpoints/saml/metadata_acs.rs`,
     `crates/openauth-sso/tests/sso/support.rs`,
@@ -692,6 +695,74 @@
     `sso_error_category`, and `sso_error_descriptors`. Plugin error code
     registration now derives from the descriptor table while endpoints keep the
     same JSON `code` values.
+
+## Priority 10: Upstream Gap Closure Follow-up
+
+- [x] Resolve SAML ACS state from XML `InResponseTo` when `RelayState` is
+  absent.
+  - Files: `crates/openauth-sso/src/routes/saml_acs.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/saml/metadata_acs/state.rs`.
+  - ACS now parses Response and SubjectConfirmation `InResponseTo` values,
+    loads the stored AuthnRequest from SSO state, and accepts valid
+    SP-initiated responses without requiring `RelayState`.
+- [x] Reject unknown, expired, or provider-mismatched SAML AuthnRequest state.
+  - Files: `crates/openauth-sso/src/routes/saml_acs.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/saml/metadata_acs/state.rs`.
+  - Unknown or expired `InResponseTo` returns `UNKNOWN_AUTHN_REQUEST`.
+    AuthnRequest records belonging to another provider return
+    `SAML_IN_RESPONSE_TO_PROVIDER_MISMATCH` before user/session creation.
+- [x] Align SAML AuthnRequest/RelayState TTL with upstream.
+  - Files: `crates/openauth-sso/src/options.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/sign_in/saml.rs`.
+  - `SamlOptions::request_ttl` now defaults to 5 minutes.
+- [x] Store assertion replay protection until assertion expiration.
+  - Files: `crates/openauth-sso/src/routes/saml_acs.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/saml/metadata_acs/state.rs`.
+  - Replay state now uses `Assertion.NotOnOrAfter + clockSkew` when present
+    and falls back to an explicit 15 minutes when no usable assertion
+    expiration exists.
+- [x] Validate `organizationId` on provider update.
+  - Files: `crates/openauth-sso/src/routes/provider_update.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/provider_update.rs`.
+  - OpenAuth keeps update-time organization reassignment, but the current user
+    must be a member of the target organization before the change is persisted.
+- [x] Default missing OIDC token endpoint authentication to
+  `client_secret_basic`.
+  - Files: `crates/openauth-sso/src/routes/oidc.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/oidc_callback/token_auth.rs`.
+  - Manual OIDC configs without `tokenEndpointAuthentication` now emit a Basic
+    token request by default.
+- [x] Split OIDC callback OpenAPI operation IDs.
+  - Files: `crates/openauth-sso/src/routes/oidc.rs`,
+    `crates/openauth-sso/tests/sso/openapi.rs`.
+  - `/sso/callback` uses `handleSSOCallbackShared`; provider-specific callback
+    routes keep `handleSSOCallback`.
+- [x] Refresh SSO specs after upstream gap closure.
+  - Files: `docs/superpowers/specs/openauth-sso/requirements.md`,
+    `docs/superpowers/specs/openauth-sso/design.md`,
+    `docs/superpowers/specs/openauth-sso/gap-analysis.md`,
+    `docs/superpowers/specs/openauth-sso/tasks.md`.
+  - Updated requirements, design notes, gap status, and checklist with the
+    security/API decisions from this phase.
+- [x] Persist and expose OIDC optional discovery endpoints.
+  - Files: `crates/openauth-sso/src/options.rs`,
+    `crates/openauth-sso/src/oidc/discovery.rs`,
+    `crates/openauth-sso/src/routes/registration.rs`,
+    `crates/openauth-sso/src/routes/provider_update.rs`,
+    `crates/openauth-sso/src/routes/oidc.rs`,
+    `crates/openauth-sso/src/store.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/registration/discovery.rs`.
+  - Covered discovery-time normalization and trusted-origin validation for
+    `revocation_endpoint`, `end_session_endpoint`, and
+    `introspection_endpoint`, plus registration/update persistence and
+    sanitized response exposure.
+- [x] Expand public SSO OpenAPI response schemas.
+  - Files: `crates/openauth-sso/src/openapi.rs`,
+    `crates/openauth-sso/src/routes/*`,
+    `crates/openauth-sso/tests/sso/openapi.rs`.
+  - Added explicit success response schemas for provider CRUD, registration,
+    sign-in, domain verification, SAML metadata, OIDC callback redirects, and
+    SLO redirect/POST-form responses.
 
 ## Verification Matrix
 

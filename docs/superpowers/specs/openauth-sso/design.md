@@ -9,8 +9,9 @@ security helpers, SAML state helpers, and provider sanitization.
 - `options`: public configuration and builders.
 - `schema`: `PluginSchemaContribution` for `ssoProvider`.
 - `store`: provider persistence and conversions.
-- `routes`: endpoint registration and handlers. This is currently functional
-  but too large and should be split before the next broad behavior phase.
+- `routes`: thin endpoint registration plus focused route-family modules for
+  provider CRUD, registration, sign-in, OIDC callbacks, SAML ACS/metadata, SLO,
+  and domain verification.
 - `oidc`: discovery and flow helpers.
 - `saml`: metadata, state, timestamp, assertion, signature, logout, and
   algorithm validation.
@@ -19,10 +20,10 @@ security helpers, SAML state helpers, and provider sanitization.
 - SAML endpoint tests mirror route behavior in nested modules so metadata/ACS
   and SLO coverage stays reviewable as parity cases grow.
 
-## Target Module Layout
+## Route Module Layout
 
-The next phase should split endpoint code by owned behavior without changing
-the public endpoint surface:
+Endpoint code is split by owned behavior without changing the public endpoint
+surface:
 
 - `routes::registration`: `/sso/register`, provider request validation, OIDC
   registration hydration, SAML config validation, initial domain verification
@@ -63,8 +64,9 @@ the public endpoint surface:
 - Generic SAML XML parsing is isolated behind `saml::xml`. OpenAuth validates
   local-name handling, element nesting, parse errors, and rejects `DOCTYPE`
   before extracting assertions, metadata service URLs, logout requests, or
-  logout responses. This is the current Rust-side equivalent for upstream
-  `samlify` schema-validation coverage until full SAML XSD validation is added.
+  logout responses. Better Auth wires `samlify` to `fast-xml-parser`'s
+  well-formed XML validator, not a full SAML XSD validator; this boundary is the
+  Rust-side equivalent for that upstream validation layer.
 - Runtime SAML algorithm inspection collects `SignatureMethod`, `DigestMethod`,
   and XML encryption `EncryptionMethod` values from parsed responses. ACS
   validates those values against the configured deprecation policy and optional
@@ -112,8 +114,10 @@ the public endpoint surface:
 
 - SAML response max size: 256 KiB.
 - SAML metadata max size: 100 KiB.
-- AuthnRequest/RelayState TTL: 10 minutes.
-- Assertion replay TTL: 15 minutes.
+- AuthnRequest/RelayState TTL: 5 minutes, aligned with upstream
+  `DEFAULT_AUTHN_REQUEST_TTL_MS`.
+- Assertion replay TTL: `Assertion.NotOnOrAfter + clockSkew`; when the
+  assertion does not expose an expiration, use an explicit 15 minute fallback.
 - Clock skew: 5 minutes.
 - Domain verification token TTL: 7 days.
 
@@ -129,11 +133,10 @@ the public endpoint surface:
   second field-mapping layer would make schema generation, migrations, and
   cross-adapter tests less predictable while the crate boundaries are still
   evolving.
-- OIDC discovery intentionally stores only endpoints consumed by current SSO
-  flows: authorization, token, JWKS, and UserInfo. Optional OP endpoints such as
-  `revocation_endpoint`, `end_session_endpoint`, and `introspection_endpoint`
-  are not persisted until OpenAuth SSO owns logout/revocation/introspection
-  behavior that uses them.
+- OIDC discovery stores upstream-relevant endpoints returned by provider
+  metadata: authorization, token, JWKS, UserInfo, revocation, end-session, and
+  introspection. Optional endpoints are normalized against the issuer and
+  trusted-origin validated even when current login flows do not consume them.
 - Ephemeral state should use OpenAuth verification APIs behind a small SSO
   state abstraction:
   - OAuth/OIDC state.
@@ -158,6 +161,8 @@ the public endpoint surface:
     ownership to preserve current server-first behavior.
 - Registration with `organizationId` requires current-user membership in that
   organization.
+- Update with `organizationId` requires current-user membership in the target
+  organization before the provider record is persisted.
 - Sign-in by `organizationSlug` resolves the slug to an organization ID and
   selects the linked SSO provider.
 
@@ -172,6 +177,8 @@ the public endpoint surface:
   `OpenAuthOptions.trusted_origins`.
 - OIDC callback should extract profile data from UserInfo when configured, or
   from ID token claims when UserInfo is absent.
+- Missing `tokenEndpointAuthentication` defaults to `client_secret_basic`,
+  matching Better Auth manual-config behavior.
 - Trust semantics must stay strict:
   - A provider-asserted `email_verified=true` is not enough for implicit account
     linking unless `trustEmailVerified` is explicitly enabled.
@@ -183,6 +190,15 @@ the public endpoint surface:
 - SAML parsing uses `quick-xml` with event traversal. Assertion counting also
   uses parser-backed local-name traversal so namespace prefixes, encrypted
   assertions, nested XSW patterns, and metadata fields are handled consistently.
+- ACS resolves SP-initiated state from `RelayState` when present so browser
+  error redirects can still use stored fallback URLs. When `RelayState` is
+  absent, ACS parses the XML first and resolves the stored AuthnRequest from
+  Response or SubjectConfirmation `InResponseTo`. Unknown, expired, or
+  provider-mismatched AuthnRequest records are rejected before account or
+  session creation.
+- Assertion replay keys live until the parsed assertion expiration plus clock
+  skew, with the 15 minute fallback above only when no usable assertion
+  expiration exists.
 - Encrypted assertions fail closed with
   `ENCRYPTED_SAML_ASSERTION_UNSUPPORTED` by default. With `saml-signed` and an
   explicit `samlConfig.decryptionPvk`, `saml::encryption` uses `samael` behind
