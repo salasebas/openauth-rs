@@ -314,20 +314,14 @@ impl SamlResponseParseState {
 
     fn end(&mut self, name: &str) {
         match name {
-            "Issuer" if self.stack_contains("Assertion") => {
-                if !self.current_text.is_empty() {
-                    self.assertion_issuer = Some(self.current_text.clone());
-                }
+            "Issuer" if self.stack_contains("Assertion") && !self.current_text.is_empty() => {
+                self.assertion_issuer = Some(self.current_text.clone());
             }
-            "Issuer" => {
-                if !self.current_text.is_empty() {
-                    self.response_issuer = Some(self.current_text.clone());
-                }
+            "Issuer" if !self.current_text.is_empty() => {
+                self.response_issuer = Some(self.current_text.clone());
             }
-            "NameID" => {
-                if self.name_id.is_none() && !self.current_text.is_empty() {
-                    self.name_id = Some(self.current_text.clone());
-                }
+            "NameID" if self.name_id.is_none() && !self.current_text.is_empty() => {
+                self.name_id = Some(self.current_text.clone());
             }
             "AttributeValue" => {
                 if let Some((_, value)) = &mut self.current_attribute {

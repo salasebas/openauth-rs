@@ -81,19 +81,19 @@ fn first_service_location(xml: &str, service_name: &str) -> Result<Option<String
     let mut first_location = None;
     loop {
         match reader.read_event() {
-            Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
-                if local_name(element.name().as_ref())? == service_name {
-                    let location = attribute_value(&reader, &element, "Location")?;
-                    let binding = attribute_value(&reader, &element, "Binding")?;
-                    if let Some(location) = location {
-                        if binding
-                            .as_deref()
-                            .is_some_and(|value| value.ends_with("HTTP-Redirect"))
-                        {
-                            return Ok(Some(location));
-                        }
-                        first_location.get_or_insert(location);
+            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                if local_name(element.name().as_ref())? == service_name =>
+            {
+                let location = attribute_value(&reader, &element, "Location")?;
+                let binding = attribute_value(&reader, &element, "Binding")?;
+                if let Some(location) = location {
+                    if binding
+                        .as_deref()
+                        .is_some_and(|value| value.ends_with("HTTP-Redirect"))
+                    {
+                        return Ok(Some(location));
                     }
+                    first_location.get_or_insert(location);
                 }
             }
             Ok(Event::Eof) => break,
