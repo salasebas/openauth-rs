@@ -168,6 +168,16 @@ fn passkey_feature_reexports_passkey_crate() {
     assert_eq!(plugin.id, "passkey");
 }
 
+#[cfg(feature = "sso")]
+#[test]
+fn sso_feature_reexports_sso_crate() {
+    let plugin = openauth::sso::sso(openauth::sso::SsoOptions::default());
+
+    assert_eq!(plugin.id, "sso");
+    assert_eq!(openauth::sso::UPSTREAM_PLUGIN_ID, "sso");
+    assert_eq!(plugin.version.as_deref(), Some(openauth::sso::VERSION));
+}
+
 #[test]
 fn option_builder_aliases_match_new_constructors() {
     let options = OpenAuthOptions::builder().rate_limit(
@@ -409,6 +419,7 @@ fn oauth_public_reexports_include_core_and_oauth_helpers() {
         email: "user@example.com".to_owned(),
         image: None,
         email_verified: true,
+        raw_attributes: None,
     };
 
     assert_eq!(user_info.email, "user@example.com");
@@ -623,7 +634,7 @@ async fn openauth_with_adapter_supports_email_password_session_flow(
         .await?;
     assert_eq!(sign_up.status(), StatusCode::OK);
     let cookie = cookie_header(&sign_up);
-    assert!(cookie.contains("better-auth.session_token="));
+    assert!(cookie.contains("open-auth.session_token="));
 
     let session = auth
         .handler_async(json_request(
@@ -648,7 +659,7 @@ async fn openauth_with_adapter_supports_email_password_session_flow(
     assert_eq!(sign_out.status(), StatusCode::OK);
     assert!(set_cookie_values(&sign_out)
         .iter()
-        .any(|value| value.starts_with("better-auth.session_token=;")));
+        .any(|value| value.starts_with("open-auth.session_token=;")));
 
     let after = auth
         .handler_async(json_request(
