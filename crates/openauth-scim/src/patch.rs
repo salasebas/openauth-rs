@@ -36,6 +36,7 @@ impl PatchOperation {
 pub struct UserPatch {
     pub user: IndexMap<String, Value>,
     pub account: IndexMap<String, Value>,
+    pub profile: IndexMap<String, Value>,
 }
 
 pub fn build_user_patch(
@@ -45,6 +46,7 @@ pub fn build_user_patch(
     let mut patch = UserPatch {
         user: IndexMap::new(),
         account: IndexMap::new(),
+        profile: IndexMap::new(),
     };
 
     for operation in operations {
@@ -57,14 +59,17 @@ pub fn build_user_patch(
                     operation.path.as_deref(),
                     &operation.value,
                     op.as_str(),
-                );
+                )?;
             }
-            "remove" => {}
-            _ => return Err(ScimError::bad_request("Invalid PatchOp operation")),
+            "remove" => apply_remove_value(&mut patch, operation.path.as_deref())?,
+            _ => {
+                return Err(ScimError::bad_request("Invalid PatchOp operation")
+                    .with_scim_type("invalidSyntax"));
+            }
         }
     }
 
-    if patch.user.is_empty() && patch.account.is_empty() {
+    if patch.user.is_empty() && patch.account.is_empty() && patch.profile.is_empty() {
         return Err(ScimError::bad_request("No valid fields to update"));
     }
 
@@ -77,25 +82,67 @@ fn apply_patch_value(
     path: Option<&str>,
     value: &Value,
     op: &str,
-) {
+) -> Result<(), ScimError> {
     if let Some(object) = value.as_object() {
+        if let Some(path) = path {
+            ensure_mutable_path(path)?;
+            if path.starts_with("urn:ietf:params:scim:schemas:") {
+                patch.profile.insert(path.to_owned(), value.clone());
+                return Ok(());
+            }
+            if is_profile_container_path(path) {
+                patch.profile.insert(path.to_owned(), value.clone());
+                return Ok(());
+            }
+        }
         for (key, nested) in object {
+            if path.is_none() && key.starts_with("urn:ietf:params:scim:schemas:") {
+                patch.profile.insert(key.clone(), nested.clone());
+                continue;
+            }
             let nested_path = match path {
                 Some(path) if !path.is_empty() => format!("{path}.{key}"),
                 _ => key.clone(),
             };
-            apply_patch_value(user, patch, Some(&nested_path), nested, op);
+            apply_patch_value(user, patch, Some(&nested_path), nested, op)?;
         }
-        return;
+        return Ok(());
     }
 
     let Some(path) = path else {
-        return;
+        return Ok(());
     };
+    ensure_mutable_path(path)?;
+    if is_profile_path(path) && !value.is_null() && !value.is_string() {
+        patch.profile.insert(path.to_owned(), value.clone());
+        return Ok(());
+    }
     let Some(value) = value.as_str() else {
-        return;
+        return Ok(());
     };
     apply_mapping(user, patch, path, value, op);
+    Ok(())
+}
+
+fn apply_remove_value(patch: &mut UserPatch, path: Option<&str>) -> Result<(), ScimError> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    ensure_mutable_path(path)?;
+    let normalized = normalize_path(path);
+    match normalized.as_str() {
+        "/id" | "/meta" | "/schemas" | "/groups" => {}
+        "/externalId" => {
+            patch.account.insert("account_id".to_owned(), Value::Null);
+        }
+        "/userName" | "/name/formatted" | "/name/givenName" | "/name/familyName" => {}
+        _ => {
+            patch
+                .profile
+                .insert(path.trim_start_matches('/').to_owned(), Value::Null);
+        }
+    }
+    Ok(())
 }
 
 fn apply_mapping(user: &User, patch: &mut UserPatch, path: &str, value: &str, op: &str) {
@@ -165,11 +212,53 @@ fn apply_mapping(user: &User, patch: &mut UserPatch, path: &str, value: &str, op
             );
             patch.user.insert("name".to_owned(), Value::String(name));
         }
-        _ => {}
+        _ => apply_profile_mapping(patch, path, value),
     }
 }
 
 fn normalize_path(path: &str) -> String {
     let path = path.trim_start_matches('/');
     format!("/{}", path.replace('.', "/"))
+}
+
+fn apply_profile_mapping(patch: &mut UserPatch, path: &str, value: &str) {
+    let path = path.trim_start_matches('/');
+    if let Some((schema, attribute)) = path.rsplit_once(':') {
+        if schema.starts_with("urn:ietf:params:scim:schemas:") {
+            let entry = patch
+                .profile
+                .entry(schema.to_owned())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let Some(object) = entry.as_object_mut() {
+                object.insert(attribute.to_owned(), Value::String(value.to_owned()));
+                return;
+            }
+        }
+    }
+    patch
+        .profile
+        .insert(path.to_owned(), Value::String(value.to_owned()));
+}
+
+fn is_profile_path(path: &str) -> bool {
+    !matches!(
+        normalize_path(path).as_str(),
+        "/externalId" | "/userName" | "/name/formatted" | "/name/givenName" | "/name/familyName"
+    )
+}
+
+fn is_profile_container_path(path: &str) -> bool {
+    is_profile_path(path) && normalize_path(path) != "/name"
+}
+
+fn ensure_mutable_path(path: &str) -> Result<(), ScimError> {
+    let normalized = normalize_path(path);
+    if matches!(
+        normalized.as_str(),
+        "/id" | "/meta" | "/schemas" | "/groups"
+    ) {
+        Err(ScimError::bad_request("Attribute is readOnly").with_scim_type("mutability"))
+    } else {
+        Ok(())
+    }
 }

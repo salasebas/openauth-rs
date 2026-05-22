@@ -1,0 +1,951 @@
+use super::*;
+
+pub(super) fn bulk_endpoint(options: Arc<ScimOptions>) -> openauth_core::api::AsyncAuthEndpoint {
+    create_auth_endpoint(
+        "/scim/v2/Bulk",
+        Method::POST,
+        scim_endpoint_options("bulkSCIM", "Run SCIM Bulk operations")
+            .allowed_media_types(["application/scim+json", "application/json"]),
+        move |context, request| {
+            let options = Arc::clone(&options);
+            Box::pin(async move {
+                let adapter = required_adapter(context)?;
+                let Some(provider) = authenticate_scim_request(
+                    adapter.as_ref(),
+                    &context.secret,
+                    &options,
+                    &request,
+                )
+                .await?
+                else {
+                    return scim_auth_error(&request).into_response();
+                };
+                if request.body().len() > metadata::SCIM_BULK_MAX_PAYLOAD_SIZE {
+                    return ScimError::bad_request("Bulk payload exceeds maxPayloadSize")
+                        .with_scim_type("tooMany")
+                        .into_response();
+                }
+                let body: BulkRequest = match serde_json::from_slice(request.body()) {
+                    Ok(body) => body,
+                    Err(error) => {
+                        return ScimError::bad_request(format!(
+                            "invalid JSON request body: {error}"
+                        ))
+                        .into_response();
+                    }
+                };
+                if !body.schemas.is_empty()
+                    && !body
+                        .schemas
+                        .iter()
+                        .any(|schema| schema == BULK_REQUEST_SCHEMA)
+                {
+                    return ScimError::bad_request("Invalid schemas for BulkRequest")
+                        .with_scim_type("invalidValue")
+                        .into_response();
+                }
+                if body.operations.len() > metadata::SCIM_BULK_MAX_OPERATIONS {
+                    return ScimError::bad_request("Bulk request exceeds maxOperations")
+                        .with_scim_type("tooMany")
+                        .into_response();
+                }
+                let mut operations = Vec::new();
+                let mut errors = 0_u64;
+                let mut bulk_ids = std::collections::BTreeMap::new();
+                for operation in body.operations {
+                    let result = execute_bulk_operation(
+                        adapter.as_ref(),
+                        &context.base_url,
+                        &provider,
+                        &mut bulk_ids,
+                        operation,
+                    )
+                    .await?;
+                    if result.status.code >= 400 {
+                        errors += 1;
+                    }
+                    operations.push(result);
+                    if body.fail_on_errors.is_some_and(|limit| errors >= limit) {
+                        break;
+                    }
+                }
+                scim_json(
+                    StatusCode::OK,
+                    &BulkResponse {
+                        schemas: vec![BULK_RESPONSE_SCHEMA.to_owned()],
+                        operations,
+                    },
+                )
+            })
+        },
+    )
+}
+
+async fn execute_bulk_operation(
+    adapter: &dyn DbAdapter,
+    base_url: &str,
+    provider: &AuthenticatedScimProvider,
+    bulk_ids: &mut std::collections::BTreeMap<String, String>,
+    operation: BulkOperationRequest,
+) -> Result<BulkOperationResponse, OpenAuthError> {
+    let method = operation.method.to_ascii_uppercase();
+    let path = match resolve_bulk_path(&operation.path, bulk_ids) {
+        Ok(path) => path,
+        Err(error) => {
+            return bulk_error_response(method, Some(operation.path), operation.bulk_id, error);
+        }
+    };
+    if let Some(version) = operation.version.as_deref() {
+        if let Some(error_response) = validate_bulk_operation_version(
+            adapter,
+            base_url,
+            provider,
+            &method,
+            &path,
+            operation.bulk_id.clone(),
+            version,
+        )
+        .await?
+        {
+            return Ok(error_response);
+        }
+    }
+    if method == "POST" && operation.bulk_id.is_none() {
+        return bulk_error_response(
+            method,
+            Some(path),
+            None,
+            ScimError::bad_request("bulkId is required for Bulk POST operations")
+                .with_scim_type("invalidValue"),
+        );
+    }
+    if method == "GET" {
+        if let Some(user_id) = path.strip_prefix("/Users/") {
+            let response = match find_scim_user(
+                adapter,
+                user_id,
+                &provider.provider_id,
+                provider.organization_id.as_deref(),
+            )
+            .await?
+            {
+                Some((user, account)) => {
+                    let resource =
+                        complete_user_resource(adapter, base_url, provider, &user, &account)
+                            .await?;
+                    Some((
+                        StatusCode::OK,
+                        serde_json::to_value(resource)
+                            .map_err(|error| OpenAuthError::Api(error.to_string()))?,
+                    ))
+                }
+                None => Some((
+                    StatusCode::NOT_FOUND,
+                    serde_json::to_value(ScimError::not_found("User not found").body())
+                        .map_err(|error| OpenAuthError::Api(error.to_string()))?,
+                )),
+            };
+            if let Some((status, response)) = response {
+                return Ok(BulkOperationResponse {
+                    method,
+                    path: Some(path),
+                    bulk_id: operation.bulk_id,
+                    status: BulkOperationStatus {
+                        code: status.as_u16(),
+                    },
+                    location: bulk_response_location(&response),
+                    version: bulk_response_version(&response),
+                    response: Some(response),
+                });
+            }
+        }
+        if let Some(group_id) = path.strip_prefix("/Groups/") {
+            let response = match provider.organization_id.as_deref() {
+                Some(organization_id) => {
+                    match load_group_resource(
+                        adapter,
+                        base_url,
+                        &provider.provider_id,
+                        organization_id,
+                        group_id,
+                    )
+                    .await?
+                    {
+                        Some(resource) => (
+                            StatusCode::OK,
+                            serde_json::to_value(resource)
+                                .map_err(|error| OpenAuthError::Api(error.to_string()))?,
+                        ),
+                        None => (
+                            StatusCode::NOT_FOUND,
+                            serde_json::to_value(ScimError::not_found("Group not found").body())
+                                .map_err(|error| OpenAuthError::Api(error.to_string()))?,
+                        ),
+                    }
+                }
+                None => (
+                    StatusCode::BAD_REQUEST,
+                    serde_json::to_value(groups_require_organization().body())
+                        .map_err(|error| OpenAuthError::Api(error.to_string()))?,
+                ),
+            };
+            return Ok(BulkOperationResponse {
+                method,
+                path: Some(path),
+                bulk_id: operation.bulk_id,
+                status: BulkOperationStatus {
+                    code: response.0.as_u16(),
+                },
+                location: bulk_response_location(&response.1),
+                version: bulk_response_version(&response.1),
+                response: Some(response.1),
+            });
+        }
+    }
+    if method == "POST" && path == "/Users" {
+        let Some(data) = operation.data.clone() else {
+            return bulk_error_response(
+                method,
+                Some(path),
+                operation.bulk_id,
+                ScimError::bad_request("Bulk data is required"),
+            );
+        };
+        let response = bulk_create_user(adapter, base_url, provider, data).await?;
+        if let (Some(bulk_id), Some(id)) = (operation.bulk_id.as_ref(), response.2.as_ref()) {
+            bulk_ids.insert(bulk_id.clone(), format!("/Users/{id}"));
+        }
+        return Ok(BulkOperationResponse {
+            method,
+            path: Some(path),
+            bulk_id: operation.bulk_id,
+            status: BulkOperationStatus {
+                code: response.0.as_u16(),
+            },
+            location: bulk_response_location(&response.1),
+            version: bulk_response_version(&response.1),
+            response: Some(response.1),
+        });
+    }
+    if method == "POST" && path == "/Groups" {
+        let Some(data) = operation.data.clone() else {
+            return bulk_error_response(
+                method,
+                Some(path),
+                operation.bulk_id,
+                ScimError::bad_request("Bulk data is required"),
+            );
+        };
+        let response = bulk_create_group(adapter, base_url, provider, bulk_ids, data).await?;
+        if let (Some(bulk_id), Some(id)) = (operation.bulk_id.as_ref(), response.2.as_ref()) {
+            bulk_ids.insert(bulk_id.clone(), format!("/Groups/{id}"));
+        }
+        return Ok(BulkOperationResponse {
+            method,
+            path: Some(path),
+            bulk_id: operation.bulk_id,
+            status: BulkOperationStatus {
+                code: response.0.as_u16(),
+            },
+            location: bulk_response_location(&response.1),
+            version: bulk_response_version(&response.1),
+            response: Some(response.1),
+        });
+    }
+    if method == "PUT" {
+        let Some(data) = operation.data.clone() else {
+            return bulk_error_response(
+                method,
+                Some(path),
+                operation.bulk_id,
+                ScimError::bad_request("Bulk data is required"),
+            );
+        };
+        if let Some(user_id) = path.strip_prefix("/Users/") {
+            let response = bulk_update_user(adapter, base_url, provider, user_id, data).await?;
+            return Ok(BulkOperationResponse {
+                method,
+                path: Some(path),
+                bulk_id: operation.bulk_id,
+                status: BulkOperationStatus {
+                    code: response.0.as_u16(),
+                },
+                location: bulk_response_location(&response.1),
+                version: bulk_response_version(&response.1),
+                response: Some(response.1),
+            });
+        }
+        if let Some(group_id) = path.strip_prefix("/Groups/") {
+            let response = bulk_replace_group(adapter, base_url, provider, group_id, data).await?;
+            return Ok(BulkOperationResponse {
+                method,
+                path: Some(path),
+                bulk_id: operation.bulk_id,
+                status: BulkOperationStatus {
+                    code: response.0.as_u16(),
+                },
+                location: bulk_response_location(&response.1),
+                version: bulk_response_version(&response.1),
+                response: Some(response.1),
+            });
+        }
+    }
+    if method == "PATCH" {
+        let Some(data) = operation.data.clone() else {
+            return bulk_error_response(
+                method,
+                Some(path),
+                operation.bulk_id,
+                ScimError::bad_request("Bulk data is required"),
+            );
+        };
+        if let Some(user_id) = path.strip_prefix("/Users/") {
+            let response = bulk_patch_user(adapter, base_url, provider, user_id, data).await?;
+            return Ok(BulkOperationResponse {
+                method,
+                path: Some(path),
+                bulk_id: operation.bulk_id,
+                status: BulkOperationStatus {
+                    code: response.0.as_u16(),
+                },
+                location: bulk_response_location(&response.1),
+                version: bulk_response_version(&response.1),
+                response: Some(response.1),
+            });
+        }
+        if let Some(group_id) = path.strip_prefix("/Groups/") {
+            let response = bulk_patch_group(adapter, base_url, provider, group_id, data).await?;
+            return Ok(BulkOperationResponse {
+                method,
+                path: Some(path),
+                bulk_id: operation.bulk_id,
+                status: BulkOperationStatus {
+                    code: response.0.as_u16(),
+                },
+                location: bulk_response_location(&response.1),
+                version: bulk_response_version(&response.1),
+                response: Some(response.1),
+            });
+        }
+    }
+    if method == "DELETE" {
+        if let Some(user_id) = path.strip_prefix("/Users/") {
+            DbUserStore::new(adapter)
+                .delete_user_accounts(user_id)
+                .await?;
+            DbUserStore::new(adapter).delete_user(user_id).await?;
+            return Ok(BulkOperationResponse {
+                method,
+                path: Some(path),
+                bulk_id: operation.bulk_id,
+                status: BulkOperationStatus {
+                    code: StatusCode::NO_CONTENT.as_u16(),
+                },
+                location: None,
+                version: None,
+                response: None,
+            });
+        }
+        if let Some(group_id) = path.strip_prefix("/Groups/") {
+            delete_group(adapter, &provider.provider_id, group_id).await?;
+            return Ok(BulkOperationResponse {
+                method,
+                path: Some(path),
+                bulk_id: operation.bulk_id,
+                status: BulkOperationStatus {
+                    code: StatusCode::NO_CONTENT.as_u16(),
+                },
+                location: None,
+                version: None,
+                response: None,
+            });
+        }
+    }
+    Ok(BulkOperationResponse {
+        method,
+        path: Some(path),
+        bulk_id: operation.bulk_id,
+        status: BulkOperationStatus {
+            code: StatusCode::NOT_IMPLEMENTED.as_u16(),
+        },
+        location: None,
+        version: None,
+        response: Some(
+            serde_json::to_value(
+                ScimError::not_implemented("Bulk operation is not implemented").body(),
+            )
+            .map_err(|error| OpenAuthError::Api(error.to_string()))?,
+        ),
+    })
+}
+
+async fn validate_bulk_operation_version(
+    adapter: &dyn DbAdapter,
+    base_url: &str,
+    provider: &AuthenticatedScimProvider,
+    method: &str,
+    path: &str,
+    bulk_id: Option<String>,
+    version: &str,
+) -> Result<Option<BulkOperationResponse>, OpenAuthError> {
+    let current_version = if let Some(user_id) = path.strip_prefix("/Users/") {
+        match find_scim_user(
+            adapter,
+            user_id,
+            &provider.provider_id,
+            provider.organization_id.as_deref(),
+        )
+        .await?
+        {
+            Some((user, account)) => {
+                complete_user_resource(adapter, base_url, provider, &user, &account)
+                    .await
+                    .map(|resource| resource.meta.version)?
+            }
+            None => None,
+        }
+    } else if let Some(group_id) = path.strip_prefix("/Groups/") {
+        match provider.organization_id.as_deref() {
+            Some(organization_id) => load_group_resource(
+                adapter,
+                base_url,
+                &provider.provider_id,
+                organization_id,
+                group_id,
+            )
+            .await?
+            .and_then(|resource| resource.meta.version),
+            None => None,
+        }
+    } else {
+        None
+    };
+    if current_version
+        .as_deref()
+        .is_some_and(|current| current == version)
+    {
+        return Ok(None);
+    }
+    Ok(Some(BulkOperationResponse {
+        method: method.to_owned(),
+        path: Some(path.to_owned()),
+        bulk_id,
+        status: BulkOperationStatus {
+            code: StatusCode::PRECONDITION_FAILED.as_u16(),
+        },
+        location: None,
+        version: current_version,
+        response: Some(
+            serde_json::to_value(
+                ScimError::precondition_failed("Resource version does not match").body(),
+            )
+            .map_err(|error| OpenAuthError::Api(error.to_string()))?,
+        ),
+    }))
+}
+
+fn resolve_bulk_path(
+    path: &str,
+    bulk_ids: &std::collections::BTreeMap<String, String>,
+) -> Result<String, ScimError> {
+    let Some(bulk_id) = path.strip_prefix("bulkId:") else {
+        return Ok(path.to_owned());
+    };
+    bulk_ids.get(bulk_id).cloned().ok_or_else(|| {
+        ScimError::bad_request(format!("Unresolved bulkId reference: {bulk_id}"))
+            .with_scim_type("invalidValue")
+    })
+}
+
+fn bulk_error_response(
+    method: String,
+    path: Option<String>,
+    bulk_id: Option<String>,
+    error: ScimError,
+) -> Result<BulkOperationResponse, OpenAuthError> {
+    Ok(BulkOperationResponse {
+        method,
+        path,
+        bulk_id,
+        status: BulkOperationStatus {
+            code: error.status.as_u16(),
+        },
+        location: None,
+        version: None,
+        response: Some(
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+        ),
+    })
+}
+
+fn bulk_response_location(response: &serde_json::Value) -> Option<String> {
+    response
+        .get("meta")
+        .and_then(|meta| meta.get("location"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+fn bulk_response_version(response: &serde_json::Value) -> Option<String> {
+    response
+        .get("meta")
+        .and_then(|meta| meta.get("version"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+async fn bulk_create_user(
+    adapter: &dyn DbAdapter,
+    base_url: &str,
+    provider: &AuthenticatedScimProvider,
+    data: serde_json::Value,
+) -> Result<(StatusCode, serde_json::Value, Option<String>), OpenAuthError> {
+    let mut input: ScimUserInput =
+        serde_json::from_value(data).map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    input.user_name = input.user_name.to_ascii_lowercase();
+    let emails = input.emails.clone().unwrap_or_default();
+    if let Err(error) = validate_emails(&emails) {
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+            None,
+        ));
+    }
+    if let Err(error) = validate_multivalued_primary_attributes(&input.additional_fields) {
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+            None,
+        ));
+    }
+    let email = primary_email(&input.user_name, &emails).to_lowercase();
+    let name = user_full_name(&email, input.name.as_ref());
+    let account_id = account_id(&input.user_name, input.external_id.as_deref());
+    let users = DbUserStore::new(adapter);
+    if users
+        .find_account_by_provider_account(&account_id, &provider.provider_id)
+        .await?
+        .is_some()
+    {
+        let error = ScimError::conflict("User already exists").with_scim_type("uniqueness");
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+            None,
+        ));
+    }
+    let profile_attributes = scim_user_profile_attributes(&input);
+    let (user, account) = create_scim_user_account_and_membership(
+        adapter,
+        users.find_user_by_email(&email).await?,
+        CreateUserInput::new(name, email).email_verified(true),
+        CreateOAuthAccountInput {
+            id: None,
+            provider_id: provider.provider_id.clone(),
+            account_id,
+            user_id: String::new(),
+            access_token: None,
+            refresh_token: None,
+            id_token: None,
+            access_token_expires_at: None,
+            refresh_token_expires_at: None,
+            scope: None,
+        },
+        provider.organization_id.clone(),
+    )
+    .await?;
+    upsert_scim_user_profile(
+        adapter,
+        &provider.provider_id,
+        &user.id,
+        input.external_id.as_deref(),
+        profile_attributes,
+    )
+    .await?;
+    let resource = complete_user_resource(adapter, base_url, provider, &user, &account).await?;
+    Ok((
+        StatusCode::CREATED,
+        serde_json::to_value(resource).map_err(|error| OpenAuthError::Api(error.to_string()))?,
+        Some(user.id),
+    ))
+}
+
+async fn bulk_create_group(
+    adapter: &dyn DbAdapter,
+    base_url: &str,
+    provider: &AuthenticatedScimProvider,
+    bulk_ids: &std::collections::BTreeMap<String, String>,
+    data: serde_json::Value,
+) -> Result<(StatusCode, serde_json::Value, Option<String>), OpenAuthError> {
+    let Some(organization_id) = provider.organization_id.as_deref() else {
+        let error = groups_require_organization();
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+            None,
+        ));
+    };
+    let mut input: ScimGroupInput =
+        serde_json::from_value(data).map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    if let Err(error) = reject_nested_group_members(&input.members) {
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+            None,
+        ));
+    }
+    for member in &mut input.members {
+        if let Err(error) = resolve_bulk_user_member(&mut member.value, bulk_ids) {
+            return Ok((
+                error.status,
+                serde_json::to_value(error.body())
+                    .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+                None,
+            ));
+        }
+    }
+    let team = create_team_for_group(adapter, organization_id, input.display_name.trim()).await?;
+    create_scim_group_profile(
+        adapter,
+        &provider.provider_id,
+        organization_id,
+        &team.id,
+        input.external_id.as_deref(),
+    )
+    .await?;
+    for member in &input.members {
+        create_team_member_if_missing(adapter, &team.id, &member.value).await?;
+    }
+    let resource = load_group_resource(
+        adapter,
+        base_url,
+        &provider.provider_id,
+        organization_id,
+        &team.id,
+    )
+    .await?
+    .ok_or_else(|| OpenAuthError::Adapter("created SCIM group is missing".to_owned()))?;
+    Ok((
+        StatusCode::CREATED,
+        serde_json::to_value(resource).map_err(|error| OpenAuthError::Api(error.to_string()))?,
+        Some(team.id),
+    ))
+}
+
+async fn bulk_update_user(
+    adapter: &dyn DbAdapter,
+    base_url: &str,
+    provider: &AuthenticatedScimProvider,
+    user_id: &str,
+    data: serde_json::Value,
+) -> Result<(StatusCode, serde_json::Value), OpenAuthError> {
+    let Some((user, account)) = find_scim_user(
+        adapter,
+        user_id,
+        &provider.provider_id,
+        provider.organization_id.as_deref(),
+    )
+    .await?
+    else {
+        let error = ScimError::not_found("User not found");
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+        ));
+    };
+    let mut input: ScimUserInput =
+        serde_json::from_value(data).map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    input.user_name = input.user_name.to_ascii_lowercase();
+    let emails = input.emails.clone().unwrap_or_default();
+    if let Err(error) = validate_emails(&emails) {
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+        ));
+    }
+    if let Err(error) = validate_multivalued_primary_attributes(&input.additional_fields) {
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+        ));
+    }
+    let email = primary_email(&input.user_name, &emails).to_lowercase();
+    let name = user_full_name(&email, input.name.as_ref());
+    let next_account_id = account_id(&input.user_name, input.external_id.as_deref());
+    let profile_attributes = scim_user_profile_attributes(&input);
+    update_scim_user_and_account(
+        adapter,
+        &user.id,
+        &account.id,
+        Some(email),
+        Some(name),
+        Some(next_account_id),
+    )
+    .await?;
+    upsert_scim_user_profile(
+        adapter,
+        &provider.provider_id,
+        &user.id,
+        input.external_id.as_deref(),
+        profile_attributes,
+    )
+    .await?;
+    let Some((updated_user, updated_account)) = find_scim_user(
+        adapter,
+        &user.id,
+        &provider.provider_id,
+        provider.organization_id.as_deref(),
+    )
+    .await?
+    else {
+        let error = ScimError::not_found("User not found");
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+        ));
+    };
+    let resource =
+        complete_user_resource(adapter, base_url, provider, &updated_user, &updated_account)
+            .await?;
+    Ok((
+        StatusCode::OK,
+        serde_json::to_value(resource).map_err(|error| OpenAuthError::Api(error.to_string()))?,
+    ))
+}
+
+async fn bulk_replace_group(
+    adapter: &dyn DbAdapter,
+    base_url: &str,
+    provider: &AuthenticatedScimProvider,
+    group_id: &str,
+    data: serde_json::Value,
+) -> Result<(StatusCode, serde_json::Value), OpenAuthError> {
+    let Some(organization_id) = provider.organization_id.as_deref() else {
+        let error = groups_require_organization();
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+        ));
+    };
+    let input: ScimGroupInput =
+        serde_json::from_value(data).map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    if let Err(error) = reject_nested_group_members(&input.members) {
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+        ));
+    }
+    replace_group(
+        adapter,
+        &provider.provider_id,
+        organization_id,
+        group_id,
+        input,
+    )
+    .await?;
+    bulk_get_group(adapter, base_url, provider, organization_id, group_id).await
+}
+
+async fn bulk_patch_group(
+    adapter: &dyn DbAdapter,
+    base_url: &str,
+    provider: &AuthenticatedScimProvider,
+    group_id: &str,
+    data: serde_json::Value,
+) -> Result<(StatusCode, serde_json::Value), OpenAuthError> {
+    let Some(organization_id) = provider.organization_id.as_deref() else {
+        let error = groups_require_organization();
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+        ));
+    };
+    let body: PatchBody =
+        serde_json::from_value(data).map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    if let Err(error) = apply_group_patch(
+        adapter,
+        &provider.provider_id,
+        organization_id,
+        group_id,
+        body.operations,
+    )
+    .await
+    {
+        return match error {
+            ScimErrorOrOpenAuth::Scim(error) => Ok((
+                error.status,
+                serde_json::to_value(error.body())
+                    .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+            )),
+            ScimErrorOrOpenAuth::OpenAuth(error) => Err(error),
+        };
+    }
+    bulk_get_group(adapter, base_url, provider, organization_id, group_id).await
+}
+
+async fn bulk_patch_user(
+    adapter: &dyn DbAdapter,
+    base_url: &str,
+    provider: &AuthenticatedScimProvider,
+    user_id: &str,
+    data: serde_json::Value,
+) -> Result<(StatusCode, serde_json::Value), OpenAuthError> {
+    let Some((user, account)) = find_scim_user(
+        adapter,
+        user_id,
+        &provider.provider_id,
+        provider.organization_id.as_deref(),
+    )
+    .await?
+    else {
+        let error = ScimError::not_found("User not found");
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+        ));
+    };
+    let body: PatchBody =
+        serde_json::from_value(data).map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    if !body.schemas.iter().any(|schema| schema == PATCH_OP_SCHEMA) {
+        let error =
+            ScimError::bad_request("Invalid schemas for PatchOp").with_scim_type("invalidValue");
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+        ));
+    }
+    let operations = body
+        .operations
+        .into_iter()
+        .map(|operation| PatchOperation {
+            op: operation.op.unwrap_or_else(|| "replace".to_owned()),
+            path: operation.path,
+            value: operation.value,
+        })
+        .collect::<Vec<_>>();
+    let patch = match build_user_patch(&user, &operations) {
+        Ok(patch) => patch,
+        Err(error) => {
+            return Ok((
+                error.status,
+                serde_json::to_value(error.body())
+                    .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+            ));
+        }
+    };
+    update_scim_user_and_account(
+        adapter,
+        &user.id,
+        &account.id,
+        patch
+            .user
+            .get("email")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        patch
+            .user
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        patch
+            .account
+            .get("account_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+    )
+    .await?;
+    if !patch.profile.is_empty() {
+        merge_scim_user_profile_patch(adapter, &provider.provider_id, &user.id, patch.profile)
+            .await?;
+    }
+    let Some((updated_user, updated_account)) = find_scim_user(
+        adapter,
+        &user.id,
+        &provider.provider_id,
+        provider.organization_id.as_deref(),
+    )
+    .await?
+    else {
+        let error = ScimError::not_found("User not found");
+        return Ok((
+            error.status,
+            serde_json::to_value(error.body())
+                .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+        ));
+    };
+    let resource =
+        complete_user_resource(adapter, base_url, provider, &updated_user, &updated_account)
+            .await?;
+    Ok((
+        StatusCode::OK,
+        serde_json::to_value(resource).map_err(|error| OpenAuthError::Api(error.to_string()))?,
+    ))
+}
+
+async fn bulk_get_group(
+    adapter: &dyn DbAdapter,
+    base_url: &str,
+    provider: &AuthenticatedScimProvider,
+    organization_id: &str,
+    group_id: &str,
+) -> Result<(StatusCode, serde_json::Value), OpenAuthError> {
+    match load_group_resource(
+        adapter,
+        base_url,
+        &provider.provider_id,
+        organization_id,
+        group_id,
+    )
+    .await?
+    {
+        Some(resource) => Ok((
+            StatusCode::OK,
+            serde_json::to_value(resource)
+                .map_err(|error| OpenAuthError::Api(error.to_string()))?,
+        )),
+        None => {
+            let error = ScimError::not_found("Group not found");
+            Ok((
+                error.status,
+                serde_json::to_value(error.body())
+                    .map_err(|serialize_error| OpenAuthError::Api(serialize_error.to_string()))?,
+            ))
+        }
+    }
+}
+
+fn resolve_bulk_user_member(
+    value: &mut String,
+    bulk_ids: &std::collections::BTreeMap<String, String>,
+) -> Result<(), ScimError> {
+    let Some(bulk_id) = value.strip_prefix("bulkId:") else {
+        return Ok(());
+    };
+    let Some(path) = bulk_ids.get(bulk_id) else {
+        return Err(
+            ScimError::bad_request(format!("Unresolved bulkId reference: {bulk_id}"))
+                .with_scim_type("invalidValue"),
+        );
+    };
+    let Some(user_id) = path.strip_prefix("/Users/") else {
+        return Err(ScimError::bad_request("Group members must reference Users")
+            .with_scim_type("invalidValue"));
+    };
+    *value = user_id.to_owned();
+    Ok(())
+}

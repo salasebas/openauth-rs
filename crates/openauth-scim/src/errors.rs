@@ -31,8 +31,20 @@ impl ScimError {
         Self::new(StatusCode::BAD_REQUEST, detail)
     }
 
+    pub fn conflict(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, detail)
+    }
+
     pub fn not_found(detail: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, detail)
+    }
+
+    pub fn precondition_failed(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::PRECONDITION_FAILED, detail)
+    }
+
+    pub fn not_implemented(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::NOT_IMPLEMENTED, detail)
     }
 
     #[must_use]

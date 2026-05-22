@@ -14,7 +14,7 @@ mod metadata;
 mod patch;
 #[path = "scim/resources.rs"]
 mod resources;
-#[path = "scim/routes.rs"]
+#[path = "scim/routes/mod.rs"]
 mod routes;
 #[path = "scim/schema.rs"]
 mod schema;

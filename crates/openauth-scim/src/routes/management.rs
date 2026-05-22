@@ -1,0 +1,293 @@
+use super::*;
+
+pub(super) fn generate_token_endpoint(
+    options: Arc<ScimOptions>,
+) -> openauth_core::api::AsyncAuthEndpoint {
+    create_auth_endpoint(
+        "/scim/generate-token",
+        Method::POST,
+        scim_endpoint_options("generateSCIMToken", "Generate a SCIM bearer token")
+            .allowed_media_types(["application/json"]),
+        move |context, request| {
+            let options = Arc::clone(&options);
+            Box::pin(async move {
+                let adapter = required_adapter(context)?;
+                let Some(user) = current_user(context, adapter.as_ref(), &request).await? else {
+                    return json_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", "Unauthorized");
+                };
+                let body: GenerateTokenBody = match serde_json::from_slice(request.body()) {
+                    Ok(body) => body,
+                    Err(error) => {
+                        return json_error(
+                            StatusCode::BAD_REQUEST,
+                            "BAD_REQUEST",
+                            &format!("invalid JSON request body: {error}"),
+                        );
+                    }
+                };
+                if body.provider_id.contains(':') {
+                    return json_error(
+                        StatusCode::BAD_REQUEST,
+                        "BAD_REQUEST",
+                        "Provider id contains forbidden characters",
+                    );
+                }
+                if body.organization_id.is_some() && !context.has_plugin("organization") {
+                    return json_error(
+                        StatusCode::BAD_REQUEST,
+                        "BAD_REQUEST",
+                        "Restricting a token to an organization requires the organization plugin",
+                    );
+                }
+
+                let store = ScimProviderStore::new(adapter.as_ref());
+                let existing_provider = store.find_by_provider_id(&body.provider_id).await?;
+                if let Some(existing) = existing_provider.as_ref() {
+                    if existing.organization_id != body.organization_id {
+                        return json_error(
+                            StatusCode::FORBIDDEN,
+                            "FORBIDDEN",
+                            "SCIM provider exists for a different scope",
+                        );
+                    }
+                    if !provider_access_allowed(
+                        adapter.as_ref(),
+                        existing,
+                        &user,
+                        &options,
+                        organization_creator_role(context).as_deref(),
+                    )
+                    .await?
+                    {
+                        return json_error(
+                            StatusCode::FORBIDDEN,
+                            "FORBIDDEN",
+                            "You must be the owner to access this provider",
+                        );
+                    }
+                }
+
+                let member = if let Some(organization_id) = body.organization_id.as_deref() {
+                    let Some(member) =
+                        organization_member(adapter.as_ref(), organization_id, &user.id).await?
+                    else {
+                        return json_error(
+                            StatusCode::FORBIDDEN,
+                            "FORBIDDEN",
+                            "You are not a member of the organization",
+                        );
+                    };
+                    if !role_has_required_access(
+                        &member.role,
+                        options.required_role.as_deref(),
+                        organization_creator_role(context).as_deref(),
+                    ) {
+                        return json_error(
+                            StatusCode::FORBIDDEN,
+                            "FORBIDDEN",
+                            "Insufficient role for this operation",
+                        );
+                    }
+                    Some(member)
+                } else {
+                    None
+                };
+
+                let base_token = generate_random_string(24);
+                let scim_token = crate::token::encode_bearer_token(
+                    &base_token,
+                    &body.provider_id,
+                    body.organization_id.as_deref(),
+                );
+                if let Some(before_hook) = options.before_token_generated.as_ref() {
+                    if let Err(error) = before_hook(BeforeScimTokenGeneratedInput {
+                        user: user.clone(),
+                        member: member.clone(),
+                        scim_token: scim_token.clone(),
+                    })
+                    .await
+                    {
+                        return hook_error(error);
+                    }
+                }
+                if existing_provider.is_some() {
+                    store.delete(&body.provider_id).await?;
+                }
+                let stored_token =
+                    store_scim_token(&context.secret, &options.token_storage, &base_token).await?;
+                let provider = store
+                    .create(crate::store::CreateScimProviderInput {
+                        provider_id: body.provider_id,
+                        scim_token: stored_token,
+                        organization_id: body.organization_id,
+                        user_id: options.provider_ownership.enabled.then(|| user.id.clone()),
+                    })
+                    .await?;
+                if let Some(after_hook) = options.after_token_generated.as_ref() {
+                    if let Err(error) = after_hook(AfterScimTokenGeneratedInput {
+                        user,
+                        member,
+                        scim_token: scim_token.clone(),
+                        provider,
+                    })
+                    .await
+                    {
+                        return hook_error(error);
+                    }
+                }
+
+                json(StatusCode::CREATED, &GenerateTokenResponse { scim_token })
+            })
+        },
+    )
+}
+
+pub(super) fn list_provider_connections_endpoint(
+    options: Arc<ScimOptions>,
+) -> openauth_core::api::AsyncAuthEndpoint {
+    create_auth_endpoint(
+        "/scim/list-provider-connections",
+        Method::GET,
+        scim_endpoint_options(
+            "listSCIMProviderConnections",
+            "List SCIM provider connections",
+        ),
+        move |context, request| {
+            let options = Arc::clone(&options);
+            Box::pin(async move {
+                let adapter = required_adapter(context)?;
+                let Some(user) = current_user(context, adapter.as_ref(), &request).await? else {
+                    return json_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", "Unauthorized");
+                };
+                let mut providers = Vec::new();
+                for provider in ScimProviderStore::new(adapter.as_ref()).list().await? {
+                    if provider_access_allowed(
+                        adapter.as_ref(),
+                        &provider,
+                        &user,
+                        &options,
+                        organization_creator_role(context).as_deref(),
+                    )
+                    .await?
+                    {
+                        providers.push(SanitizedProvider::from(provider));
+                    }
+                }
+                json(StatusCode::OK, &ProviderListResponse { providers })
+            })
+        },
+    )
+}
+
+pub(super) fn get_provider_connection_endpoint(
+    options: Arc<ScimOptions>,
+) -> openauth_core::api::AsyncAuthEndpoint {
+    create_auth_endpoint(
+        "/scim/get-provider-connection",
+        Method::GET,
+        scim_endpoint_options(
+            "getSCIMProviderConnection",
+            "Get a SCIM provider connection",
+        ),
+        move |context, request| {
+            let options = Arc::clone(&options);
+            Box::pin(async move {
+                let adapter = required_adapter(context)?;
+                let Some(user) = current_user(context, adapter.as_ref(), &request).await? else {
+                    return json_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", "Unauthorized");
+                };
+                let Some(provider_id) = query_param(&request, "providerId") else {
+                    return json_error(
+                        StatusCode::BAD_REQUEST,
+                        "BAD_REQUEST",
+                        "providerId is required",
+                    );
+                };
+                let Some(provider) = ScimProviderStore::new(adapter.as_ref())
+                    .find_by_provider_id(&provider_id)
+                    .await?
+                else {
+                    return json_error(
+                        StatusCode::NOT_FOUND,
+                        "NOT_FOUND",
+                        "SCIM provider not found",
+                    );
+                };
+                if !provider_access_allowed(
+                    adapter.as_ref(),
+                    &provider,
+                    &user,
+                    &options,
+                    organization_creator_role(context).as_deref(),
+                )
+                .await?
+                {
+                    return json_error(
+                        StatusCode::FORBIDDEN,
+                        "FORBIDDEN",
+                        "You must be the owner to access this provider",
+                    );
+                }
+                json(StatusCode::OK, &SanitizedProvider::from(provider))
+            })
+        },
+    )
+}
+
+pub(super) fn delete_provider_connection_endpoint(
+    options: Arc<ScimOptions>,
+) -> openauth_core::api::AsyncAuthEndpoint {
+    create_auth_endpoint(
+        "/scim/delete-provider-connection",
+        Method::POST,
+        scim_endpoint_options(
+            "deleteSCIMProviderConnection",
+            "Delete a SCIM provider connection",
+        )
+        .allowed_media_types(["application/json"]),
+        move |context, request| {
+            let options = Arc::clone(&options);
+            Box::pin(async move {
+                let adapter = required_adapter(context)?;
+                let Some(user) = current_user(context, adapter.as_ref(), &request).await? else {
+                    return json_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", "Unauthorized");
+                };
+                let body: ProviderIdBody = match serde_json::from_slice(request.body()) {
+                    Ok(body) => body,
+                    Err(error) => {
+                        return json_error(
+                            StatusCode::BAD_REQUEST,
+                            "BAD_REQUEST",
+                            &format!("invalid JSON request body: {error}"),
+                        );
+                    }
+                };
+                let store = ScimProviderStore::new(adapter.as_ref());
+                let Some(provider) = store.find_by_provider_id(&body.provider_id).await? else {
+                    return json_error(
+                        StatusCode::NOT_FOUND,
+                        "NOT_FOUND",
+                        "SCIM provider not found",
+                    );
+                };
+                if !provider_access_allowed(
+                    adapter.as_ref(),
+                    &provider,
+                    &user,
+                    &options,
+                    organization_creator_role(context).as_deref(),
+                )
+                .await?
+                {
+                    return json_error(
+                        StatusCode::FORBIDDEN,
+                        "FORBIDDEN",
+                        "You must be the owner to access this provider",
+                    );
+                }
+                store.delete(&body.provider_id).await?;
+                json(StatusCode::OK, &DeleteProviderResponse { success: true })
+            })
+        },
+    )
+}
