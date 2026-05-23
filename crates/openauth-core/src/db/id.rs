@@ -59,6 +59,9 @@ impl IdPolicy {
 
         let mut field = DbField::new("id", field_type).generated();
         field.required = self.should_generate_id();
+        if self.database_generates_id() {
+            field.generated_id = Some(self.generation);
+        }
         field
     }
 
@@ -85,6 +88,14 @@ impl IdPolicy {
             IdGeneration::Random => true,
             IdGeneration::Disabled | IdGeneration::Serial => false,
             IdGeneration::Uuid => !self.database_supports_uuid,
+        }
+    }
+
+    fn database_generates_id(self) -> bool {
+        match self.generation {
+            IdGeneration::Disabled | IdGeneration::Serial => true,
+            IdGeneration::Uuid => self.database_supports_uuid,
+            IdGeneration::Random => false,
         }
     }
 

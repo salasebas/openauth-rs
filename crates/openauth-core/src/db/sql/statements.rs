@@ -6,6 +6,7 @@ pub fn create_statement(
     query: &Create,
 ) -> Result<SqlStatement, OpenAuthError> {
     let table = resolve_table(schema, &query.model)?;
+    let selection = selected_fields(table, &query.select)?;
     let mut columns = Vec::new();
     let mut placeholders = Vec::new();
     let mut params = Vec::new();
@@ -17,15 +18,44 @@ pub fn create_statement(
         placeholders.push(dialect.placeholder(params.len()));
     }
 
-    Ok(SqlStatement {
-        sql: format!(
+    let mut sql = if columns.is_empty() {
+        match dialect {
+            SqlDialect::Postgres | SqlDialect::Sqlite => format!(
+                "INSERT INTO {} DEFAULT VALUES",
+                dialect.quote_identifier(&table.name)?
+            ),
+            SqlDialect::MySql => format!(
+                "INSERT INTO {} () VALUES ()",
+                dialect.quote_identifier(&table.name)?
+            ),
+        }
+    } else {
+        format!(
             "INSERT INTO {} ({}) VALUES ({})",
             dialect.quote_identifier(&table.name)?,
             columns.join(", "),
             placeholders.join(", ")
-        ),
-        params,
-    })
+        )
+    };
+    if dialect.supports_insert_returning() && table_has_database_generated_id(table) {
+        sql.push_str(" RETURNING ");
+        sql.push_str(
+            &selection
+                .iter()
+                .map(|selected| dialect.quote_identifier(&selected.field.name))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", "),
+        );
+    }
+
+    Ok(SqlStatement { sql, params })
+}
+
+pub fn create_returning_selection(
+    schema: &DbSchema,
+    query: &Create,
+) -> Result<Vec<SqlSelectedField>, OpenAuthError> {
+    selected_fields(resolve_table(schema, &query.model)?, &query.select)
 }
 
 pub fn find_one_statement(
@@ -342,4 +372,17 @@ fn update_assignment(
         next: first_placeholder + params.len(),
         params,
     })
+}
+
+pub fn table_has_database_generated_id(table: &DbTable) -> bool {
+    table
+        .field("id")
+        .and_then(|field| field.generated_id)
+        .is_some()
+}
+
+impl SqlDialect {
+    pub fn supports_insert_returning(self) -> bool {
+        matches!(self, Self::Postgres | Self::Sqlite)
+    }
 }

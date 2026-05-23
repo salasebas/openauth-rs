@@ -6,9 +6,10 @@ use openauth_core::db::sql::{
     SqlRateLimitNames, SqlRowReader, SqlSchemaSnapshot, SqlStatement, SqlUpdateOnePlan,
 };
 use openauth_core::db::{
-    auth_schema, AdapterFuture, AuthSchemaOptions, Create, DbField, DbFieldType, DbRecord, DbValue,
-    Delete, FindMany, JoinOption, MigrationStatement, MigrationStatementKind, RateLimitStorage,
-    SchemaMigrationPlan, SchemaMigrationWarning, Sort, SortDirection, TableOptions, Update, Where,
+    auth_schema, AdapterFuture, AuthSchemaOptions, Connector, Create, DbField, DbFieldType,
+    DbRecord, DbValue, Delete, FindMany, ForeignKey, IdGeneration, IdPolicy, JoinOption,
+    MigrationStatement, MigrationStatementKind, OnDelete, RateLimitStorage, SchemaMigrationPlan,
+    SchemaMigrationWarning, Sort, SortDirection, TableOptions, Update, Where, WhereMode,
     WhereOperator,
 };
 use openauth_core::error::OpenAuthError;
@@ -47,7 +48,7 @@ fn sql_dialect_where_clause_uses_postgres_placeholders_and_params() -> Result<()
 
     assert_eq!(
         fragment.sql,
-        " WHERE LOWER(\"email\") LIKE LOWER($1) AND \"id\" IN ($2, $3)"
+        " WHERE \"email\" ILIKE $1 ESCAPE '\\' AND \"id\" IN ($2, $3)"
     );
     assert_eq!(
         fragment
@@ -60,6 +61,211 @@ fn sql_dialect_where_clause_uses_postgres_placeholders_and_params() -> Result<()
             DbValue::String("user_1".to_owned()),
             DbValue::String("user_2".to_owned()),
         ]
+    );
+    Ok(())
+}
+
+#[test]
+fn sql_dialect_applies_insensitive_mode_to_equality_and_array_predicates(
+) -> Result<(), OpenAuthError> {
+    let schema = auth_schema(AuthSchemaOptions::default());
+    let table = schema
+        .table("user")
+        .ok_or_else(|| OpenAuthError::TableNotFound {
+            table: "user".to_owned(),
+        })?;
+
+    let fragment = SqlDialect::Postgres.where_clause(
+        table,
+        &[
+            Where::new("email", DbValue::String("Ada@Example.COM".to_owned())).insensitive(),
+            Where::new(
+                "name",
+                DbValue::StringArray(vec!["Grace".to_owned(), "ALAN".to_owned()]),
+            )
+            .operator(WhereOperator::NotIn)
+            .insensitive(),
+        ],
+    )?;
+
+    assert_eq!(
+        fragment.sql,
+        " WHERE LOWER(\"email\") = LOWER($1) AND LOWER(\"name\") NOT IN (LOWER($2), LOWER($3))"
+    );
+    assert_eq!(
+        fragment
+            .params
+            .into_iter()
+            .map(|param| param.value)
+            .collect::<Vec<_>>(),
+        vec![
+            DbValue::String("Ada@Example.COM".to_owned()),
+            DbValue::String("Grace".to_owned()),
+            DbValue::String("ALAN".to_owned()),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn sql_dialect_compiles_empty_in_predicates_as_boolean_constants() -> Result<(), OpenAuthError> {
+    let schema = auth_schema(AuthSchemaOptions::default());
+    let table = schema
+        .table("user")
+        .ok_or_else(|| OpenAuthError::TableNotFound {
+            table: "user".to_owned(),
+        })?;
+
+    let empty_in = SqlDialect::Postgres.where_clause(
+        table,
+        &[Where::new("id", DbValue::StringArray(Vec::new())).operator(WhereOperator::In)],
+    )?;
+    let empty_not_in = SqlDialect::Postgres.where_clause(
+        table,
+        &[Where::new("id", DbValue::StringArray(Vec::new())).operator(WhereOperator::NotIn)],
+    )?;
+
+    assert_eq!(empty_in.sql, " WHERE 1 = 0");
+    assert!(empty_in.params.is_empty());
+    assert_eq!(empty_not_in.sql, " WHERE 1 = 1");
+    assert!(empty_not_in.params.is_empty());
+    Ok(())
+}
+
+#[test]
+fn sql_dialect_maps_postgres_arrays_to_native_array_types() {
+    assert_eq!(
+        SqlDialect::Postgres.sql_type("tags", &DbField::new("tags", DbFieldType::StringArray)),
+        "TEXT[]"
+    );
+    assert_eq!(
+        SqlDialect::Postgres.sql_type("scores", &DbField::new("scores", DbFieldType::NumberArray)),
+        "BIGINT[]"
+    );
+    assert!(
+        SqlDialect::Postgres.type_matches("_text", &DbField::new("tags", DbFieldType::StringArray))
+    );
+    assert!(SqlDialect::Postgres
+        .type_matches("_int8", &DbField::new("scores", DbFieldType::NumberArray)));
+    assert!(!SqlDialect::Postgres
+        .type_matches("jsonb", &DbField::new("tags", DbFieldType::StringArray)));
+}
+
+#[test]
+fn sql_dialect_groups_and_or_predicates_deterministically() -> Result<(), OpenAuthError> {
+    let schema = auth_schema(AuthSchemaOptions::default());
+    let table = schema
+        .table("user")
+        .ok_or_else(|| OpenAuthError::TableNotFound {
+            table: "user".to_owned(),
+        })?;
+
+    let fragment = SqlDialect::Postgres.where_clause(
+        table,
+        &[
+            Where::new("email", DbValue::String("ada@example.com".to_owned())),
+            Where {
+                field: "name".to_owned(),
+                value: DbValue::String("Ada".to_owned()),
+                operator: WhereOperator::Eq,
+                connector: Connector::Or,
+                mode: WhereMode::Sensitive,
+            },
+            Where::new("email_verified", DbValue::Boolean(true)),
+        ],
+    )?;
+
+    assert_eq!(
+        fragment.sql,
+        " WHERE \"email\" = $1 AND \"email_verified\" = $2 AND (\"name\" = $3)"
+    );
+    assert_eq!(
+        fragment
+            .params
+            .into_iter()
+            .map(|param| param.value)
+            .collect::<Vec<_>>(),
+        vec![
+            DbValue::String("ada@example.com".to_owned()),
+            DbValue::Boolean(true),
+            DbValue::String("Ada".to_owned()),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn sql_dialect_escapes_like_wildcards_in_string_pattern_predicates() -> Result<(), OpenAuthError> {
+    let schema = auth_schema(AuthSchemaOptions::default());
+    let table = schema
+        .table("user")
+        .ok_or_else(|| OpenAuthError::TableNotFound {
+            table: "user".to_owned(),
+        })?;
+
+    let fragment = SqlDialect::Postgres.where_clause(
+        table,
+        &[Where {
+            field: "email".to_owned(),
+            value: DbValue::String(r"100%_match\test".to_owned()),
+            operator: WhereOperator::Contains,
+            connector: openauth_core::db::Connector::And,
+            mode: WhereMode::Insensitive,
+        }],
+    )?;
+
+    assert_eq!(fragment.sql, " WHERE \"email\" ILIKE $1 ESCAPE '\\'");
+    assert_eq!(
+        fragment.params[0].value,
+        DbValue::String(r"%100\%\_match\\test%".to_owned())
+    );
+    Ok(())
+}
+
+#[test]
+fn sql_dialect_supports_database_generated_id_column_definitions() -> Result<(), OpenAuthError> {
+    let serial = IdPolicy::new(IdGeneration::Serial).field();
+    let postgres_uuid = IdPolicy::new(IdGeneration::Uuid)
+        .with_database_uuid_support(true)
+        .field();
+
+    assert_eq!(
+        SqlDialect::Postgres.column_definition("id", &serial)?,
+        "\"id\" BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY"
+    );
+    assert_eq!(
+        SqlDialect::Postgres.column_definition("id", &postgres_uuid)?,
+        "\"id\" UUID DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY"
+    );
+    assert_eq!(
+        SqlDialect::Sqlite.column_definition("id", &serial)?,
+        "\"id\" INTEGER PRIMARY KEY"
+    );
+    assert_eq!(
+        SqlDialect::MySql.column_definition("id", &serial)?,
+        "`id` BIGINT AUTO_INCREMENT PRIMARY KEY"
+    );
+    Ok(())
+}
+
+#[test]
+fn create_statement_returns_generated_ids_for_returning_dialects() -> Result<(), OpenAuthError> {
+    let schema = auth_schema(AuthSchemaOptions {
+        id_policy: IdPolicy::new(IdGeneration::Serial),
+        ..AuthSchemaOptions::default()
+    });
+
+    let statement = create_statement(
+        SqlDialect::Postgres,
+        &schema,
+        &Create::new("user")
+            .data("email", DbValue::String("ada@example.com".to_owned()))
+            .select(["id", "email"]),
+    )?;
+
+    assert_eq!(
+        statement.sql,
+        "INSERT INTO \"users\" (\"email\") VALUES ($1) RETURNING \"id\", \"email\""
     );
     Ok(())
 }
@@ -111,6 +317,130 @@ fn plan_schema_migration_reports_missing_columns_indexes_and_type_warnings(
             column_name: "email".to_owned(),
             expected: "TEXT".to_owned(),
             actual: "integer".to_owned(),
+        }));
+    Ok(())
+}
+
+#[test]
+fn plan_schema_migration_repairs_missing_unique_indexes() -> Result<(), OpenAuthError> {
+    let schema = auth_schema(AuthSchemaOptions::default());
+    let snapshot = SqlSchemaSnapshot::default()
+        .with_table("users")
+        .with_column("users", SqlColumnSnapshot::new("id", "text"))
+        .with_column("users", SqlColumnSnapshot::new("email", "text"));
+
+    let plan = plan_schema_migration(SqlDialect::Postgres, &schema, &snapshot)?;
+
+    assert!(plan
+        .indexes_to_be_created
+        .iter()
+        .any(|index| index.field_logical_name == "email" && index.unique));
+    assert!(plan
+        .statements
+        .iter()
+        .any(|statement| statement.sql.contains("CREATE UNIQUE INDEX")));
+    Ok(())
+}
+
+#[test]
+fn plan_schema_migration_warns_for_constraint_and_id_mismatches() -> Result<(), OpenAuthError> {
+    let schema = auth_schema(AuthSchemaOptions {
+        id_policy: IdPolicy::new(IdGeneration::Serial),
+        ..AuthSchemaOptions::default()
+    });
+    let snapshot = SqlSchemaSnapshot::default()
+        .with_table("users")
+        .with_column(
+            "users",
+            SqlColumnSnapshot::new("id", "bigint")
+                .primary_key(false)
+                .generated_id(None),
+        )
+        .with_column(
+            "users",
+            SqlColumnSnapshot::new("name", "text").nullable(true),
+        )
+        .with_column(
+            "users",
+            SqlColumnSnapshot::new("email", "text").nullable(false),
+        )
+        .with_column(
+            "users",
+            SqlColumnSnapshot::new("email_verified", "boolean").nullable(false),
+        )
+        .with_column(
+            "users",
+            SqlColumnSnapshot::new("image", "text").nullable(false),
+        )
+        .with_column(
+            "users",
+            SqlColumnSnapshot::new("created_at", "timestamptz").nullable(false),
+        )
+        .with_column(
+            "users",
+            SqlColumnSnapshot::new("updated_at", "timestamptz").nullable(false),
+        );
+
+    let plan = plan_schema_migration(SqlDialect::Postgres, &schema, &snapshot)?;
+
+    assert!(plan
+        .warnings
+        .contains(&SchemaMigrationWarning::PrimaryKeyMismatch {
+            table_name: "users".to_owned(),
+            column_name: "id".to_owned(),
+        }));
+    assert!(plan
+        .warnings
+        .contains(&SchemaMigrationWarning::GeneratedIdMismatch {
+            table_name: "users".to_owned(),
+            column_name: "id".to_owned(),
+            expected: IdGeneration::Serial,
+            actual: None,
+        }));
+    assert!(plan
+        .warnings
+        .contains(&SchemaMigrationWarning::ColumnNullabilityMismatch {
+            table_name: "users".to_owned(),
+            column_name: "name".to_owned(),
+            expected_nullable: false,
+            actual_nullable: true,
+        }));
+    assert!(plan
+        .warnings
+        .contains(&SchemaMigrationWarning::ColumnNullabilityMismatch {
+            table_name: "users".to_owned(),
+            column_name: "image".to_owned(),
+            expected_nullable: true,
+            actual_nullable: false,
+        }));
+    Ok(())
+}
+
+#[test]
+fn plan_schema_migration_warns_for_foreign_key_mismatch() -> Result<(), OpenAuthError> {
+    let schema = auth_schema(AuthSchemaOptions::default());
+    let snapshot = SqlSchemaSnapshot::default()
+        .with_table("users")
+        .with_column("users", SqlColumnSnapshot::new("id", "text"))
+        .with_table("sessions")
+        .with_column(
+            "sessions",
+            SqlColumnSnapshot::new("user_id", "text").references(ForeignKey::new(
+                "users",
+                "id",
+                OnDelete::Restrict,
+            )),
+        );
+
+    let plan = plan_schema_migration(SqlDialect::Postgres, &schema, &snapshot)?;
+
+    assert!(plan
+        .warnings
+        .contains(&SchemaMigrationWarning::ForeignKeyMismatch {
+            table_name: "sessions".to_owned(),
+            column_name: "user_id".to_owned(),
+            expected: ForeignKey::new("users", "id", OnDelete::Cascade),
+            actual: Some(ForeignKey::new("users", "id", OnDelete::Restrict)),
         }));
     Ok(())
 }
@@ -203,7 +533,7 @@ fn find_many_statement_builds_select_sort_limit_offset() -> Result<(), OpenAuthE
 
     assert_eq!(
         read.statement.sql,
-        "SELECT `id`, `email` FROM `users` WHERE `email` LIKE ? ORDER BY `created_at` DESC LIMIT 10 OFFSET 20"
+        "SELECT `id`, `email` FROM `users` WHERE `email` LIKE ? ESCAPE '\\\\' ORDER BY `created_at` DESC LIMIT 10 OFFSET 20"
     );
     assert_eq!(read.selection.len(), 2);
     assert_eq!(

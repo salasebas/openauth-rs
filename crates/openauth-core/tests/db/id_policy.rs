@@ -14,6 +14,7 @@ fn id_policy_uses_number_for_serial_ids() {
 
     assert!(!field.required);
     assert_eq!(field.field_type, openauth_core::db::DbFieldType::Number);
+    assert_eq!(field.generated_id, Some(IdGeneration::Serial));
 }
 
 #[test]
@@ -21,6 +22,17 @@ fn id_policy_disables_required_id_when_generation_is_disabled() {
     let field = IdPolicy::new(IdGeneration::Disabled).field();
 
     assert!(!field.required);
+    assert_eq!(field.generated_id, Some(IdGeneration::Disabled));
+}
+
+#[test]
+fn id_policy_marks_database_uuid_generation_when_supported() {
+    let field = IdPolicy::new(IdGeneration::Uuid)
+        .with_database_uuid_support(true)
+        .field();
+
+    assert!(!field.required);
+    assert_eq!(field.generated_id, Some(IdGeneration::Uuid));
 }
 
 #[test]

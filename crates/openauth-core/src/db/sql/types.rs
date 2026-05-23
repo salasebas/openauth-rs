@@ -53,6 +53,7 @@ impl From<SqlFragment> for SqlStatement {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SqlParam {
     pub field_type: DbFieldType,
+    pub generated_id: Option<IdGeneration>,
     pub value: DbValue,
 }
 
@@ -60,6 +61,7 @@ impl SqlParam {
     pub fn new(field: &DbField, value: DbValue) -> Self {
         Self {
             field_type: field.field_type.clone(),
+            generated_id: field.generated_id,
             value,
         }
     }

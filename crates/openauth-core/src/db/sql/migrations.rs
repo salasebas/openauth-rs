@@ -34,6 +34,10 @@ impl SchemaMigrationPlan {
         self.statements.is_empty()
     }
 
+    pub fn has_warnings(&self) -> bool {
+        !self.warnings.is_empty()
+    }
+
     pub fn compile(&self) -> String {
         if self.statements.is_empty() {
             return ";".to_owned();
@@ -74,16 +78,40 @@ pub struct IndexToCreate {
     pub field_logical_name: String,
     pub column_name: String,
     pub index_name: String,
+    pub unique: bool,
 }
 
 /// Non-executable findings discovered while planning migrations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::enum_variant_names)]
 pub enum SchemaMigrationWarning {
     ColumnTypeMismatch {
         table_name: String,
         column_name: String,
         expected: String,
         actual: String,
+    },
+    ColumnNullabilityMismatch {
+        table_name: String,
+        column_name: String,
+        expected_nullable: bool,
+        actual_nullable: bool,
+    },
+    PrimaryKeyMismatch {
+        table_name: String,
+        column_name: String,
+    },
+    GeneratedIdMismatch {
+        table_name: String,
+        column_name: String,
+        expected: IdGeneration,
+        actual: Option<IdGeneration>,
+    },
+    ForeignKeyMismatch {
+        table_name: String,
+        column_name: String,
+        expected: ForeignKey,
+        actual: Option<ForeignKey>,
     },
 }
 
@@ -132,15 +160,32 @@ impl SqlSchemaSnapshot {
         self
     }
 
+    pub fn with_unique_column(
+        mut self,
+        table: impl Into<String>,
+        column: impl Into<String>,
+    ) -> Self {
+        self.tables
+            .entry(table.into())
+            .or_default()
+            .unique_columns
+            .insert(column.into());
+        self
+    }
+
     pub fn table_exists(&self, table: &str) -> bool {
         self.tables.contains_key(table)
     }
 
     pub fn column_type(&self, table: &str, column: &str) -> Option<&str> {
+        self.column(table, column)
+            .map(|column| column.data_type.as_str())
+    }
+
+    pub fn column(&self, table: &str, column: &str) -> Option<&SqlColumnSnapshot> {
         self.tables
             .get(table)
             .and_then(|table| table.columns.get(column))
-            .map(|column| column.data_type.as_str())
     }
 
     pub fn index_exists(&self, table: &str, index: &str) -> bool {
@@ -152,6 +197,12 @@ impl SqlSchemaSnapshot {
                 .values()
                 .any(|table| table.indexes.contains(index))
     }
+
+    pub fn unique_column_exists(&self, table: &str, column: &str) -> bool {
+        self.tables
+            .get(table)
+            .is_some_and(|table| table.unique_columns.contains(column))
+    }
 }
 
 /// Introspected table metadata used by the pure migration planner.
@@ -159,6 +210,7 @@ impl SqlSchemaSnapshot {
 pub struct SqlTableSnapshot {
     columns: IndexMap<String, SqlColumnSnapshot>,
     indexes: IndexSet<String>,
+    unique_columns: IndexSet<String>,
 }
 
 /// Introspected column metadata used by the pure migration planner.
@@ -166,6 +218,10 @@ pub struct SqlTableSnapshot {
 pub struct SqlColumnSnapshot {
     pub name: String,
     pub data_type: String,
+    pub nullable: Option<bool>,
+    pub primary_key: Option<bool>,
+    pub generated_id: Option<IdGeneration>,
+    pub foreign_key: Option<ForeignKey>,
 }
 
 impl SqlColumnSnapshot {
@@ -173,7 +229,31 @@ impl SqlColumnSnapshot {
         Self {
             name: name.into(),
             data_type: data_type.into(),
+            nullable: None,
+            primary_key: None,
+            generated_id: None,
+            foreign_key: None,
         }
+    }
+
+    pub fn nullable(mut self, nullable: bool) -> Self {
+        self.nullable = Some(nullable);
+        self
+    }
+
+    pub fn primary_key(mut self, primary_key: bool) -> Self {
+        self.primary_key = Some(primary_key);
+        self
+    }
+
+    pub fn generated_id(mut self, generated_id: Option<IdGeneration>) -> Self {
+        self.generated_id = generated_id;
+        self
+    }
+
+    pub fn references(mut self, foreign_key: ForeignKey) -> Self {
+        self.foreign_key = Some(foreign_key);
+        self
     }
 }
 
@@ -190,16 +270,17 @@ pub fn plan_schema_migration(
     for (table_logical_name, table) in &tables {
         if snapshot.table_exists(&table.name) {
             for (logical_name, field) in &table.fields {
-                if let Some(actual_type) = snapshot.column_type(&table.name, &field.name) {
-                    if !dialect.type_matches(actual_type, field) {
+                if let Some(column) = snapshot.column(&table.name, &field.name) {
+                    if !dialect.type_matches(&column.data_type, field) {
                         plan.warnings
                             .push(SchemaMigrationWarning::ColumnTypeMismatch {
                                 table_name: table.name.clone(),
                                 column_name: field.name.clone(),
                                 expected: dialect.sql_type(logical_name, field),
-                                actual: actual_type.to_owned(),
+                                actual: column.data_type.clone(),
                             });
                     }
+                    push_constraint_warnings(&mut plan, table, logical_name, field, column);
                 } else {
                     plan.to_be_added.push(ColumnToAdd {
                         table_logical_name: (*table_logical_name).to_owned(),
@@ -227,9 +308,13 @@ pub fn plan_schema_migration(
 
     for (table_logical_name, table) in tables {
         for (logical_name, field) in &table.fields {
-            if field.index && !field.unique {
-                let index_name =
-                    dialect.sanitize_identifier(&format!("idx_{}_{}", table.name, logical_name))?;
+            if field.index || field.unique {
+                if field.unique && snapshot.unique_column_exists(&table.name, &field.name) {
+                    continue;
+                }
+                let prefix = if field.unique { "uidx" } else { "idx" };
+                let index_name = dialect
+                    .sanitize_identifier(&format!("{prefix}_{}_{}", table.name, logical_name))?;
                 if !snapshot.index_exists(&table.name, &index_name) {
                     plan.indexes_to_be_created.push(IndexToCreate {
                         table_logical_name: table_logical_name.to_owned(),
@@ -237,6 +322,7 @@ pub fn plan_schema_migration(
                         field_logical_name: logical_name.clone(),
                         column_name: field.name.clone(),
                         index_name: index_name.clone(),
+                        unique: field.unique,
                     });
                     plan.statements.push(MigrationStatement {
                         kind: MigrationStatementKind::CreateIndex,
@@ -244,6 +330,7 @@ pub fn plan_schema_migration(
                             &table.name,
                             &field.name,
                             &index_name,
+                            field.unique,
                         )?,
                     });
                 }
@@ -252,4 +339,59 @@ pub fn plan_schema_migration(
     }
 
     Ok(plan)
+}
+
+fn push_constraint_warnings(
+    plan: &mut SchemaMigrationPlan,
+    table: &DbTable,
+    logical_name: &str,
+    field: &DbField,
+    column: &SqlColumnSnapshot,
+) {
+    if logical_name == "id" || field.name == "id" {
+        if column.primary_key == Some(false) {
+            plan.warnings
+                .push(SchemaMigrationWarning::PrimaryKeyMismatch {
+                    table_name: table.name.clone(),
+                    column_name: field.name.clone(),
+                });
+        }
+    } else if let Some(actual_nullable) = column.nullable {
+        let expected_nullable = !field.required;
+        if expected_nullable != actual_nullable {
+            plan.warnings
+                .push(SchemaMigrationWarning::ColumnNullabilityMismatch {
+                    table_name: table.name.clone(),
+                    column_name: field.name.clone(),
+                    expected_nullable,
+                    actual_nullable,
+                });
+        }
+    }
+
+    if logical_name == "id" || field.name == "id" {
+        if let Some(expected) = field.generated_id {
+            if column.generated_id != Some(expected) {
+                plan.warnings
+                    .push(SchemaMigrationWarning::GeneratedIdMismatch {
+                        table_name: table.name.clone(),
+                        column_name: field.name.clone(),
+                        expected,
+                        actual: column.generated_id,
+                    });
+            }
+        }
+    }
+
+    if let Some(expected) = &field.foreign_key {
+        if column.foreign_key.as_ref() != Some(expected) {
+            plan.warnings
+                .push(SchemaMigrationWarning::ForeignKeyMismatch {
+                    table_name: table.name.clone(),
+                    column_name: field.name.clone(),
+                    expected: expected.clone(),
+                    actual: column.foreign_key.clone(),
+                });
+        }
+    }
 }

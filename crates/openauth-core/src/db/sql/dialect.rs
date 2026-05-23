@@ -50,19 +50,37 @@ impl SqlDialect {
             return Ok(SqlFragment::default());
         }
 
-        let mut sql = String::from(" WHERE ");
-        let mut params = Vec::new();
-        for (index, clause) in clauses.iter().enumerate() {
-            if index > 0 {
-                sql.push(' ');
-                sql.push_str(match clause.connector {
-                    Connector::And => "AND",
-                    Connector::Or => "OR",
-                });
-                sql.push(' ');
+        let mut and_clauses = Vec::new();
+        let mut or_clauses = Vec::new();
+        for clause in clauses {
+            match clause.connector {
+                Connector::And => and_clauses.push(clause),
+                Connector::Or => or_clauses.push(clause),
             }
-            sql.push_str(&self.clause_sql(table, clause, &mut params, first_placeholder)?);
         }
+
+        let mut sql = String::from(" WHERE ");
+        let mut parts = Vec::new();
+        let mut params = Vec::new();
+
+        for clause in and_clauses {
+            parts.push(self.clause_sql(table, clause, &mut params, first_placeholder)?);
+        }
+
+        if !or_clauses.is_empty() {
+            let mut or_parts = Vec::new();
+            for clause in or_clauses {
+                or_parts.push(self.clause_sql(table, clause, &mut params, first_placeholder)?);
+            }
+            let or_sql = or_parts.join(" OR ");
+            if parts.is_empty() && or_parts.len() == 1 {
+                parts.push(or_sql);
+            } else {
+                parts.push(format!("({or_sql})"));
+            }
+        }
+
+        sql.push_str(&parts.join(" AND "));
         Ok(SqlFragment { sql, params })
     }
 
@@ -105,15 +123,49 @@ impl SqlDialect {
                 };
                 let placeholder =
                     self.push_param(params, field, clause.value.clone(), first_placeholder);
-                Ok(format!("{column} {operator} {placeholder}"))
+                if clause.mode == WhereMode::Insensitive
+                    && field.field_type == DbFieldType::String
+                    && matches!(&clause.value, DbValue::String(_))
+                    && matches!(clause.operator, WhereOperator::Eq | WhereOperator::Ne)
+                {
+                    Ok(format!("LOWER({column}) {operator} LOWER({placeholder})"))
+                } else {
+                    Ok(format!("{column} {operator} {placeholder}"))
+                }
             }
             WhereOperator::In | WhereOperator::NotIn => {
                 let placeholders =
                     self.push_array_params(params, field, &clause.value, first_placeholder)?;
+                if placeholders.is_empty() {
+                    return Ok(if clause.operator == WhereOperator::In {
+                        "1 = 0".to_owned()
+                    } else {
+                        "1 = 1".to_owned()
+                    });
+                }
                 let operator = if clause.operator == WhereOperator::In {
                     "IN"
                 } else {
                     "NOT IN"
+                };
+                let placeholders = if clause.mode == WhereMode::Insensitive
+                    && field.field_type == DbFieldType::String
+                    && matches!(&clause.value, DbValue::StringArray(_))
+                {
+                    placeholders
+                        .into_iter()
+                        .map(|placeholder| format!("LOWER({placeholder})"))
+                        .collect::<Vec<_>>()
+                } else {
+                    placeholders
+                };
+                let column = if clause.mode == WhereMode::Insensitive
+                    && field.field_type == DbFieldType::String
+                    && matches!(&clause.value, DbValue::StringArray(_))
+                {
+                    format!("LOWER({column})")
+                } else {
+                    column
                 };
                 Ok(format!("{column} {operator} ({})", placeholders.join(", ")))
             }
@@ -123,6 +175,7 @@ impl SqlDialect {
                         "string pattern operators require string values".to_owned(),
                     ));
                 };
+                let value = escape_like_pattern(value);
                 let pattern = match clause.operator {
                     WhereOperator::Contains => format!("%{value}%"),
                     WhereOperator::StartsWith => format!("{value}%"),
@@ -132,9 +185,22 @@ impl SqlDialect {
                 let placeholder =
                     self.push_param(params, field, DbValue::String(pattern), first_placeholder);
                 if clause.mode == WhereMode::Insensitive {
-                    Ok(format!("LOWER({column}) LIKE LOWER({placeholder})"))
+                    if self == Self::Postgres {
+                        Ok(format!(
+                            "{column} ILIKE {placeholder} {}",
+                            self.like_escape_clause()
+                        ))
+                    } else {
+                        Ok(format!(
+                            "LOWER({column}) LIKE LOWER({placeholder}) {}",
+                            self.like_escape_clause()
+                        ))
+                    }
                 } else {
-                    Ok(format!("{column} LIKE {placeholder}"))
+                    Ok(format!(
+                        "{column} LIKE {placeholder} {}",
+                        self.like_escape_clause()
+                    ))
                 }
             }
         }
@@ -222,6 +288,18 @@ impl SqlDialect {
             self.sql_type(logical_name, field),
         ];
         if logical_name == "id" || field.name == "id" {
+            match (self, field.generated_id) {
+                (Self::Postgres, Some(IdGeneration::Serial)) => {
+                    parts.push("GENERATED BY DEFAULT AS IDENTITY".to_owned());
+                }
+                (Self::Postgres, Some(IdGeneration::Uuid)) => {
+                    parts.push("DEFAULT pg_catalog.gen_random_uuid()".to_owned());
+                }
+                (Self::MySql, Some(IdGeneration::Serial)) => {
+                    parts.push("AUTO_INCREMENT".to_owned());
+                }
+                _ => {}
+            }
             parts.push("PRIMARY KEY".to_owned());
         } else {
             if field.required {
@@ -278,13 +356,15 @@ impl SqlDialect {
         table: &str,
         column: &str,
         index: &str,
+        unique: bool,
     ) -> Result<String, OpenAuthError> {
         let if_not_exists = match self {
             Self::Postgres | Self::Sqlite => " IF NOT EXISTS",
             Self::MySql => "",
         };
+        let unique = if unique { "UNIQUE " } else { "" };
         Ok(format!(
-            "CREATE INDEX{} {} ON {} ({})",
+            "CREATE {unique}INDEX{} {} ON {} ({})",
             if_not_exists,
             self.quote_identifier(index)?,
             self.quote_identifier(table)?,
@@ -295,14 +375,20 @@ impl SqlDialect {
     pub fn sql_type(self, logical_name: &str, field: &DbField) -> String {
         match self {
             Self::Postgres => match field.field_type {
+                DbFieldType::String if field.generated_id == Some(IdGeneration::Uuid) => "UUID",
                 DbFieldType::String => "TEXT",
                 DbFieldType::Number => "BIGINT",
                 DbFieldType::Boolean => "BOOLEAN",
                 DbFieldType::Timestamp => "TIMESTAMPTZ",
-                DbFieldType::Json | DbFieldType::StringArray | DbFieldType::NumberArray => "JSONB",
+                DbFieldType::Json => "JSONB",
+                DbFieldType::StringArray => "TEXT[]",
+                DbFieldType::NumberArray => "BIGINT[]",
             }
             .to_owned(),
             Self::Sqlite => match field.field_type {
+                DbFieldType::Number if field.generated_id == Some(IdGeneration::Serial) => {
+                    "INTEGER"
+                }
                 DbFieldType::String
                 | DbFieldType::Timestamp
                 | DbFieldType::Json
@@ -312,6 +398,7 @@ impl SqlDialect {
             }
             .to_owned(),
             Self::MySql => match field.field_type {
+                DbFieldType::Number if field.generated_id == Some(IdGeneration::Serial) => "BIGINT",
                 DbFieldType::String if logical_name == "id" || field.unique || field.index => {
                     "VARCHAR(255)"
                 }
@@ -356,9 +443,14 @@ impl SqlDialect {
                         | "timestamptz"
                         | "date"
                 ),
-                DbFieldType::Json | DbFieldType::StringArray | DbFieldType::NumberArray => {
-                    matches!(actual.as_str(), "jsonb" | "json")
+                DbFieldType::Json => matches!(actual.as_str(), "jsonb" | "json"),
+                DbFieldType::StringArray => {
+                    matches!(actual.as_str(), "text[]" | "_text" | "_varchar" | "_bpchar")
                 }
+                DbFieldType::NumberArray => matches!(
+                    actual.as_str(),
+                    "bigint[]" | "integer[]" | "_int8" | "_int4" | "_int2"
+                ),
             },
             Self::MySql => match field.field_type {
                 DbFieldType::String => matches!(actual.as_str(), "varchar" | "text" | "uuid"),
@@ -403,6 +495,17 @@ impl SqlDialect {
     }
 }
 
+fn escape_like_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(character, '%' | '_' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
 fn validate_identifier(dialect: SqlDialect, identifier: &str) -> Result<(), OpenAuthError> {
     let mut chars = identifier.chars();
     let Some(first) = chars.next() else {
@@ -435,6 +538,13 @@ impl SqlDialect {
             Self::Sqlite => "sqlite",
         }
     }
+
+    fn like_escape_clause(self) -> &'static str {
+        match self {
+            Self::MySql => "ESCAPE '\\\\'",
+            Self::Postgres | Self::Sqlite => "ESCAPE '\\'",
+        }
+    }
 }
 
 fn normalized_type(value: &str) -> String {
@@ -454,5 +564,83 @@ fn on_delete_sql(on_delete: OnDelete) -> &'static str {
         OnDelete::Cascade => "ON DELETE CASCADE",
         OnDelete::SetNull => "ON DELETE SET NULL",
         OnDelete::SetDefault => "ON DELETE SET DEFAULT",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user_table() -> DbTable {
+        let mut fields = IndexMap::new();
+        fields.insert(
+            "email".to_owned(),
+            DbField::new("email", DbFieldType::String),
+        );
+        fields.insert("name".to_owned(), DbField::new("name", DbFieldType::String));
+        DbTable {
+            name: "users".to_owned(),
+            fields,
+            order: None,
+        }
+    }
+
+    #[test]
+    fn where_clause_applies_insensitive_mode_to_eq() -> Result<(), OpenAuthError> {
+        let clause =
+            Where::new("email", DbValue::String("ADA@EXAMPLE.COM".to_owned())).insensitive();
+
+        let fragment = SqlDialect::Postgres.where_clause(&user_table(), &[clause])?;
+
+        assert_eq!(fragment.sql, r#" WHERE LOWER("email") = LOWER($1)"#);
+        Ok(())
+    }
+
+    #[test]
+    fn where_clause_applies_insensitive_mode_to_ne() -> Result<(), OpenAuthError> {
+        let clause = Where::new("email", DbValue::String("ADA@EXAMPLE.COM".to_owned()))
+            .operator(WhereOperator::Ne)
+            .insensitive();
+
+        let fragment = SqlDialect::Postgres.where_clause(&user_table(), &[clause])?;
+
+        assert_eq!(fragment.sql, r#" WHERE LOWER("email") != LOWER($1)"#);
+        Ok(())
+    }
+
+    #[test]
+    fn where_clause_applies_insensitive_mode_to_in() -> Result<(), OpenAuthError> {
+        let clause = Where::new(
+            "email",
+            DbValue::StringArray(vec![
+                "ADA@EXAMPLE.COM".to_owned(),
+                "GRACE@EXAMPLE.COM".to_owned(),
+            ]),
+        )
+        .operator(WhereOperator::In)
+        .insensitive();
+
+        let fragment = SqlDialect::Postgres.where_clause(&user_table(), &[clause])?;
+
+        assert_eq!(
+            fragment.sql,
+            r#" WHERE LOWER("email") IN (LOWER($1), LOWER($2))"#
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn where_clause_applies_insensitive_mode_to_not_in() -> Result<(), OpenAuthError> {
+        let clause = Where::new(
+            "email",
+            DbValue::StringArray(vec!["ADA@EXAMPLE.COM".to_owned()]),
+        )
+        .operator(WhereOperator::NotIn)
+        .insensitive();
+
+        let fragment = SqlDialect::Postgres.where_clause(&user_table(), &[clause])?;
+
+        assert_eq!(fragment.sql, r#" WHERE LOWER("email") NOT IN (LOWER($1))"#);
+        Ok(())
     }
 }

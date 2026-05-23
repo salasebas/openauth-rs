@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AdapterFuture, Connector, Count, Create, DbField, DbFieldType, DbRecord, DbSchema, DbTable,
-    DbValue, Delete, DeleteMany, FindMany, FindOne, JoinOption, JoinRelation, OnDelete, Sort,
-    SortDirection, Update, UpdateMany, Where, WhereMode, WhereOperator,
+    DbValue, Delete, DeleteMany, FindMany, FindOne, ForeignKey, IdGeneration, JoinOption,
+    JoinRelation, OnDelete, Sort, SortDirection, Update, UpdateMany, Where, WhereMode,
+    WhereOperator,
 };
 use crate::error::OpenAuthError;
 use crate::options::{RateLimitConsumeInput, RateLimitDecision, RateLimitRecord};

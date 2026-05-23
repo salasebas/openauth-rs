@@ -68,8 +68,35 @@ where
     R: SqlRowReader<E::Row>,
 {
     pub async fn create(mut self, query: Create) -> Result<DbRecord, OpenAuthError> {
+        let table = resolve_table(self.schema, &query.model)?;
         let statement = create_statement(self.dialect, self.schema, &query)?;
+        if self.dialect.supports_insert_returning() && table_has_database_generated_id(table) {
+            let selection = create_returning_selection(self.schema, &query)?;
+            let row = self.executor.fetch_optional(statement).await?;
+            return row
+                .as_ref()
+                .map(|row| self.row_reader.record(row, &selection))
+                .transpose()?
+                .ok_or_else(|| {
+                    OpenAuthError::Adapter(
+                        "sql adapter did not return inserted database-generated id".to_owned(),
+                    )
+                });
+        }
         self.executor.execute(statement).await?;
+        if self.dialect == SqlDialect::MySql
+            && table
+                .field("id")
+                .is_some_and(|field| field.generated_id == Some(IdGeneration::Serial))
+        {
+            let id = self
+                .executor
+                .fetch_scalar_i64(SqlStatement::new("SELECT CAST(LAST_INSERT_ID() AS SIGNED)"))
+                .await?;
+            let mut record = query.data;
+            record.insert("id".to_owned(), DbValue::Number(id));
+            return Ok(select_record(record, &query.select));
+        }
         Ok(select_record(query.data, &query.select))
     }
 

@@ -1,7 +1,7 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use super::IdPolicy;
+use super::{IdGeneration, IdPolicy};
 use crate::error::OpenAuthError;
 
 /// Storage backend selected for rate limit counters.
@@ -118,6 +118,8 @@ pub struct DbField {
     pub returned: bool,
     pub input: bool,
     pub foreign_key: Option<ForeignKey>,
+    #[serde(default)]
+    pub generated_id: Option<IdGeneration>,
 }
 
 impl DbField {
@@ -132,6 +134,7 @@ impl DbField {
             returned: true,
             input: true,
             foreign_key: None,
+            generated_id: None,
         }
     }
 
@@ -158,6 +161,11 @@ impl DbField {
     pub fn generated(mut self) -> Self {
         self.input = false;
         self
+    }
+
+    pub fn generated_id(mut self, generation: IdGeneration) -> Self {
+        self.generated_id = Some(generation);
+        self.generated()
     }
 
     pub fn references(mut self, foreign_key: ForeignKey) -> Self {
@@ -333,6 +341,7 @@ impl DbTable {
 pub fn auth_schema(options: AuthSchemaOptions) -> DbSchema {
     let mut schema = DbSchema::default();
     let user_table_name = table_name(&options.user, "users");
+    let id_field = options.id_policy.field();
 
     schema.insert(
         "user",
@@ -402,7 +411,7 @@ pub fn auth_schema(options: AuthSchemaOptions) -> DbSchema {
                     ),
                     (
                         "user_id",
-                        field(&options.session, "user_id", DbFieldType::String)
+                        id_reference_field(&options.session, "user_id", &id_field)
                             .indexed()
                             .references(ForeignKey::new(
                                 user_table_name.clone(),
@@ -433,7 +442,7 @@ pub fn auth_schema(options: AuthSchemaOptions) -> DbSchema {
                 ),
                 (
                     "user_id",
-                    field(&options.account, "user_id", DbFieldType::String)
+                    id_reference_field(&options.account, "user_id", &id_field)
                         .indexed()
                         .references(ForeignKey::new(user_table_name, "id", OnDelete::Cascade)),
                 ),
@@ -589,4 +598,10 @@ fn table_name(options: &TableOptions, default_name: &str) -> String {
 
 fn field(options: &TableOptions, logical_name: &str, field_type: DbFieldType) -> DbField {
     DbField::new(options.field_name(logical_name), field_type)
+}
+
+fn id_reference_field(options: &TableOptions, logical_name: &str, id_field: &DbField) -> DbField {
+    let mut field = field(options, logical_name, id_field.field_type.clone());
+    field.generated_id = id_field.generated_id;
+    field
 }

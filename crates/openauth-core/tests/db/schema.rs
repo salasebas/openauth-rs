@@ -232,6 +232,18 @@ fn auth_schema_applies_serial_id_policy_to_core_tables() {
         schema.field("account", "id").map(|field| field.required),
         Ok(false)
     );
+    assert_eq!(
+        schema
+            .field("account", "user_id")
+            .map(|field| &field.field_type),
+        Ok(&DbFieldType::Number)
+    );
+    assert_eq!(
+        schema
+            .field("session", "user_id")
+            .map(|field| &field.field_type),
+        Ok(&DbFieldType::Number)
+    );
 }
 
 #[test]
