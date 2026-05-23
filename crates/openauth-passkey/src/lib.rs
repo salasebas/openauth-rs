@@ -35,14 +35,14 @@ pub use errors::PASSKEY_ERROR_CODES;
 pub use options::{
     AfterAuthenticationVerificationInput, AfterRegistrationVerificationInput,
     AuthenticatorAttachment, AuthenticatorSelection, PasskeyAdvancedOptions,
-    PasskeyAuthenticationOptions, PasskeyOptions, PasskeyRegistrationOptions,
-    PasskeyRegistrationUser, RegistrationWebAuthnOptions, ResidentKeyRequirement,
-    ResolveRegistrationUserInput, UserVerificationRequirement,
+    PasskeyAuthenticationOptions, PasskeyExtensionsInput, PasskeyOptions,
+    PasskeyRegistrationOptions, PasskeyRegistrationUser, RegistrationWebAuthnOptions,
+    ResidentKeyRequirement, ResolveRegistrationUserInput, UserVerificationRequirement,
 };
 pub use store::Passkey;
 pub use webauthn::{
     PasskeyAuthenticationStart, PasskeyRegistrationStart, PasskeyWebAuthnBackend,
-    VerifiedAuthentication, VerifiedPasskeyCredential, WebAuthnConfig,
+    RealPasskeyWebAuthnBackend, VerifiedAuthentication, VerifiedPasskeyCredential, WebAuthnConfig,
 };
 
 use openauth_core::plugin::AuthPlugin;

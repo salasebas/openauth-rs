@@ -1,3 +1,5 @@
+use std::future::{ready, Future};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -276,21 +278,30 @@ impl PasskeyRegistrationUser {
     }
 }
 
-pub type ResolveRegistrationUser =
-    Arc<dyn Fn(ResolveRegistrationUserInput) -> Option<PasskeyRegistrationUser> + Send + Sync>;
+pub type PasskeyBoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
-pub type AfterRegistrationVerification =
-    Arc<dyn Fn(AfterRegistrationVerificationInput) -> Option<String> + Send + Sync>;
+pub type ResolveRegistrationUser = Arc<
+    dyn Fn(ResolveRegistrationUserInput) -> PasskeyBoxFuture<Option<PasskeyRegistrationUser>>
+        + Send
+        + Sync,
+>;
+
+pub type AfterRegistrationVerification = Arc<
+    dyn Fn(AfterRegistrationVerificationInput) -> PasskeyBoxFuture<Option<String>> + Send + Sync,
+>;
 
 pub type AfterAuthenticationVerification =
-    Arc<dyn Fn(AfterAuthenticationVerificationInput) + Send + Sync>;
+    Arc<dyn Fn(AfterAuthenticationVerificationInput) -> PasskeyBoxFuture<()> + Send + Sync>;
+
+pub type PasskeyExtensionsResolver =
+    Arc<dyn Fn(PasskeyExtensionsInput) -> PasskeyBoxFuture<Option<Value>> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct PasskeyRegistrationOptions {
     pub require_session: bool,
     pub resolve_user: Option<ResolveRegistrationUser>,
     pub after_verification: Option<AfterRegistrationVerification>,
-    pub extensions: Option<Value>,
+    pub extensions: Option<PasskeyExtensionsResolver>,
 }
 
 impl Default for PasskeyRegistrationOptions {
@@ -323,7 +334,17 @@ impl PasskeyRegistrationOptions {
             + Sync
             + 'static,
     {
-        self.resolve_user = Some(Arc::new(resolver));
+        self.resolve_user = Some(Arc::new(move |input| Box::pin(ready(resolver(input)))));
+        self
+    }
+
+    #[must_use]
+    pub fn resolve_user_async<F, Fut>(mut self, resolver: F) -> Self
+    where
+        F: Fn(ResolveRegistrationUserInput) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<PasskeyRegistrationUser>> + Send + 'static,
+    {
+        self.resolve_user = Some(Arc::new(move |input| Box::pin(resolver(input))));
         self
     }
 
@@ -332,13 +353,33 @@ impl PasskeyRegistrationOptions {
     where
         F: Fn(AfterRegistrationVerificationInput) -> Option<String> + Send + Sync + 'static,
     {
-        self.after_verification = Some(Arc::new(callback));
+        self.after_verification = Some(Arc::new(move |input| Box::pin(ready(callback(input)))));
+        self
+    }
+
+    #[must_use]
+    pub fn after_verification_async<F, Fut>(mut self, callback: F) -> Self
+    where
+        F: Fn(AfterRegistrationVerificationInput) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<String>> + Send + 'static,
+    {
+        self.after_verification = Some(Arc::new(move |input| Box::pin(callback(input))));
         self
     }
 
     #[must_use]
     pub fn extensions(mut self, extensions: Value) -> Self {
-        self.extensions = Some(extensions);
+        self.extensions = Some(Arc::new(move |_| Box::pin(ready(Some(extensions.clone())))));
+        self
+    }
+
+    #[must_use]
+    pub fn extensions_resolver<F, Fut>(mut self, resolver: F) -> Self
+    where
+        F: Fn(PasskeyExtensionsInput) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<Value>> + Send + 'static,
+    {
+        self.extensions = Some(Arc::new(move |input| Box::pin(resolver(input))));
         self
     }
 }
@@ -346,7 +387,7 @@ impl PasskeyRegistrationOptions {
 #[derive(Clone, Default)]
 pub struct PasskeyAuthenticationOptions {
     pub after_verification: Option<AfterAuthenticationVerification>,
-    pub extensions: Option<Value>,
+    pub extensions: Option<PasskeyExtensionsResolver>,
 }
 
 impl PasskeyAuthenticationOptions {
@@ -359,19 +400,47 @@ impl PasskeyAuthenticationOptions {
     where
         F: Fn(AfterAuthenticationVerificationInput) + Send + Sync + 'static,
     {
-        self.after_verification = Some(Arc::new(callback));
+        self.after_verification = Some(Arc::new(move |input| {
+            callback(input);
+            Box::pin(ready(()))
+        }));
+        self
+    }
+
+    #[must_use]
+    pub fn after_verification_async<F, Fut>(mut self, callback: F) -> Self
+    where
+        F: Fn(AfterAuthenticationVerificationInput) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.after_verification = Some(Arc::new(move |input| Box::pin(callback(input))));
         self
     }
 
     #[must_use]
     pub fn extensions(mut self, extensions: Value) -> Self {
-        self.extensions = Some(extensions);
+        self.extensions = Some(Arc::new(move |_| Box::pin(ready(Some(extensions.clone())))));
+        self
+    }
+
+    #[must_use]
+    pub fn extensions_resolver<F, Fut>(mut self, resolver: F) -> Self
+    where
+        F: Fn(PasskeyExtensionsInput) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<Value>> + Send + 'static,
+    {
+        self.extensions = Some(Arc::new(move |input| Box::pin(resolver(input))));
         self
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolveRegistrationUserInput {
+    pub context: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasskeyExtensionsInput {
     pub context: Option<String>,
 }
 

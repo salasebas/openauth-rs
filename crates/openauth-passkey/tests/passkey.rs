@@ -8,6 +8,8 @@ mod openapi;
 mod register;
 #[path = "passkey/schema.rs"]
 mod schema;
+#[path = "passkey/sql.rs"]
+mod sql;
 #[path = "passkey/sqlite.rs"]
 mod sqlite;
 #[path = "passkey/support.rs"]

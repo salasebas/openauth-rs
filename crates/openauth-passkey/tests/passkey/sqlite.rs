@@ -37,5 +37,14 @@ async fn sqlite_schema_migration_creates_passkeys_table_and_columns(
         .iter()
         .all(|column| !column.contains(char::is_uppercase)));
 
+    let unique_credential_indexes: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_index_list('passkeys') il \
+         JOIN pragma_index_info(il.name) ii \
+         WHERE il.\"unique\" = 1 AND ii.name = 'credential_id'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(unique_credential_indexes, 1);
+
     Ok(())
 }

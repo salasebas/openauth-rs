@@ -25,6 +25,7 @@ fn passkey_plugin_registers_snake_case_plural_schema() -> Result<(), Box<dyn std
     let credential_id = context.db_schema.field("passkey", "credential_id")?;
     assert_eq!(credential_id.name, "credential_id");
     assert!(credential_id.index);
+    assert!(credential_id.unique);
 
     let user_id = context.db_schema.field("passkey", "user_id")?;
     assert_eq!(user_id.name, "user_id");

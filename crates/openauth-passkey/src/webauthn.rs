@@ -1,3 +1,4 @@
+use base64::Engine;
 use openauth_core::error::OpenAuthError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -284,11 +285,17 @@ fn credential_output(
     let credential_id = serde_json::to_value(&credential.cred_id)
         .and_then(serde_json::from_value::<String>)
         .unwrap_or_else(|_| format!("{:?}", credential.cred_id));
-    let public_key = serde_json::to_string(&credential.cred).map_err(json_error)?;
+    let public_key = base64::engine::general_purpose::STANDARD
+        .encode(serde_json::to_vec(&credential.cred).map_err(json_error)?);
     let transports = credential.transports.as_ref().map(|values| {
         values
             .iter()
-            .map(|value| format!("{value:?}"))
+            .map(|value| {
+                serde_json::to_value(value)
+                    .ok()
+                    .and_then(|value| serde_json::from_value::<String>(value).ok())
+                    .unwrap_or_else(|| format!("{value:?}").to_ascii_lowercase())
+            })
             .collect::<Vec<_>>()
             .join(",")
     });
@@ -309,6 +316,10 @@ fn credential_output(
 }
 
 fn stable_user_uuid(user_id: &str) -> Uuid {
+    // WebAuthn user handles are intentionally stable per OpenAuth user so
+    // authenticators can recognize the same account across credential updates.
+    // If we later support passkey-first anonymous enrollment, that flow should
+    // store a random per-registration user_handle in credential metadata.
     Uuid::new_v5(&Uuid::NAMESPACE_URL, user_id.as_bytes())
 }
 

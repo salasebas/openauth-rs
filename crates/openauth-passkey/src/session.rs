@@ -13,7 +13,7 @@ use crate::options::{PasskeyOptions, PasskeyRegistrationUser, ResolveRegistratio
 
 pub type CurrentSession = (Session, User, Vec<Cookie>);
 
-pub fn registration_user(
+pub async fn registration_user(
     options: &PasskeyOptions,
     session: Option<&CurrentSession>,
     context: Option<String>,
@@ -29,7 +29,7 @@ pub fn registration_user(
     let Some(resolve_user) = &options.registration.resolve_user else {
         return Err(RegistrationUserError::ResolveUserRequired);
     };
-    let Some(user) = resolve_user(ResolveRegistrationUserInput { context }) else {
+    let Some(user) = resolve_user(ResolveRegistrationUserInput { context }).await else {
         return Err(RegistrationUserError::ResolvedUserInvalid);
     };
     if user.id.is_empty() || user.name.is_empty() {
@@ -108,6 +108,12 @@ pub async fn create_session_for_user(
     }
     input = input.additional_fields(additional_session_create_values(context));
     DbSessionStore::new(adapter).create_session(input).await
+}
+
+pub fn session_is_fresh(context: &AuthContext, session: &Session) -> bool {
+    context.session_config.fresh_age == 0
+        || (OffsetDateTime::now_utc() - session.created_at).whole_seconds()
+            < context.session_config.fresh_age as i64
 }
 
 fn additional_session_create_values(context: &AuthContext) -> DbRecord {

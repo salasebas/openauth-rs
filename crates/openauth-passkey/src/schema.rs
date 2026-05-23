@@ -28,7 +28,9 @@ fn passkey_table(name: &str) -> DbTable {
     );
     fields.insert(
         "credential_id".to_owned(),
-        DbField::new("credential_id", DbFieldType::String).indexed(),
+        DbField::new("credential_id", DbFieldType::String)
+            .indexed()
+            .unique(),
     );
     fields.insert(
         "counter".to_owned(),

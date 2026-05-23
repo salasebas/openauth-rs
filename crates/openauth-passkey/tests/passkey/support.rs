@@ -1,12 +1,19 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
-use openauth_core::cookies::parse_set_cookie_header;
+use openauth_core::cookies::{parse_set_cookie_header, sign_cookie_value};
 use openauth_core::crypto::password::hash_password;
-use openauth_core::db::{Create, DbAdapter, DbValue, MemoryAdapter};
+use openauth_core::db::{
+    AdapterCapabilities, AdapterFuture, Count, Create, DbAdapter, DbRecord, DbSchema, DbValue,
+    Delete, DeleteMany, FindMany, FindOne, MemoryAdapter, SchemaCreation, TransactionCallback,
+    Update, UpdateMany,
+};
+use openauth_core::error::OpenAuthError;
 use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
+use openauth_core::verification::{CreateVerificationInput, DbVerificationStore};
 use openauth_passkey::{
     passkey, PasskeyAuthenticationStart, PasskeyOptions, PasskeyRegistrationStart,
     PasskeyRegistrationUser, PasskeyWebAuthnBackend, RegistrationWebAuthnOptions,
@@ -42,6 +49,118 @@ pub async fn seeded_router(
         core_auth_async_endpoints(adapter.clone()),
     )?;
     Ok((adapter, router, backend))
+}
+
+pub async fn router_with_adapter<A>(
+    adapter: Arc<A>,
+    options: PasskeyOptions,
+) -> Result<(AuthRouter, Arc<FakeWebAuthnBackend>), Box<dyn std::error::Error>>
+where
+    A: DbAdapter + 'static,
+{
+    let backend = Arc::new(FakeWebAuthnBackend::default());
+    let context = create_auth_context_with_adapter(
+        OpenAuthOptions {
+            base_url: Some("http://localhost:3000".to_owned()),
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            advanced: AdvancedOptions {
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            plugins: vec![passkey(options.backend(backend.clone()))],
+            ..OpenAuthOptions::default()
+        },
+        adapter.clone(),
+    )?;
+    let router =
+        AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))?;
+    Ok((router, backend))
+}
+
+#[derive(Debug, Clone)]
+pub struct RaceDuplicateAdapter {
+    inner: MemoryAdapter,
+    credential_id: String,
+    injected: Arc<AtomicBool>,
+}
+
+impl RaceDuplicateAdapter {
+    pub fn new(credential_id: impl Into<String>) -> Self {
+        Self {
+            inner: MemoryAdapter::new(),
+            credential_id: credential_id.into(),
+            injected: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn inner(&self) -> &MemoryAdapter {
+        &self.inner
+    }
+}
+
+impl DbAdapter for RaceDuplicateAdapter {
+    fn id(&self) -> &str {
+        "race-duplicate-memory"
+    }
+
+    fn capabilities(&self) -> AdapterCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn create<'a>(&'a self, query: Create) -> AdapterFuture<'a, DbRecord> {
+        let should_inject = query.model == "passkey"
+            && query.data.get("credential_id")
+                == Some(&DbValue::String(self.credential_id.clone()))
+            && !self.injected.swap(true, Ordering::SeqCst);
+        if should_inject {
+            return Box::pin(async move {
+                self.inner.create(query).await?;
+                Err(OpenAuthError::Adapter("duplicate key".to_owned()))
+            });
+        }
+        self.inner.create(query)
+    }
+
+    fn find_one<'a>(&'a self, query: FindOne) -> AdapterFuture<'a, Option<DbRecord>> {
+        self.inner.find_one(query)
+    }
+
+    fn find_many<'a>(&'a self, query: FindMany) -> AdapterFuture<'a, Vec<DbRecord>> {
+        self.inner.find_many(query)
+    }
+
+    fn count<'a>(&'a self, query: Count) -> AdapterFuture<'a, u64> {
+        self.inner.count(query)
+    }
+
+    fn update<'a>(&'a self, query: Update) -> AdapterFuture<'a, Option<DbRecord>> {
+        self.inner.update(query)
+    }
+
+    fn update_many<'a>(&'a self, query: UpdateMany) -> AdapterFuture<'a, u64> {
+        self.inner.update_many(query)
+    }
+
+    fn delete<'a>(&'a self, query: Delete) -> AdapterFuture<'a, ()> {
+        self.inner.delete(query)
+    }
+
+    fn delete_many<'a>(&'a self, query: DeleteMany) -> AdapterFuture<'a, u64> {
+        self.inner.delete_many(query)
+    }
+
+    fn transaction<'a>(&'a self, callback: TransactionCallback<'a>) -> AdapterFuture<'a, ()> {
+        self.inner.transaction(callback)
+    }
+
+    fn create_schema<'a>(
+        &'a self,
+        schema: &'a DbSchema,
+        file: Option<&'a str>,
+    ) -> AdapterFuture<'a, Option<SchemaCreation>> {
+        self.inner.create_schema(schema, file)
+    }
 }
 
 pub fn empty_request(
@@ -105,6 +224,36 @@ pub fn join_cookies(values: &[&str]) -> String {
         .join("; ")
 }
 
+pub fn signed_passkey_challenge_cookie(token: &str) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(format!(
+        "better-auth-passkey={}",
+        sign_cookie_value(token, "secret-a-at-least-32-chars-long!!")?
+    ))
+}
+
+pub async fn expired_registration_challenge_cookie(
+    adapter: &MemoryAdapter,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let token = "expired-registration-token";
+    DbVerificationStore::new(adapter)
+        .create_verification(CreateVerificationInput::new(
+            token.to_owned(),
+            serde_json::to_string(&json!({
+                "kind": "Registration",
+                "state": { "kind": "registration-state" },
+                "user": {
+                    "id": "user_1",
+                    "name": "ada@example.com",
+                    "display_name": null,
+                },
+                "context": null,
+            }))?,
+            OffsetDateTime::now_utc() - time::Duration::seconds(1),
+        ))
+        .await?;
+    signed_passkey_challenge_cookie(token)
+}
+
 pub async fn sign_in_cookie(router: &AuthRouter) -> Result<String, Box<dyn std::error::Error>> {
     let response = router
         .handle_async(json_request(
@@ -158,7 +307,84 @@ pub async fn session_cookie_for(
         .join("; "))
 }
 
-async fn seed_user(adapter: &MemoryAdapter) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn session_cookie_for_created_at(
+    adapter: &MemoryAdapter,
+    user_id: &str,
+    token: &str,
+    created_at: OffsetDateTime,
+) -> Result<String, Box<dyn std::error::Error>> {
+    adapter
+        .create(
+            Create::new("session")
+                .data("id", DbValue::String(format!("session-{token}")))
+                .data("user_id", DbValue::String(user_id.to_owned()))
+                .data("token", DbValue::String(token.to_owned()))
+                .data(
+                    "expires_at",
+                    DbValue::Timestamp(OffsetDateTime::now_utc() + time::Duration::hours(1)),
+                )
+                .data("ip_address", DbValue::Null)
+                .data("user_agent", DbValue::Null)
+                .data("created_at", DbValue::Timestamp(created_at))
+                .data("updated_at", DbValue::Timestamp(created_at))
+                .force_allow_id(),
+        )
+        .await?;
+    let context = openauth_core::context::create_auth_context(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let session = openauth_core::db::Session {
+        id: format!("session-{token}"),
+        user_id: user_id.to_owned(),
+        token: token.to_owned(),
+        expires_at: OffsetDateTime::now_utc() + time::Duration::hours(1),
+        ip_address: None,
+        user_agent: None,
+        created_at,
+        updated_at: created_at,
+    };
+    let user = openauth_core::db::User {
+        id: user_id.to_owned(),
+        name: "Ada".to_owned(),
+        email: "ada@example.com".to_owned(),
+        email_verified: true,
+        image: None,
+        username: None,
+        display_username: None,
+        created_at,
+        updated_at: created_at,
+    };
+    let cookies = openauth_core::cookies::set_session_cookie(
+        &context.auth_cookies,
+        &context.secret,
+        token,
+        openauth_core::cookies::SessionCookieOptions::default(),
+    )?;
+    let mut headers = cookies
+        .into_iter()
+        .map(|cookie| format!("{}={}", cookie.name, cookie.value))
+        .collect::<Vec<_>>();
+    headers.extend(
+        openauth_core::cookies::set_cookie_cache(
+            &context.auth_cookies,
+            &context.secret,
+            &openauth_core::cookies::CookieCachePayload {
+                session,
+                user,
+                updated_at: created_at.unix_timestamp(),
+                version: "1".to_owned(),
+            },
+            context.options.session.cookie_cache.strategy,
+            60 * 5,
+        )?
+        .into_iter()
+        .map(|cookie| format!("{}={}", cookie.name, cookie.value)),
+    );
+    Ok(headers.join("; "))
+}
+
+pub async fn seed_user(adapter: &MemoryAdapter) -> Result<(), Box<dyn std::error::Error>> {
     let now = OffsetDateTime::now_utc();
     adapter
         .create(

@@ -15,6 +15,7 @@ categories.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+base64.workspace = true
 http.workspace = true
 indexmap.workspace = true
 openauth-core.workspace = true
@@ -26,7 +27,7 @@ uuid.workspace = true
 webauthn-rs.workspace = true
 
 [dev-dependencies]
-openauth-sqlx = { workspace = true, features = ["sqlite"] }
+openauth-sqlx = { workspace = true, features = ["mysql", "postgres", "sqlite"] }
 sqlx.workspace = true
 tokio.workspace = true
 

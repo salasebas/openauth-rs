@@ -1,20 +1,22 @@
 use std::sync::Arc;
 
-use http::{Method, StatusCode};
+use http::{header, Method, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::db::{DbAdapter, DbValue, FindOne, MemoryAdapter, Where};
 use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
 use openauth_passkey::{
     passkey, AuthenticatorAttachment, AuthenticatorSelection, PasskeyOptions,
-    PasskeyRegistrationOptions, PasskeyRegistrationUser, ResidentKeyRequirement,
-    UserVerificationRequirement,
+    PasskeyRegistrationOptions, PasskeyRegistrationUser, PasskeyWebAuthnBackend,
+    RealPasskeyWebAuthnBackend, RegistrationWebAuthnOptions, ResidentKeyRequirement,
+    UserVerificationRequirement, WebAuthnConfig,
 };
 use serde_json::{json, Value};
 
 use crate::support::{
-    cookie_header_from_response, empty_request, join_cookies, json_request, seeded_router,
-    set_cookie_values, sign_in_cookie,
+    cookie_header_from_response, empty_request, expired_registration_challenge_cookie,
+    join_cookies, json_request, router_with_adapter, seed_user, seeded_router,
+    session_cookie_for_created_at, set_cookie_values, sign_in_cookie, RaceDuplicateAdapter,
 };
 
 #[tokio::test]
@@ -203,6 +205,47 @@ async fn generate_register_options_includes_selection_attachment_and_extensions(
 }
 
 #[tokio::test]
+async fn generate_register_options_uses_async_resolvers() -> Result<(), Box<dyn std::error::Error>>
+{
+    let options = PasskeyOptions::default().registration(
+        PasskeyRegistrationOptions::new()
+            .require_session(false)
+            .resolve_user_async(|input| {
+                Box::pin(async move {
+                    Some(PasskeyRegistrationUser::new(
+                        input.context.unwrap_or_else(|| "async-user".to_owned()),
+                        "async@example.com",
+                    ))
+                })
+            })
+            .extensions_resolver(|input| {
+                Box::pin(async move {
+                    Some(json!({
+                        "credProps": true,
+                        "context": input.context,
+                    }))
+                })
+            }),
+    );
+    let (_adapter, router, _backend) = seeded_router(options).await?;
+
+    let response = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-register-options?context=ctx-1",
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["user"]["id"], "ctx-1");
+    assert_eq!(body["extensions"]["credProps"], true);
+    assert_eq!(body["extensions"]["context"], "ctx-1");
+    Ok(())
+}
+
+#[tokio::test]
 async fn real_webauthn_backend_generates_registration_option_shape(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(MemoryAdapter::new());
@@ -263,6 +306,42 @@ async fn real_webauthn_backend_generates_registration_option_shape(
     Ok(())
 }
 
+#[test]
+fn real_webauthn_backend_rejects_invalid_registration_payload() {
+    let backend = RealPasskeyWebAuthnBackend;
+    let result = backend.finish_registration(
+        WebAuthnConfig {
+            rp_id: "localhost".to_owned(),
+            rp_name: "OpenAuth".to_owned(),
+            origins: vec!["http://localhost:3000".to_owned()],
+        },
+        json!({}),
+        json!({}),
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn real_webauthn_backend_rejects_invalid_origin_config() {
+    let backend = RealPasskeyWebAuthnBackend;
+    let result = backend.start_registration(
+        WebAuthnConfig {
+            rp_id: "localhost".to_owned(),
+            rp_name: "OpenAuth".to_owned(),
+            origins: vec!["not a url".to_owned()],
+        },
+        &PasskeyRegistrationUser::new("real-user", "real@example.com"),
+        Vec::new(),
+        RegistrationWebAuthnOptions {
+            authenticator_selection: AuthenticatorSelection::default(),
+            extensions: None,
+        },
+    );
+
+    assert!(result.is_err());
+}
+
 #[tokio::test]
 async fn verify_registration_creates_passkey_and_deletes_challenge(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -292,6 +371,303 @@ async fn verify_registration_creates_passkey_and_deletes_challenge(
     assert_eq!(body["name"], "Laptop");
     assert_eq!(body["credentialId"], "credential-id");
     assert_eq!(adapter.len("verification").await, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_registration_rejects_reused_challenge() -> Result<(), Box<dyn std::error::Error>> {
+    let (_adapter, router, _backend) = seeded_router(PasskeyOptions::default()).await?;
+    let session_cookie = sign_in_cookie(&router).await?;
+    let options_response = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-register-options",
+            Some(&session_cookie),
+        )?)
+        .await?;
+    let passkey_cookie = cookie_header_from_response(&options_response);
+    let cookie = join_cookies(&[session_cookie.as_str(), passkey_cookie.as_str()]);
+
+    let first = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/passkey/verify-registration",
+            r#"{"response":{"id":"credential-id"},"name":"Laptop"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/passkey/verify-registration",
+            r#"{"response":{"id":"credential-id"},"name":"Laptop"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(second.body())?;
+    assert_eq!(body["code"], "CHALLENGE_NOT_FOUND");
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_registration_rejects_authentication_challenge(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_adapter, router, _backend) = seeded_router(PasskeyOptions::default()).await?;
+    let options_response = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-authenticate-options",
+            None,
+        )?)
+        .await?;
+    let passkey_cookie = cookie_header_from_response(&options_response);
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/passkey/verify-registration",
+            r#"{"response":{"id":"credential-id"},"name":"Laptop"}"#,
+            Some(&passkey_cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "CHALLENGE_NOT_FOUND");
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_registration_rejects_expired_challenge() -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router, _backend) = seeded_router(PasskeyOptions::default()).await?;
+    let session_cookie = sign_in_cookie(&router).await?;
+    let expired_cookie = expired_registration_challenge_cookie(adapter.as_ref()).await?;
+    let cookie = join_cookies(&[session_cookie.as_str(), expired_cookie.as_str()]);
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/passkey/verify-registration",
+            r#"{"response":{"id":"credential-id"},"name":"Laptop"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "CHALLENGE_NOT_FOUND");
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_registration_rejects_invalid_signed_challenge_cookie(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_adapter, router, _backend) = seeded_router(PasskeyOptions::default()).await?;
+    let session_cookie = sign_in_cookie(&router).await?;
+    let invalid_cookie = "better-auth-passkey=invalid.signature";
+    let cookie = join_cookies(&[session_cookie.as_str(), invalid_cookie]);
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/passkey/verify-registration",
+            r#"{"response":{"id":"credential-id"},"name":"Laptop"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "CHALLENGE_NOT_FOUND");
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_registration_rejects_duplicate_credential_id(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router, _backend) = seeded_router(PasskeyOptions::default()).await?;
+    let session_cookie = sign_in_cookie(&router).await?;
+    crate::support::seed_passkey(
+        adapter.as_ref(),
+        "passkey_existing",
+        "user_1",
+        "Laptop",
+        "credential-id",
+    )
+    .await?;
+    let options_response = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-register-options",
+            Some(&session_cookie),
+        )?)
+        .await?;
+    let passkey_cookie = cookie_header_from_response(&options_response);
+    let cookie = join_cookies(&[session_cookie.as_str(), passkey_cookie.as_str()]);
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/passkey/verify-registration",
+            r#"{"response":{"id":"credential-id"},"name":"Duplicate"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "PREVIOUSLY_REGISTERED");
+    assert_eq!(adapter.len("passkey").await, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_registration_maps_duplicate_insert_race_to_previous_registered(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(RaceDuplicateAdapter::new("race-credential"));
+    seed_user(adapter.inner()).await?;
+    let (router, _backend) =
+        router_with_adapter(adapter.clone(), PasskeyOptions::default()).await?;
+    let session_cookie = sign_in_cookie(&router).await?;
+    let options_response = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-register-options",
+            Some(&session_cookie),
+        )?)
+        .await?;
+    let passkey_cookie = cookie_header_from_response(&options_response);
+    let cookie = join_cookies(&[session_cookie.as_str(), passkey_cookie.as_str()]);
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/passkey/verify-registration",
+            r#"{"response":{"id":"race-credential"},"name":"Race"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "PREVIOUSLY_REGISTERED");
+    assert_eq!(adapter.inner().len("passkey").await, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_registration_rejects_stale_session() -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router, _backend) = seeded_router(PasskeyOptions::default()).await?;
+    let fresh_cookie = sign_in_cookie(&router).await?;
+    let options_response = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-register-options",
+            Some(&fresh_cookie),
+        )?)
+        .await?;
+    let passkey_cookie = cookie_header_from_response(&options_response);
+    let stale_cookie = session_cookie_for_created_at(
+        adapter.as_ref(),
+        "user_1",
+        "stale-verify-token",
+        time::OffsetDateTime::now_utc() - time::Duration::days(2),
+    )
+    .await?;
+    let cookie = join_cookies(&[stale_cookie.as_str(), passkey_cookie.as_str()]);
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/passkey/verify-registration",
+            r#"{"response":{"id":"credential-id"},"name":"Laptop"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "SESSION_NOT_FRESH");
+    Ok(())
+}
+
+#[tokio::test]
+async fn generate_register_options_accepts_fresh_session() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (adapter, router, _backend) = seeded_router(PasskeyOptions::default()).await?;
+    let fresh_cookie = session_cookie_for_created_at(
+        adapter.as_ref(),
+        "user_1",
+        "fresh-token",
+        time::OffsetDateTime::now_utc(),
+    )
+    .await?;
+
+    let response = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-register-options",
+            Some(&fresh_cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    Ok(())
+}
+
+#[tokio::test]
+async fn generate_register_options_rejects_stale_session() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (adapter, router, _backend) = seeded_router(PasskeyOptions::default()).await?;
+    let stale_cookie = session_cookie_for_created_at(
+        adapter.as_ref(),
+        "user_1",
+        "stale-token",
+        time::OffsetDateTime::now_utc() - time::Duration::days(2),
+    )
+    .await?;
+
+    let response = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-register-options",
+            Some(&stale_cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "SESSION_NOT_FRESH");
+    Ok(())
+}
+
+#[tokio::test]
+async fn passkey_error_responses_use_core_camel_case_shape(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_adapter, router, _backend) = seeded_router(PasskeyOptions::default()).await?;
+
+    let response = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-register-options",
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert!(body.get("original_message").is_none());
+    assert!(body.get("originalMessage").is_none());
     Ok(())
 }
 
