@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod assertions;
 pub mod authn_request;
 pub mod encryption;

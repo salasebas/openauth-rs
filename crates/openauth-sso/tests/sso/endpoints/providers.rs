@@ -50,6 +50,28 @@ async fn get_and_delete_provider_apply_authenticated_user_scope(
 }
 
 #[tokio::test]
+async fn get_provider_accepts_provider_id_query_parameter() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+    register_oidc_provider(&router, &cookie).await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::GET,
+            "/sso/get-provider?providerId=okta",
+            "",
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response)?["providerId"], "okta");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn organization_admin_can_list_get_update_and_delete_org_provider(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options_and_extra_plugins(

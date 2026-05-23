@@ -24,6 +24,27 @@ pub fn router_with_options(
     router_with_options_and_trusted_origins(options, Vec::new())
 }
 
+pub fn router_with_adapter_and_options(
+    adapter: Arc<dyn DbAdapter>,
+    options: SsoOptions,
+) -> Result<AuthRouter, OpenAuthError> {
+    let context = create_auth_context_with_adapter(
+        OpenAuthOptions {
+            base_url: Some("https://app.example.com".to_owned()),
+            secret: Some(SECRET.to_owned()),
+            plugins: vec![sso(options)],
+            advanced: AdvancedOptions {
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            ..OpenAuthOptions::default()
+        },
+        adapter.clone(),
+    )?;
+    AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
+}
+
 pub fn router_with_options_and_trusted_origins(
     options: SsoOptions,
     trusted_origins: Vec<String>,
@@ -237,6 +258,12 @@ pub fn form_request(
 }
 
 pub async fn seed_session(adapter: &MemoryAdapter) -> Result<String, Box<dyn std::error::Error>> {
+    seed_session_for_adapter(adapter).await
+}
+
+pub async fn seed_session_for_adapter(
+    adapter: &dyn DbAdapter,
+) -> Result<String, Box<dyn std::error::Error>> {
     let now = OffsetDateTime::now_utc();
     adapter
         .create(

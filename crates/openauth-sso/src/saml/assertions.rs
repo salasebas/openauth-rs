@@ -131,6 +131,7 @@ pub fn validate_single_assertion(encoded_response: &str) -> Result<(), OpenAuthE
             counts.total
         )));
     }
+    validate_assertion_locations(&xml)?;
     Ok(())
 }
 
@@ -190,6 +191,7 @@ pub fn parse_saml_response_with_decryption_detailed(
     decryption_private_key: Option<&str>,
 ) -> Result<ParsedSamlResponse, SamlResponseParseError> {
     let xml = decode_saml_response_xml_detailed(encoded_response)?;
+    validate_assertion_locations_detailed(&xml)?;
     let counts = count_assertions_detailed(&xml)?;
     if counts.assertions == 0 && counts.encrypted_assertions == 1 {
         let Some(private_key) = decryption_private_key else {
@@ -211,6 +213,7 @@ fn parse_saml_response_xml_detailed(
     xml: &str,
 ) -> Result<ParsedSamlResponse, SamlResponseParseError> {
     validate_saml_xml(xml)?;
+    validate_assertion_locations_detailed(xml)?;
     let algorithms = collect_saml_runtime_algorithms(xml)?;
 
     let mut reader = Reader::from_str(xml);
@@ -263,6 +266,51 @@ fn decode_saml_response_xml_detailed(
 
 fn count_assertions_detailed(xml: &str) -> Result<AssertionCounts, SamlResponseParseError> {
     count_assertions(xml).map_err(SamlResponseParseError::from)
+}
+
+fn validate_assertion_locations(xml: &str) -> Result<(), OpenAuthError> {
+    validate_saml_xml(xml)?;
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut stack = Vec::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(element)) => {
+                let name = local_name(element.name().as_ref())?;
+                validate_assertion_parent(&stack, &name)?;
+                stack.push(name);
+            }
+            Ok(Event::Empty(element)) => {
+                let name = local_name(element.name().as_ref())?;
+                validate_assertion_parent(&stack, &name)?;
+            }
+            Ok(Event::End(_)) => {
+                stack.pop();
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(OpenAuthError::Api(format!("Invalid SAML XML: {error}"))),
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_assertion_parent(stack: &[String], name: &str) -> Result<(), OpenAuthError> {
+    if matches!(name, "Assertion" | "EncryptedAssertion")
+        && !stack.last().is_some_and(|parent| parent == "Response")
+    {
+        return Err(OpenAuthError::Api(
+            "SAML assertion must be a direct Response child".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_assertion_locations_detailed(xml: &str) -> Result<(), SamlResponseParseError> {
+    validate_assertion_locations(xml).map_err(SamlResponseParseError::from)
 }
 
 #[derive(Default)]

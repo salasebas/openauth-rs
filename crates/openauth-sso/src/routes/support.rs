@@ -10,6 +10,31 @@ use serde_json::json;
 
 use crate::utils;
 
+pub(super) fn valid_provider_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if !(1..=128).contains(&bytes.len()) {
+        return false;
+    }
+    let Some(first) = bytes.first() else {
+        return false;
+    };
+    let Some(last) = bytes.last() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && last.is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+pub(super) fn invalid_provider_id() -> Result<ApiResponse, OpenAuthError> {
+    utils::json(
+        http::StatusCode::BAD_REQUEST,
+        &json!({"code": crate::errors::INVALID_PROVIDER_ID}),
+    )
+}
+
 #[derive(Debug, serde::Serialize)]
 struct RedirectBody {
     url: String,

@@ -69,6 +69,15 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
             let options = Arc::clone(&options);
             Box::pin(async move {
                 let body = parse_request_body::<SignInSsoBody>(&request)?;
+                if !matches!(
+                    body.provider_type.as_deref(),
+                    None | Some("oidc") | Some("saml")
+                ) {
+                    return utils::json(
+                        http::StatusCode::BAD_REQUEST,
+                        &json!({"code": crate::errors::INVALID_PROVIDER_TYPE}),
+                    );
+                }
                 let provider = find_sign_in_provider(context, &options, &body).await?;
                 let Some(provider) = provider else {
                     return utils::json(
@@ -108,6 +117,7 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                     &request,
                     &provider.issuer,
                     config,
+                    &options,
                     super::oidc::OidcRuntimeRequirement::SignIn,
                 )
                 .await
@@ -338,7 +348,7 @@ async fn find_sign_in_provider(
     let Some(adapter) = context.adapter.as_deref() else {
         return Ok(None);
     };
-    let store = SsoProviderStore::new(adapter);
+    let store = SsoProviderStore::new_with_options(adapter, options);
     if let Some(provider_id) = &body.provider_id {
         return store.find_by_provider_id(provider_id).await;
     }

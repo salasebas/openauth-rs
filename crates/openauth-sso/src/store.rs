@@ -11,7 +11,19 @@ use crate::options::{OidcConfig, SamlConfig};
 use crate::schema::SSO_PROVIDER_MODEL;
 use crate::utils::{certificate_metadata, client_id_last_four};
 
-const SSO_PROVIDER_FIELDS: [&str; 10] = [
+const SSO_PROVIDER_FIELDS: [&str; 9] = [
+    "id",
+    "issuer",
+    "oidcConfig",
+    "samlConfig",
+    "userId",
+    "providerId",
+    "organizationId",
+    "domain",
+    "createdAt",
+];
+
+const SSO_PROVIDER_FIELDS_WITH_DOMAIN_VERIFIED: [&str; 10] = [
     "id",
     "issuer",
     "oidcConfig",
@@ -104,6 +116,8 @@ pub struct SanitizedOidcConfig {
     pub end_session_endpoint: Option<String>,
     /// OAuth token introspection endpoint URL.
     pub introspection_endpoint: Option<String>,
+    /// Client authentication method selected for the token endpoint.
+    pub token_endpoint_authentication: Option<crate::options::TokenEndpointAuthentication>,
     /// Configured default scopes.
     pub scopes: Option<Vec<String>>,
 }
@@ -147,18 +161,55 @@ pub struct SanitizedSamlConfig {
 /// Adapter-backed store for SSO provider records.
 pub struct SsoProviderStore<'a> {
     adapter: &'a dyn DbAdapter,
+    model_name: &'a str,
+    include_domain_verified: bool,
 }
 
 impl<'a> SsoProviderStore<'a> {
     /// Create a provider store over an OpenAuth adapter.
     pub fn new(adapter: &'a dyn DbAdapter) -> Self {
-        Self { adapter }
+        Self::new_with_model(adapter, SSO_PROVIDER_MODEL)
+    }
+
+    /// Create a provider store using a custom logical model name.
+    pub fn new_with_model(adapter: &'a dyn DbAdapter, model_name: &'a str) -> Self {
+        Self {
+            adapter,
+            model_name,
+            include_domain_verified: false,
+        }
+    }
+
+    /// Create a provider store from plugin options.
+    pub fn new_with_options(
+        adapter: &'a dyn DbAdapter,
+        options: &'a crate::options::SsoOptions,
+    ) -> Self {
+        Self::new_with_model_and_domain_verification(
+            adapter,
+            &options.model_name,
+            options.domain_verification.enabled,
+        )
+    }
+
+    /// Create a provider store with explicit model and domain verification field support.
+    pub fn new_with_model_and_domain_verification(
+        adapter: &'a dyn DbAdapter,
+        model_name: &'a str,
+        include_domain_verified: bool,
+    ) -> Self {
+        Self {
+            adapter,
+            model_name,
+            include_domain_verified,
+        }
     }
 
     /// List all SSO providers.
     pub async fn list(&self) -> Result<Vec<SsoProviderRecord>, OpenAuthError> {
+        let query = self.select_find_many(FindMany::new(self.model_name));
         self.adapter
-            .find_many(FindMany::new(SSO_PROVIDER_MODEL).select(SSO_PROVIDER_FIELDS))
+            .find_many(query)
             .await?
             .into_iter()
             .map(record_from_db)
@@ -170,12 +221,10 @@ impl<'a> SsoProviderStore<'a> {
         &self,
         user_id: &str,
     ) -> Result<Vec<SsoProviderRecord>, OpenAuthError> {
+        let query = FindMany::new(self.model_name)
+            .where_clause(Where::new("userId", DbValue::String(user_id.to_owned())));
         self.adapter
-            .find_many(
-                FindMany::new(SSO_PROVIDER_MODEL)
-                    .where_clause(Where::new("userId", DbValue::String(user_id.to_owned())))
-                    .select(SSO_PROVIDER_FIELDS),
-            )
+            .find_many(self.select_find_many(query))
             .await?
             .into_iter()
             .map(record_from_db)
@@ -187,12 +236,9 @@ impl<'a> SsoProviderStore<'a> {
         &self,
         provider_id: &str,
     ) -> Result<Option<SsoProviderRecord>, OpenAuthError> {
+        let query = FindOne::new(self.model_name).where_clause(provider_id_where(provider_id));
         self.adapter
-            .find_one(
-                FindOne::new(SSO_PROVIDER_MODEL)
-                    .where_clause(provider_id_where(provider_id))
-                    .select(SSO_PROVIDER_FIELDS),
-            )
+            .find_one(self.select_find_one(query))
             .await?
             .map(record_from_db)
             .transpose()
@@ -203,15 +249,12 @@ impl<'a> SsoProviderStore<'a> {
         &self,
         organization_id: &str,
     ) -> Result<Option<SsoProviderRecord>, OpenAuthError> {
+        let query = FindOne::new(self.model_name).where_clause(Where::new(
+            "organizationId",
+            DbValue::String(organization_id.to_owned()),
+        ));
         self.adapter
-            .find_one(
-                FindOne::new(SSO_PROVIDER_MODEL)
-                    .where_clause(Where::new(
-                        "organizationId",
-                        DbValue::String(organization_id.to_owned()),
-                    ))
-                    .select(SSO_PROVIDER_FIELDS),
-            )
+            .find_one(self.select_find_one(query))
             .await?
             .map(record_from_db)
             .transpose()
@@ -223,7 +266,7 @@ impl<'a> SsoProviderStore<'a> {
         input: CreateSsoProviderInput,
     ) -> Result<SsoProviderRecord, OpenAuthError> {
         let now = OffsetDateTime::now_utc();
-        let mut query = Create::new(SSO_PROVIDER_MODEL)
+        let mut query = Create::new(self.model_name)
             .data("id", DbValue::String(generate_random_string(32)))
             .data("issuer", DbValue::String(input.issuer))
             .data("oidcConfig", optional_string(input.oidc_config))
@@ -234,8 +277,8 @@ impl<'a> SsoProviderStore<'a> {
             .data("domain", DbValue::String(input.domain))
             .data("createdAt", DbValue::Timestamp(now))
             .data("updatedAt", DbValue::Timestamp(now))
-            .select(SSO_PROVIDER_FIELDS)
             .force_allow_id();
+        query = self.select_create(query);
         if let Some(domain_verified) = input.domain_verified {
             query = query.data("domainVerified", DbValue::Boolean(domain_verified));
         }
@@ -251,7 +294,7 @@ impl<'a> SsoProviderStore<'a> {
     ) -> Result<Option<SsoProviderRecord>, OpenAuthError> {
         self.adapter
             .update(
-                Update::new(SSO_PROVIDER_MODEL)
+                Update::new(self.model_name)
                     .where_clause(provider_id_where(provider_id))
                     .data("domainVerified", DbValue::Boolean(verified))
                     .data("updatedAt", DbValue::Timestamp(OffsetDateTime::now_utc())),
@@ -267,7 +310,7 @@ impl<'a> SsoProviderStore<'a> {
         provider_id: &str,
         input: UpdateSsoProviderInput,
     ) -> Result<Option<SsoProviderRecord>, OpenAuthError> {
-        let mut query = Update::new(SSO_PROVIDER_MODEL)
+        let mut query = Update::new(self.model_name)
             .where_clause(provider_id_where(provider_id))
             .data("updatedAt", DbValue::Timestamp(OffsetDateTime::now_utc()));
 
@@ -300,8 +343,32 @@ impl<'a> SsoProviderStore<'a> {
     /// Delete an SSO provider by provider id.
     pub async fn delete(&self, provider_id: &str) -> Result<(), OpenAuthError> {
         self.adapter
-            .delete(Delete::new(SSO_PROVIDER_MODEL).where_clause(provider_id_where(provider_id)))
+            .delete(Delete::new(self.model_name).where_clause(provider_id_where(provider_id)))
             .await
+    }
+
+    fn select_create(&self, query: Create) -> Create {
+        if self.include_domain_verified {
+            query.select(SSO_PROVIDER_FIELDS_WITH_DOMAIN_VERIFIED)
+        } else {
+            query.select(SSO_PROVIDER_FIELDS)
+        }
+    }
+
+    fn select_find_one(&self, query: FindOne) -> FindOne {
+        if self.include_domain_verified {
+            query.select(SSO_PROVIDER_FIELDS_WITH_DOMAIN_VERIFIED)
+        } else {
+            query.select(SSO_PROVIDER_FIELDS)
+        }
+    }
+
+    fn select_find_many(&self, query: FindMany) -> FindMany {
+        if self.include_domain_verified {
+            query.select(SSO_PROVIDER_FIELDS_WITH_DOMAIN_VERIFIED)
+        } else {
+            query.select(SSO_PROVIDER_FIELDS)
+        }
     }
 }
 
@@ -365,6 +432,7 @@ impl SsoProviderRecord {
                 revocation_endpoint: config.revocation_endpoint,
                 end_session_endpoint: config.end_session_endpoint,
                 introspection_endpoint: config.introspection_endpoint,
+                token_endpoint_authentication: config.token_endpoint_authentication,
                 scopes: config.scopes,
             });
         let saml_config = self

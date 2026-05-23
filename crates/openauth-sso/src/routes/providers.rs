@@ -9,14 +9,18 @@ use serde_json::json;
 
 use crate::audit;
 use crate::openapi::{
-    provider_id_body_schema, sso_provider_list_response, sso_provider_response, success_response,
+    error_code_response, provider_id_body_schema, provider_id_query_parameter,
+    sso_provider_list_response, sso_provider_response, success_response,
 };
 use crate::options::{SsoAuditEvent, SsoAuditEventKind, SsoAuditSeverity, SsoOptions};
 use crate::org::{accessible_providers, can_manage_provider};
 use crate::store::SsoProviderStore;
 use crate::utils;
 
-use super::support::{authenticated_user, unauthorized, ProviderIdBody};
+use super::support::{
+    authenticated_user, invalid_provider_id, query_param, unauthorized, valid_provider_id,
+    ProviderIdBody,
+};
 
 pub(super) fn list_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
     create_auth_endpoint(
@@ -39,7 +43,9 @@ pub(super) fn list_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                     context,
                     adapter.as_ref(),
                     &user_id,
-                    SsoProviderStore::new(adapter.as_ref()).list().await?,
+                    SsoProviderStore::new_with_options(adapter.as_ref(), &options)
+                        .list()
+                        .await?,
                 )
                 .await?
                 .into_iter()
@@ -58,11 +64,13 @@ pub(super) fn get_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
         AuthEndpointOptions::new()
             .operation_id("getSSOProvider")
             .allowed_media_types(["application/json", "application/x-www-form-urlencoded"])
-            .body_schema(provider_id_body_schema())
             .openapi(
                 OpenApiOperation::new("getSSOProvider")
                     .tag("SSO")
-                    .response("200", sso_provider_response("SSO provider")),
+                    .parameter(provider_id_query_parameter())
+                    .response("200", sso_provider_response("SSO provider"))
+                    .response("400", error_code_response("Invalid provider id"))
+                    .response("404", error_code_response("Provider not found")),
             ),
         move |context, request| {
             let options = Arc::clone(&options);
@@ -70,9 +78,16 @@ pub(super) fn get_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                 let Some((adapter, user_id)) = authenticated_user(context, &request).await? else {
                     return unauthorized();
                 };
-                let body = parse_request_body::<ProviderIdBody>(&request)?;
-                let Some(provider) = SsoProviderStore::new(adapter.as_ref())
-                    .find_by_provider_id(&body.provider_id)
+                let provider_id =
+                    match query_param(&request, "providerId").filter(|value| !value.is_empty()) {
+                        Some(provider_id) => provider_id,
+                        None => parse_request_body::<ProviderIdBody>(&request)?.provider_id,
+                    };
+                if !valid_provider_id(&provider_id) {
+                    return invalid_provider_id();
+                }
+                let Some(provider) = SsoProviderStore::new_with_options(adapter.as_ref(), &options)
+                    .find_by_provider_id(&provider_id)
                     .await?
                 else {
                     return utils::json(
@@ -112,7 +127,10 @@ pub(super) fn delete_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                     return unauthorized();
                 };
                 let body = parse_request_body::<ProviderIdBody>(&request)?;
-                let store = SsoProviderStore::new(adapter.as_ref());
+                if !valid_provider_id(&body.provider_id) {
+                    return invalid_provider_id();
+                }
+                let store = SsoProviderStore::new_with_options(adapter.as_ref(), &options);
                 let Some(provider) = store.find_by_provider_id(&body.provider_id).await? else {
                     return utils::json(
                         http::StatusCode::NOT_FOUND,

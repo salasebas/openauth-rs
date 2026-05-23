@@ -50,7 +50,9 @@ pub mod linking {
 pub mod oidc {
     /// OIDC discovery URL helpers.
     pub mod discovery {
-        pub use crate::oidc_impl::discovery::{compute_discovery_url, normalize_url};
+        pub use crate::oidc_impl::discovery::{
+            compute_discovery_url, discover_oidc_config, normalize_url,
+        };
     }
 
     /// OIDC redirect URI helpers.
@@ -75,6 +77,36 @@ pub mod saml {
         pub use crate::saml_impl::xml::validate_saml_xml;
     }
 
+    /// SAML AuthnRequest builders.
+    pub mod authn_request {
+        pub use crate::saml_impl::authn_request::{
+            authn_request_xml, build_authn_request_redirect, SamlAuthnRequest,
+            SamlAuthnRequestError,
+        };
+    }
+
+    /// SAML logout message builders and parsers.
+    pub mod logout {
+        pub use crate::saml_impl::logout::{
+            build_logout_request_binding, build_logout_request_redirect,
+            build_logout_response_binding, build_logout_response_redirect, logout_request_xml,
+            logout_response_xml, parse_post_logout_request, parse_post_logout_response,
+            parse_redirect_logout_request, parse_redirect_logout_response, ParsedSamlLogoutRequest,
+            ParsedSamlLogoutResponse, SamlLogoutBinding, SamlLogoutBindingResponse,
+            SamlLogoutRequest, SamlLogoutRequestError, SamlLogoutRequestInput,
+        };
+    }
+
+    /// SAML signature verification boundary.
+    pub mod signature {
+        pub use crate::saml_impl::signature::{
+            verify_redirect_logout_request, verify_redirect_logout_response,
+            verify_signed_logout_request, verify_signed_logout_response,
+            verify_signed_saml_response, SamlSignatureInfo, SamlSignatureValidationError,
+            SamlSignedElement, VerifiedSamlSignature,
+        };
+    }
+
     pub use crate::saml_impl::{
         collect_saml_runtime_algorithms, validate_saml_config_algorithms,
         validate_saml_config_algorithms_with_policy, validate_saml_runtime_algorithms,
@@ -87,7 +119,7 @@ pub mod saml {
 pub use errors::{sso_error_category, sso_error_descriptors, SsoErrorCategory, SsoErrorDescriptor};
 pub use linking::NormalizedSsoProfile;
 pub use options::{
-    DnsTxtResolver, DomainVerificationOptions, OidcConfig, OidcMapping,
+    DnsTxtResolver, DomainVerificationOptions, OidcConfig, OidcMapping, OidcOptions,
     OrganizationProvisioningOptions, OrganizationRoleInput, OrganizationRoleResolver,
     ProvidersLimitResolver, ProvisionUserInput, ProvisionUserResolver, SamlAlgorithmOptions,
     SamlConfig, SamlIdpMetadata, SamlMapping, SamlOptions, SamlService, SamlSpMetadata,

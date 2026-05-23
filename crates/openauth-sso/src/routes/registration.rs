@@ -14,8 +14,8 @@ use time::{Duration, OffsetDateTime};
 use crate::audit;
 use crate::linking_impl::validate_provider_domains;
 use crate::oidc_impl::discovery::{
-    compute_discovery_url, discover_oidc_config_with_origin_validator, validate_issuer_url,
-    PartialOidcDiscoveryConfig,
+    compute_discovery_url, discover_oidc_config_with_origin_validator,
+    validate_configured_oidc_endpoint_origins, validate_issuer_url, PartialOidcDiscoveryConfig,
 };
 use crate::openapi::{register_body_schema, sso_provider_response};
 use crate::options::{
@@ -27,7 +27,7 @@ use crate::state::SsoStateStore;
 use crate::store::{CreateSsoProviderInput, SsoProviderStore};
 use crate::utils;
 
-use super::support::authenticated_session_user;
+use super::support::{authenticated_session_user, invalid_provider_id, valid_provider_id};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +91,9 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                 };
                 let user_id = user.id.clone();
                 let body = parse_request_body::<RegisterBody>(&request)?;
+                if !valid_provider_id(&body.provider_id) {
+                    return invalid_provider_id();
+                }
                 let providers_limit = options.resolve_providers_limit(user).await?;
                 if providers_limit == 0 {
                     return utils::json(
@@ -128,7 +131,7 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                         );
                     }
                 }
-                let store = SsoProviderStore::new(adapter.as_ref());
+                let store = SsoProviderStore::new_with_options(adapter.as_ref(), &options);
                 let existing = store.find_by_provider_id(&body.provider_id).await?;
                 if existing.is_some() {
                     return utils::json(
@@ -179,7 +182,7 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                         Err(BuildOidcConfigError::Discovery(error)) => {
                             return oidc_discovery_error_response(error);
                         }
-                        Err(BuildOidcConfigError::Api(message)) => {
+                        Err(BuildOidcConfigError::Serialize(message)) => {
                             return Err(openauth_core::error::OpenAuthError::Api(message));
                         }
                     },
@@ -317,28 +320,24 @@ async fn build_oidc_config(
             override_user_info: override_user_info || options.default_override_user_info,
         }
     };
-    if input.skip_discovery
-        && (config.authorization_endpoint.is_none()
-            || config.token_endpoint.is_none()
-            || config.jwks_endpoint.is_none())
-    {
-        return Err(BuildOidcConfigError::Api(
-            "skipDiscovery requires authorizationEndpoint, tokenEndpoint, and jwksEndpoint"
-                .to_owned(),
-        ));
+    if options.oidc.strict_manual_endpoint_origins {
+        validate_configured_oidc_endpoint_origins(&config, |url| {
+            super::oidc::is_trusted_oidc_url(context, request, url)
+        })
+        .map_err(BuildOidcConfigError::Discovery)?;
     }
     serde_json::to_string(&config).map_err(|error| {
-        BuildOidcConfigError::Api(format!("failed to serialize OIDC config: {error}"))
+        BuildOidcConfigError::Serialize(format!("failed to serialize OIDC config: {error}"))
     })
 }
 
 #[derive(Debug)]
 enum BuildOidcConfigError {
     Discovery(crate::oidc_impl::discovery::OidcDiscoveryError),
-    Api(String),
+    Serialize(String),
 }
 
-fn oidc_discovery_error_response(
+pub(super) fn oidc_discovery_error_response(
     error: crate::oidc_impl::discovery::OidcDiscoveryError,
 ) -> Result<openauth_core::api::ApiResponse, openauth_core::error::OpenAuthError> {
     utils::json(

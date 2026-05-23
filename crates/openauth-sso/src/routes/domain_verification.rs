@@ -50,7 +50,7 @@ pub(super) fn request_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                     return unauthorized();
                 };
                 let body = parse_request_body::<ProviderIdBody>(&request)?;
-                let Some(provider) = SsoProviderStore::new(adapter.as_ref())
+                let Some(provider) = SsoProviderStore::new_with_options(adapter.as_ref(), &options)
                     .find_by_provider_id(&body.provider_id)
                     .await?
                 else {
@@ -143,7 +143,7 @@ pub(super) fn verify_endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                     return unauthorized();
                 };
                 let body = parse_request_body::<ProviderIdBody>(&request)?;
-                let store = SsoProviderStore::new(adapter.as_ref());
+                let store = SsoProviderStore::new_with_options(adapter.as_ref(), &options);
                 let Some(provider) = store.find_by_provider_id(&body.provider_id).await? else {
                     return utils::json(
                         http::StatusCode::NOT_FOUND,

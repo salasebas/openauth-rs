@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::options::TokenEndpointAuthentication;
+use crate::options::{OidcConfig, TokenEndpointAuthentication};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OidcDiscoveryDocument {
@@ -157,6 +157,42 @@ where
         )?;
     }
     Ok(hydrated)
+}
+
+pub fn validate_configured_oidc_endpoint_origins<F>(
+    config: &OidcConfig,
+    is_trusted_origin: F,
+) -> Result<(), OidcDiscoveryError>
+where
+    F: Fn(&str) -> bool,
+{
+    validate_trusted_url(
+        "discovery_endpoint",
+        &config.discovery_endpoint,
+        &is_trusted_origin,
+    )?;
+    if let Some(endpoint) = config.authorization_endpoint.as_deref() {
+        validate_trusted_url("authorization_endpoint", endpoint, &is_trusted_origin)?;
+    }
+    if let Some(endpoint) = config.token_endpoint.as_deref() {
+        validate_trusted_url("token_endpoint", endpoint, &is_trusted_origin)?;
+    }
+    if let Some(endpoint) = config.user_info_endpoint.as_deref() {
+        validate_trusted_url("userinfo_endpoint", endpoint, &is_trusted_origin)?;
+    }
+    if let Some(endpoint) = config.jwks_endpoint.as_deref() {
+        validate_trusted_url("jwks_uri", endpoint, &is_trusted_origin)?;
+    }
+    if let Some(endpoint) = config.revocation_endpoint.as_deref() {
+        validate_trusted_url("revocation_endpoint", endpoint, &is_trusted_origin)?;
+    }
+    if let Some(endpoint) = config.end_session_endpoint.as_deref() {
+        validate_trusted_url("end_session_endpoint", endpoint, &is_trusted_origin)?;
+    }
+    if let Some(endpoint) = config.introspection_endpoint.as_deref() {
+        validate_trusted_url("introspection_endpoint", endpoint, &is_trusted_origin)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

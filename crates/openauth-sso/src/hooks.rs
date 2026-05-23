@@ -8,7 +8,7 @@ use openauth_core::error::OpenAuthError;
 use openauth_core::plugin::{PluginAfterHookAction, PluginBeforeHookAction};
 use std::sync::Arc;
 
-use crate::linking_impl::assign_organization_by_domain;
+use crate::linking_impl::assign_organization_by_domain_with_model;
 use crate::options::SsoOptions;
 use crate::saml_impl::state::{saml_session_by_id_key, SESSION_PREFIX};
 use crate::state::SsoStateStore;
@@ -76,9 +76,10 @@ pub(crate) async fn assign_domain_organization_after_auth(
     let Some(new_session) = current_new_session()? else {
         return Ok(PluginAfterHookAction::Continue(response));
     };
-    assign_organization_by_domain(
+    assign_organization_by_domain_with_model(
         context,
         adapter,
+        &options.model_name,
         &options.organization_provisioning,
         &options.domain_verification,
         &new_session.user,

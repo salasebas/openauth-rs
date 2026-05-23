@@ -5,13 +5,24 @@ pub fn provider_id_body_schema() -> BodySchema {
     BodySchema::object([BodyField::new("providerId", JsonSchemaType::String)])
 }
 
+pub fn provider_id_query_parameter() -> Value {
+    json!({
+        "name": "providerId",
+        "in": "query",
+        "required": true,
+        "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+    })
+}
+
 pub fn register_body_schema() -> BodySchema {
     BodySchema::object([
         BodyField::new("providerId", JsonSchemaType::String),
         BodyField::new("issuer", JsonSchemaType::String).format("uri"),
         BodyField::new("domain", JsonSchemaType::String),
         BodyField::optional("organizationId", JsonSchemaType::String),
-        BodyField::optional("oidcConfig", JsonSchemaType::Object),
+        BodyField::optional("oidcConfig", JsonSchemaType::Object).description(
+            "OIDC provider configuration. Manual skipDiscovery endpoints may be validated against trusted origins when strict_oidc_manual_endpoint_origins is enabled.",
+        ),
         BodyField::optional("samlConfig", JsonSchemaType::Object),
     ])
 }
@@ -22,7 +33,9 @@ pub fn update_provider_body_schema() -> BodySchema {
         BodyField::optional("issuer", JsonSchemaType::String).format("uri"),
         BodyField::optional("domain", JsonSchemaType::String),
         BodyField::optional("organizationId", JsonSchemaType::String),
-        BodyField::optional("oidcConfig", JsonSchemaType::Object),
+        BodyField::optional("oidcConfig", JsonSchemaType::Object).description(
+            "OIDC provider configuration. Manual skipDiscovery endpoints may be validated against trusted origins when strict_oidc_manual_endpoint_origins is enabled.",
+        ),
         BodyField::optional("samlConfig", JsonSchemaType::Object),
     ])
 }
@@ -191,6 +204,10 @@ fn sso_provider_schema() -> Value {
                     "revocationEndpoint": {"type": "string", "format": "uri"},
                     "endSessionEndpoint": {"type": "string", "format": "uri"},
                     "introspectionEndpoint": {"type": "string", "format": "uri"},
+                    "tokenEndpointAuthentication": {
+                        "type": "string",
+                        "enum": ["client_secret_basic", "client_secret_post"]
+                    },
                     "scopes": {"type": "array", "items": {"type": "string"}},
                 },
             },

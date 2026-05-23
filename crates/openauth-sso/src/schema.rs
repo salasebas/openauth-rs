@@ -8,7 +8,7 @@ pub const SSO_PROVIDER_MODEL: &str = "ssoProvider";
 
 pub fn contributions(options: &SsoOptions) -> Vec<PluginSchemaContribution> {
     vec![PluginSchemaContribution::table(
-        SSO_PROVIDER_MODEL,
+        options.model_name.clone(),
         provider_table(options),
     )]
 }

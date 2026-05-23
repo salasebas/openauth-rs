@@ -33,3 +33,32 @@ async fn register_persists_provider_for_session_user() -> Result<(), Box<dyn std
 
     Ok(())
 }
+
+#[tokio::test]
+async fn register_uses_custom_sso_provider_model_name() -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options(SsoOptions {
+        model_name: "enterpriseSsoProvider".to_owned(),
+        ..SsoOptions::default()
+    })?;
+    let cookie = seed_session(&adapter).await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/register",
+            r#"{"providerId":"okta","issuer":"https://idp.example.com","domain":"example.com"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(adapter.records("ssoProvider").await.is_empty());
+    let records = adapter.records("enterpriseSsoProvider").await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].get("providerId"),
+        Some(&openauth_core::db::DbValue::String("okta".to_owned()))
+    );
+
+    Ok(())
+}

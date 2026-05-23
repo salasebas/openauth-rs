@@ -595,7 +595,7 @@ async fn find_saml_provider(
     if let Some(provider) = super::sign_in::default_sso_by_provider_id(options, provider_id)? {
         return Ok(Some(provider));
     }
-    SsoProviderStore::new(adapter)
+    SsoProviderStore::new_with_options(adapter, options)
         .find_by_provider_id(provider_id)
         .await
 }

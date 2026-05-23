@@ -75,6 +75,27 @@ async fn sign_in_sso_with_oidc_provider_returns_authorization_url(
 }
 
 #[tokio::test]
+async fn sign_in_sso_rejects_unknown_provider_type() -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+    register_oidc_provider(&router, &cookie).await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sign-in/sso",
+            r#"{"providerId":"okta","providerType":"oauth","callbackURL":"/dashboard"}"#,
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response)?["code"], "INVALID_PROVIDER_TYPE");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn sign_in_sso_accepts_form_urlencoded_body() -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
     let cookie = seed_session(&adapter).await?;

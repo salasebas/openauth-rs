@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::audit;
 use crate::linking_impl::validate_provider_domains;
-use crate::oidc_impl::discovery::validate_issuer_url;
+use crate::oidc_impl::discovery::{validate_configured_oidc_endpoint_origins, validate_issuer_url};
 use crate::openapi::{sso_provider_response, update_provider_body_schema};
 use crate::options::{
     OidcConfig, OidcMapping, SamlConfig, SamlMapping, SsoAuditEvent, SsoAuditEventKind,
@@ -20,7 +20,7 @@ use crate::org::{can_manage_provider, can_register_for_organization};
 use crate::store::{SsoProviderStore, UpdateSsoProviderInput};
 use crate::utils;
 
-use super::support::{authenticated_user, unauthorized};
+use super::support::{authenticated_user, invalid_provider_id, unauthorized, valid_provider_id};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,13 +105,16 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                     return unauthorized();
                 };
                 let body = parse_request_body::<UpdateProviderBody>(&request)?;
+                if !valid_provider_id(&body.provider_id) {
+                    return invalid_provider_id();
+                }
                 if !body.has_update_fields() {
                     return utils::json(
                         http::StatusCode::BAD_REQUEST,
                         &json!({"code": "NO_UPDATE_FIELDS"}),
                     );
                 }
-                let store = SsoProviderStore::new(adapter.as_ref());
+                let store = SsoProviderStore::new_with_options(adapter.as_ref(), &options);
                 let Some(existing) = store.find_by_provider_id(&body.provider_id).await? else {
                     return utils::json(
                         http::StatusCode::NOT_FOUND,
@@ -172,6 +175,15 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                             http::StatusCode::BAD_REQUEST,
                             &json!({"code": "INVALID_OIDC_CONFIG"}),
                         );
+                    }
+                    if options.oidc.strict_manual_endpoint_origins {
+                        if let Err(error) =
+                            validate_configured_oidc_endpoint_origins(&merged, |url| {
+                                super::oidc::is_trusted_oidc_url(context, &request, url)
+                            })
+                        {
+                            return super::registration::oidc_discovery_error_response(error);
+                        }
                     }
                     Some(serde_json::to_string(&merged).map_err(|error| {
                         openauth_core::error::OpenAuthError::Api(format!(

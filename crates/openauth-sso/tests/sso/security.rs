@@ -90,6 +90,30 @@ fn validate_single_assertion_rejects_nested_xsw_assertions(
 }
 
 #[test]
+fn validate_single_assertion_rejects_single_wrapped_assertion(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let xml = r#"
+        <samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">
+            <samlp:Extensions>
+                <Wrapper>
+                    <saml:Assertion ID="wrapped"></saml:Assertion>
+                </Wrapper>
+            </samlp:Extensions>
+        </samlp:Response>
+    "#;
+
+    let error = match validate_single_assertion(&encode_saml_xml(xml)) {
+        Ok(_) => return Err("single wrapped assertion should fail".into()),
+        Err(error) => error,
+    };
+
+    assert!(error
+        .to_string()
+        .contains("SAML assertion must be a direct Response child"));
+    Ok(())
+}
+
+#[test]
 fn validate_single_assertion_rejects_invalid_xml() -> Result<(), Box<dyn std::error::Error>> {
     let error = match validate_single_assertion(&encode_saml_xml("<Response><Assertion>")) {
         Ok(_) => return Err("invalid XML should fail".into()),

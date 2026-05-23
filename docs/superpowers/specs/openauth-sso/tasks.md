@@ -38,9 +38,9 @@
 - [x] Implement SAML LogoutResponse handling and IdP-initiated LogoutRequest
   session cleanup with unsigned XML parsing.
 - [x] Add mockable DNS TXT success-path coverage for domain verification.
-- [x] Implement SAML ACS cryptographic signature validation and complete signed
-  assertion parity.
-- [x] Implement cryptographic validation for signed SAML LogoutRequest and
+- [ ] Implement SAML ACS cryptographic signature validation and complete signed
+  assertion parity with an auditable XMLDSig backend.
+- [ ] Implement cryptographic validation for signed SAML LogoutRequest and
   LogoutResponse messages.
 - [x] Reject invalid/public-suffix provider domains at register/update time.
 - [x] Return sanitized SAML certificate metadata without exposing raw certs.
@@ -84,6 +84,13 @@
 
 ## Priority 2: Provider Response And Registration Compatibility
 
+- [x] Honor `SsoOptions::model_name` in both schema contribution and runtime
+  provider storage while preserving `SsoProviderStore::new(adapter)` as the
+  default-model constructor.
+- [x] Validate `providerId` as a URL-safe slug at registration/update and public
+  provider lookup boundaries.
+- [x] Accept `providerId` as a query parameter on `GET /sso/get-provider` while
+  retaining body parsing as a compatibility fallback.
 - [x] Add provider response compatibility for upstream `type`.
   - Files: `crates/openauth-sso/src/store.rs`,
     `crates/openauth-sso/tests/sso/endpoints/providers.rs`,
@@ -207,6 +214,10 @@
 
 ## Priority 4: OIDC Parity
 
+- [x] Allow partial `skipDiscovery` OIDC registration configs and hydrate
+  missing endpoints through runtime discovery during sign-in/callback.
+- [x] Normalize OIDC profile emails to lowercase before account linking,
+  provisioning, and normalized SSO profile construction.
 - [x] Mask sanitized OIDC client IDs with upstream-compatible semantics.
   - Files: `crates/openauth-sso/src/utils.rs`,
     `crates/openauth-sso/tests/sso/store.rs`,
@@ -241,6 +252,33 @@
     endpoint origins to be trusted by `OpenAuthOptions.trusted_origins`.
   - Covered untrusted discovery URL rejection and untrusted discovered endpoint
     rejection.
+- [x] Add opt-in strict trusted-origin validation for manual `skipDiscovery`
+  OIDC endpoints.
+  - Files: `crates/openauth-sso/src/options.rs`,
+    `crates/openauth-sso/src/oidc/discovery.rs`,
+    `crates/openauth-sso/src/routes/registration.rs`,
+    `crates/openauth-sso/src/routes/provider_update.rs`,
+    `crates/openauth-sso/src/routes/oidc.rs`,
+    `crates/openauth-sso/src/routes/sign_in.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/registration/discovery.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/provider_update.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/sign_in/defaults_discovery.rs`.
+  - Default remains compatibility mode. Strict mode rejects untrusted manual
+    authorization, token, UserInfo, JWKS, discovery, revocation, end-session,
+    and introspection endpoints during registration/update and runtime use.
+- [x] Add production-shaped OIDC manual endpoint matrix coverage.
+  - Files: `crates/openauth-sso/tests/sso/endpoints/registration/discovery.rs`.
+  - Covers Okta, Azure/Entra ID, and Google issuer/authorization/token/UserInfo
+    and JWKS endpoint layouts using trusted-origin allow lists without external
+    IdP network calls.
+- [x] Add provider-specific OIDC claim fixtures for callback behavior.
+  - Files:
+    `crates/openauth-sso/tests/sso/endpoints/helpers/oidc_server.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/oidc_callback/provider_fixtures.rs`.
+  - Covers Google hosted-domain/locale extra fields, Azure/Entra
+    `oid`/`tid`/`preferred_username` mapping from UserInfo and ID-token-only
+    fallback, and Okta groups/zoneinfo extra fields using the local mock OIDC
+    server.
 - [x] Support ID-token-only callback profile extraction when UserInfo endpoint
   is absent.
   - Files: `crates/openauth-sso/src/routes/mod.rs`,
@@ -280,6 +318,36 @@
     `crates/openauth-sso/tests/sso/endpoints/helpers.rs`.
   - Existing `auth-code` mock returns no `id_token`; callback coverage asserts
     UserInfo `sub` is used as the account ID.
+- [x] Require stable OIDC account IDs for profile extraction.
+  - Files: `crates/openauth-sso/src/routes/oidc.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/oidc_callback/id_token_linking.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/helpers/oidc_server.rs`.
+  - Default profile extraction now requires `sub` and rejects UserInfo or ID
+    token profiles without a mapped stable ID before account linking.
+- [x] Harden OIDC callback provider selection against mix-up.
+  - Files: `crates/openauth-sso/src/routes/oidc.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/oidc_callback/errors.rs`.
+  - If a provider-specific callback path disagrees with `ssoProviderId` stored
+    in OAuth state, the callback returns `invalid_state` before provider lookup
+    or token exchange.
+- [x] Enforce standard OIDC ID-token claims.
+  - Files: `crates/openauth-sso/src/routes/oidc.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/oidc_callback/id_token_linking.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/helpers/oidc_server.rs`.
+  - ID-token validation now requires `exp`, `sub`, `aud`, and `iss` in addition
+    to JWKS signature validation.
+- [x] Apply effective OIDC email-verification trust before user creation.
+  - Files: `crates/openauth-sso/src/routes/oidc.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/oidc_callback/id_token_linking.rs`.
+  - IdP `email_verified=true` no longer marks a new OpenAuth user verified
+    unless `trust_email_verified` is enabled or a domain-verified provider match
+    supplies the trust signal.
+- [x] Reject unknown `/sign-in/sso` provider types.
+  - Files: `crates/openauth-sso/src/errors.rs`,
+    `crates/openauth-sso/src/routes/sign_in.rs`,
+    `crates/openauth-sso/tests/sso/endpoints/sign_in/oidc_basic.rs`.
+  - Requests with unsupported `providerType` now return stable
+    `INVALID_PROVIDER_TYPE` instead of falling through provider selection.
 - [x] Add OIDC email normalization coverage.
   - Files: `crates/openauth-sso/src/routes/oidc.rs`,
     `crates/openauth-sso/tests/sso/endpoints/oidc_callback.rs`.

@@ -126,6 +126,33 @@ async fn saml_acs_rejects_unknown_in_response_to_without_relay_state(
 }
 
 #[tokio::test]
+async fn saml_acs_rejects_corrupt_authn_request_state() -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+    let relay_state = saml_sign_in_relay_state(&router).await?;
+    adapter
+        .update(
+            Update::new("verification")
+                .where_clause(Where::new(
+                    "identifier",
+                    DbValue::String(format!("saml-authn-request:{relay_state}")),
+                ))
+                .data("value", DbValue::String("not-json".to_owned())),
+        )
+        .await?;
+    let saml_response = valid_saml_response(&relay_state, "assertion-corrupt-state")?;
+
+    let callback = post_saml_acs(&router, &saml_response, &relay_state).await?;
+
+    assert_eq!(callback.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(callback)?["code"], "INVALID_AUTHN_REQUEST_STATE");
+    assert!(adapter.records("account").await.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn saml_acs_rejects_in_response_to_state_for_another_provider(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;

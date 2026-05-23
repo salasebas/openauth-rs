@@ -189,7 +189,7 @@ async fn load_saml_provider(
         if let Some(provider) = super::sign_in::default_sso_by_provider_id(options, provider_id)? {
             Some(provider)
         } else {
-            SsoProviderStore::new(adapter)
+            SsoProviderStore::new_with_options(adapter, options)
                 .find_by_provider_id(provider_id)
                 .await?
         };
@@ -228,10 +228,17 @@ async fn load_authn_record_by_relay_state(
                 &json!({"code": "UNKNOWN_AUTHN_REQUEST"}),
             )?));
         };
-        return Ok(Ok(serde_json::from_str::<
-            super::sign_in::SamlAuthnRequestRecord,
-        >(&state.value)
-        .ok()));
+        let record =
+            match serde_json::from_str::<super::sign_in::SamlAuthnRequestRecord>(&state.value) {
+                Ok(record) => record,
+                Err(_) => {
+                    return Ok(Err(utils::json(
+                        http::StatusCode::BAD_REQUEST,
+                        &json!({"code": "INVALID_AUTHN_REQUEST_STATE"}),
+                    )?));
+                }
+            };
+        return Ok(Ok(Some(record)));
     }
     if !options.saml.allow_idp_initiated {
         return Ok(Err(utils::json(
@@ -280,7 +287,7 @@ async fn load_authn_record_for_response(
         else {
             return Ok(Err(utils::json(
                 http::StatusCode::BAD_REQUEST,
-                &json!({"code": "UNKNOWN_AUTHN_REQUEST"}),
+                &json!({"code": "INVALID_AUTHN_REQUEST_STATE"}),
             )?));
         };
         if record.provider_id != provider_id {

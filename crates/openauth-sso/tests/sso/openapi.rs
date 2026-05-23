@@ -23,6 +23,12 @@ fn sso_openapi_exposes_public_route_metadata() -> Result<(), Box<dyn std::error:
             ["schema"]["properties"]["oidcConfig"]
             .is_object()
     );
+    assert!(
+        openapi["paths"]["/sso/register"]["post"]["requestBody"]["content"]["application/json"]
+            ["schema"]["properties"]["oidcConfig"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("skipDiscovery"))
+    );
     assert_eq!(
         openapi["paths"]["/sso/register"]["post"]["responses"]["200"]["content"]
             ["application/json"]["schema"]["properties"]["oidcConfig"]["properties"]
@@ -30,9 +36,28 @@ fn sso_openapi_exposes_public_route_metadata() -> Result<(), Box<dyn std::error:
         "uri"
     );
     assert_eq!(
+        openapi["paths"]["/sso/register"]["post"]["responses"]["200"]["content"]
+            ["application/json"]["schema"]["properties"]["oidcConfig"]["properties"]
+            ["tokenEndpointAuthentication"]["enum"][0],
+        "client_secret_basic"
+    );
+    assert_eq!(
         openapi["paths"]["/sso/providers"]["get"]["responses"]["200"]["content"]
             ["application/json"]["schema"]["properties"]["providers"]["items"]["properties"]
             ["providerId"]["type"],
+        "string"
+    );
+    assert_eq!(
+        openapi["paths"]["/sso/get-provider"]["get"]["parameters"][0]["in"],
+        "query"
+    );
+    assert_eq!(
+        openapi["paths"]["/sso/get-provider"]["get"]["parameters"][0]["name"],
+        "providerId"
+    );
+    assert_eq!(
+        openapi["paths"]["/sso/get-provider"]["get"]["responses"]["400"]["content"]
+            ["application/json"]["schema"]["properties"]["code"]["type"],
         "string"
     );
     assert_eq!(

@@ -9,6 +9,8 @@ mod errors;
 mod id_token_linking;
 #[path = "oidc_callback/mapping_signup.rs"]
 mod mapping_signup;
+#[path = "oidc_callback/provider_fixtures.rs"]
+mod provider_fixtures;
 #[path = "oidc_callback/provisioning.rs"]
 mod provisioning;
 #[path = "oidc_callback/token_auth.rs"]

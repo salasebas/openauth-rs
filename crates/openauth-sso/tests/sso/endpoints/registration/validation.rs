@@ -44,6 +44,41 @@ async fn register_rejects_empty_comma_separated_domain_segment(
 }
 
 #[tokio::test]
+async fn register_rejects_provider_id_that_cannot_be_used_in_paths(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+
+    for provider_id in [
+        "../okta",
+        "okta/example",
+        "okta?x=1",
+        " okta",
+        "okta#fragment",
+    ] {
+        let response = router
+            .handle_async(json_request(
+                Method::POST,
+                "/sso/register",
+                &serde_json::json!({
+                    "providerId": provider_id,
+                    "issuer": "https://idp.example.com",
+                    "domain": "example.com"
+                })
+                .to_string(),
+                Some(&cookie),
+            )?)
+            .await?;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{provider_id}");
+        assert_eq!(json_body(response)?["code"], "INVALID_PROVIDER_ID");
+    }
+    assert!(adapter.records("ssoProvider").await.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn register_rejects_invalid_oidc_endpoint_url_when_discovery_is_skipped(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;

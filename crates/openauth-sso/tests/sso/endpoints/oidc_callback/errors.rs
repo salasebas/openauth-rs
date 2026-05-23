@@ -120,3 +120,43 @@ async fn oidc_callback_exchanges_code_creates_session_and_redirects(
 
     Ok(())
 }
+
+#[tokio::test]
+async fn oidc_callback_rejects_provider_id_mismatch_between_path_and_state(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let oidc = MockOidcServer::start().await?;
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+    register_oidc_provider_with_endpoints(&router, &cookie, &oidc.base_url).await?;
+
+    let sign_in = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sign-in/sso",
+            r#"{"providerId":"okta","callbackURL":"/dashboard","errorCallbackURL":"/login-error"}"#,
+            None,
+        )?)
+        .await?;
+    let state = authorization_state(sign_in)?;
+
+    let callback = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!("/sso/callback/other-provider?state={state}&code=auth-code"),
+            "",
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(callback.status(), StatusCode::FOUND);
+    assert_eq!(
+        callback.headers().get(header::LOCATION),
+        Some(&http::HeaderValue::from_static(
+            "/login-error?error=invalid_state"
+        ))
+    );
+    assert!(oidc.token_requests().is_empty());
+    assert!(adapter.records("account").await.is_empty());
+
+    Ok(())
+}

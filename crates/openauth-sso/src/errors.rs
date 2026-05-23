@@ -4,6 +4,10 @@ use openauth_core::plugin::PluginErrorCode;
 pub const PROVIDER_NOT_FOUND: &str = "PROVIDER_NOT_FOUND";
 /// Provider registration conflicts with an existing provider id.
 pub const PROVIDER_EXISTS: &str = "PROVIDER_EXISTS";
+/// Provider id contains characters that are unsafe in paths or URLs.
+pub const INVALID_PROVIDER_ID: &str = "INVALID_PROVIDER_ID";
+/// Requested provider protocol type is not supported.
+pub const INVALID_PROVIDER_TYPE: &str = "INVALID_PROVIDER_TYPE";
 /// Domain verification was requested for an already verified provider.
 pub const DOMAIN_VERIFIED: &str = "DOMAIN_VERIFIED";
 /// Domain verification was attempted without a pending token.
@@ -57,6 +61,16 @@ const ERROR_DESCRIPTORS: &[SsoErrorDescriptor] = &[
     descriptor(
         PROVIDER_EXISTS,
         "SSO provider already exists",
+        SsoErrorCategory::UserInput,
+    ),
+    descriptor(
+        INVALID_PROVIDER_ID,
+        "Invalid provider id",
+        SsoErrorCategory::UserInput,
+    ),
+    descriptor(
+        INVALID_PROVIDER_TYPE,
+        "Invalid provider type",
         SsoErrorCategory::UserInput,
     ),
     descriptor(
@@ -202,6 +216,11 @@ const ERROR_DESCRIPTORS: &[SsoErrorDescriptor] = &[
     descriptor(
         "REPLAYED_SAML_ASSERTION",
         "Replayed SAML assertion",
+        SsoErrorCategory::SuspectedAttack,
+    ),
+    descriptor(
+        "INVALID_AUTHN_REQUEST_STATE",
+        "Invalid SAML AuthnRequest state",
         SsoErrorCategory::SuspectedAttack,
     ),
     descriptor(

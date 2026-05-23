@@ -74,6 +74,34 @@ fn domain_verification_adds_domain_verified_field() -> Result<(), Box<dyn std::e
 }
 
 #[test]
+fn sso_plugin_uses_custom_model_name_for_schema() -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(OpenAuthOptions {
+        plugins: vec![sso(SsoOptions {
+            model_name: "enterpriseSsoProvider".to_owned(),
+            ..SsoOptions::default()
+        })],
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+
+    assert!(context.db_schema.table("ssoProvider").is_none());
+    let table = context
+        .db_schema
+        .table("enterpriseSsoProvider")
+        .ok_or("missing custom SSO provider table")?;
+    assert_eq!(table.name, "sso_providers");
+    assert_eq!(
+        context
+            .db_schema
+            .field("enterpriseSsoProvider", "providerId")?
+            .name,
+        "provider_id"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn sso_plugin_registers_expected_endpoint_surface() {
     let plugin = sso(SsoOptions::default().domain_verification_enabled(true));
     let endpoints = plugin

@@ -235,6 +235,38 @@ async fn update_provider_merges_partial_oidc_config_and_keeps_secret(
 }
 
 #[tokio::test]
+async fn update_provider_rejects_untrusted_manual_oidc_endpoint_when_strict_policy_is_enabled(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut options = SsoOptions::default();
+    options.oidc.strict_manual_endpoint_origins = true;
+    let (adapter, router) = router_with_options_and_trusted_origins(
+        options,
+        vec!["https://idp.example.com".to_owned()],
+    )?;
+    let cookie = seed_session(&adapter).await?;
+    register_oidc_provider(&router, &cookie).await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/update-provider",
+            r#"{
+                "providerId":"okta",
+                "oidcConfig":{
+                    "tokenEndpoint":"https://evil.example.com/token"
+                }
+            }"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response)?["code"], "discovery_untrusted_origin");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn update_provider_rejects_oversized_saml_idp_metadata(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut options = SsoOptions::default();

@@ -102,6 +102,9 @@ pub struct SsoOptions {
     pub trust_email_verified: bool,
     /// Default value for provider-level user info override behavior.
     pub default_override_user_info: bool,
+    /// OIDC runtime and security settings.
+    #[serde(default)]
+    pub oidc: OidcOptions,
     #[serde(skip)]
     /// Optional hook for application-specific user provisioning.
     pub provision_user: Option<ProvisionUserResolver>,
@@ -133,6 +136,7 @@ impl Default for SsoOptions {
             disable_implicit_sign_up: false,
             trust_email_verified: false,
             default_override_user_info: false,
+            oidc: OidcOptions::default(),
             provision_user: None,
             provision_user_on_every_login: false,
             organization_provisioning: OrganizationProvisioningOptions::default(),
@@ -260,6 +264,24 @@ impl SsoOptions {
         self.audit_event = Some(SsoAuditEventResolver::new(resolver));
         self
     }
+
+    #[must_use]
+    /// Require manually configured OIDC endpoints to match trusted origins.
+    pub fn strict_oidc_manual_endpoint_origins(mut self, enabled: bool) -> Self {
+        self.oidc.strict_manual_endpoint_origins = enabled;
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+/// OIDC runtime and security behavior for SSO providers.
+pub struct OidcOptions {
+    /// Validate manually configured OIDC endpoint origins against OpenAuth trusted origins.
+    ///
+    /// Disabled by default for compatibility with existing manual `skipDiscovery`
+    /// configurations. Enable this for stricter SSRF/configuration hardening.
+    pub strict_manual_endpoint_origins: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

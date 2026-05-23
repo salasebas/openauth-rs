@@ -40,7 +40,7 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                         &json!({"code": "PROVIDER_NOT_FOUND"}),
                     );
                 };
-                let Some(provider) = SsoProviderStore::new(adapter)
+                let Some(provider) = SsoProviderStore::new_with_options(adapter, &options)
                     .find_by_provider_id(&provider_id)
                     .await?
                 else {

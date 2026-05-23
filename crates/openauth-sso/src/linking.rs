@@ -145,6 +145,25 @@ pub async fn assign_organization_by_domain(
     domain_verification: &DomainVerificationOptions,
     user: &User,
 ) -> Result<(), OpenAuthError> {
+    assign_organization_by_domain_with_model(
+        context,
+        adapter,
+        crate::schema::SSO_PROVIDER_MODEL,
+        provisioning_options,
+        domain_verification,
+        user,
+    )
+    .await
+}
+
+pub(crate) async fn assign_organization_by_domain_with_model(
+    context: &AuthContext,
+    adapter: &dyn DbAdapter,
+    model_name: &str,
+    provisioning_options: &OrganizationProvisioningOptions,
+    domain_verification: &DomainVerificationOptions,
+    user: &User,
+) -> Result<(), OpenAuthError> {
     if provisioning_options.disabled || !context.has_plugin("organization") {
         return Ok(());
     }
@@ -157,7 +176,13 @@ pub async fn assign_organization_by_domain(
         return Ok(());
     }
 
-    let providers = SsoProviderStore::new(adapter).list().await?;
+    let providers = SsoProviderStore::new_with_model_and_domain_verification(
+        adapter,
+        model_name,
+        domain_verification.enabled,
+    )
+    .list()
+    .await?;
     let provider = providers.into_iter().find(|provider| {
         provider.organization_id.is_some()
             && provider_matches_email_domain(provider, &user.email)
