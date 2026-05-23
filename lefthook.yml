@@ -10,9 +10,3 @@ pre-commit:
       stage_fixed: true
     lint:
       run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-
-pre-push:
-  parallel: true
-  commands:
-    check:
-      run: cargo check --workspace --tests --locked
