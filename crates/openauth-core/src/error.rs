@@ -5,7 +5,7 @@
 pub enum OpenAuthError {
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
-    #[error("invalid request body: {message}")]
+    #[error("invalid {encoding} request body: {message}")]
     InvalidRequestBody {
         encoding: &'static str,
         message: String,
