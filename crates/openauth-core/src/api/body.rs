@@ -56,7 +56,7 @@ where
                     message: error.to_owned(),
                 }
             })?;
-            map.insert(name, form_value(value));
+            insert_form_value(&mut map, name, form_value(value));
         }
     }
 
@@ -89,6 +89,19 @@ fn form_value(value: String) -> Value {
         "true" => Value::Bool(true),
         "false" => Value::Bool(false),
         _ => Value::String(value),
+    }
+}
+
+fn insert_form_value(map: &mut Map<String, Value>, name: String, value: Value) {
+    match map.get_mut(&name) {
+        Some(Value::Array(values)) => values.push(value),
+        Some(existing) => {
+            let previous = std::mem::replace(existing, Value::Null);
+            *existing = Value::Array(vec![previous, value]);
+        }
+        None => {
+            map.insert(name, value);
+        }
     }
 }
 

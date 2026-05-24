@@ -25,8 +25,21 @@ pub async fn find_consent(
     user_id: &str,
     client_id: &str,
 ) -> Result<Option<OAuthConsent>, OpenAuthError> {
+    find_consent_for_reference(adapter, user_id, client_id, None).await
+}
+
+pub async fn find_consent_for_reference(
+    adapter: &dyn DbAdapter,
+    user_id: &str,
+    client_id: &str,
+    reference_id: Option<&str>,
+) -> Result<Option<OAuthConsent>, OpenAuthError> {
     adapter
-        .find_one(consent_by_user_client_query(user_id, client_id))
+        .find_one(consent_by_user_client_reference_query(
+            user_id,
+            client_id,
+            reference_id,
+        ))
         .await?
         .map(consent_from_record)
         .transpose()
@@ -37,7 +50,15 @@ pub async fn upsert_consent(
     input: ConsentGrantInput,
 ) -> Result<OAuthConsent, OpenAuthError> {
     let existing = match input.user_id.as_deref() {
-        Some(user_id) => find_consent(adapter, user_id, &input.client_id).await?,
+        Some(user_id) => {
+            find_consent_for_reference(
+                adapter,
+                user_id,
+                &input.client_id,
+                input.reference_id.as_deref(),
+            )
+            .await?
+        }
         None => None,
     };
     let timestamp = now();
@@ -81,20 +102,43 @@ pub async fn delete_consent(
     user_id: &str,
     client_id: &str,
 ) -> Result<(), OpenAuthError> {
+    delete_consent_for_reference(adapter, user_id, client_id, None).await
+}
+
+pub async fn delete_consent_for_reference(
+    adapter: &dyn DbAdapter,
+    user_id: &str,
+    client_id: &str,
+    reference_id: Option<&str>,
+) -> Result<(), OpenAuthError> {
     adapter
-        .delete(
-            Delete::new(OAUTH_CONSENT_MODEL)
-                .where_clause(string_where("user_id", user_id))
-                .where_clause(string_where("client_id", client_id)),
-        )
+        .delete(consent_delete_query(user_id, client_id, reference_id))
         .await?;
     Ok(())
 }
 
-fn consent_by_user_client_query(user_id: &str, client_id: &str) -> FindOne {
-    FindOne::new(OAUTH_CONSENT_MODEL)
+fn consent_by_user_client_reference_query(
+    user_id: &str,
+    client_id: &str,
+    reference_id: Option<&str>,
+) -> FindOne {
+    let query = FindOne::new(OAUTH_CONSENT_MODEL)
         .where_clause(string_where("user_id", user_id))
-        .where_clause(string_where("client_id", client_id))
+        .where_clause(string_where("client_id", client_id));
+    match reference_id {
+        Some(reference_id) => query.where_clause(string_where("reference_id", reference_id)),
+        None => query.where_clause(Where::new("reference_id", DbValue::Null)),
+    }
+}
+
+fn consent_delete_query(user_id: &str, client_id: &str, reference_id: Option<&str>) -> Delete {
+    let query = Delete::new(OAUTH_CONSENT_MODEL)
+        .where_clause(string_where("user_id", user_id))
+        .where_clause(string_where("client_id", client_id));
+    match reference_id {
+        Some(reference_id) => query.where_clause(string_where("reference_id", reference_id)),
+        None => query.where_clause(Where::new("reference_id", DbValue::Null)),
+    }
 }
 
 fn consent_to_record(consent: &OAuthConsent) -> DbRecord {
