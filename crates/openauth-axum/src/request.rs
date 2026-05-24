@@ -19,20 +19,7 @@ pub(crate) async fn to_api_request(
         .await
         .map_err(body_error_response)?
         .to_vec();
-    let headers = parts.headers;
-    let extensions = parts.extensions;
-    let mut builder = Request::builder()
-        .method(parts.method)
-        .uri(parts.uri)
-        .version(parts.version);
-    let Some(builder_headers) = builder.headers_mut() else {
-        return Err(bad_request_response());
-    };
-    *builder_headers = headers;
-    let mut request = builder
-        .body(body)
-        .map_err(|_error| bad_request_response())?;
-    *request.extensions_mut() = extensions;
+    let mut request = Request::from_parts(parts, body);
     maybe_insert_client_ip(&mut request, options);
     Ok(request)
 }

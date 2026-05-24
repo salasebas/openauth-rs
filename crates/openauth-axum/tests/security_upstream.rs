@@ -72,6 +72,68 @@ async fn fetch_metadata_allows_same_origin_navigation() -> Result<(), Box<dyn st
 }
 
 #[tokio::test]
+async fn fetch_metadata_allows_same_origin_cors_requests() -> Result<(), Box<dyn std::error::Error>>
+{
+    let app = router(auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
+    )?)?;
+
+    let response = app
+        .oneshot(
+            json_request(
+                Method::POST,
+                "/api/auth/sign-up/email",
+                r#"{"name":"Ada Lovelace","email":"cors@example.com","password":"secret123"}"#,
+                None,
+            )?
+            .with_header(
+                header::HeaderName::from_static("sec-fetch-site"),
+                "same-origin",
+            )?
+            .with_header(header::HeaderName::from_static("sec-fetch-mode"), "cors")?
+            .with_header(header::HeaderName::from_static("sec-fetch-dest"), "empty")?
+            .with_header(header::ORIGIN, "http://localhost:3000")?,
+        )
+        .await?;
+
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+    Ok(())
+}
+
+#[tokio::test]
+async fn fetch_metadata_with_cookies_uses_origin_validation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let app = router(auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
+    )?)?;
+
+    let response = app
+        .oneshot(
+            json_request(
+                Method::POST,
+                "/api/auth/sign-in/email",
+                r#"{"email":"ada@example.com","password":"secret123"}"#,
+                Some("better-auth.session_token=signed"),
+            )?
+            .with_header(
+                header::HeaderName::from_static("sec-fetch-site"),
+                "cross-site",
+            )?
+            .with_header(
+                header::HeaderName::from_static("sec-fetch-mode"),
+                "navigate",
+            )?
+            .with_header(header::ORIGIN, "http://localhost:3000")?,
+        )
+        .await?;
+
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+    Ok(())
+}
+
+#[tokio::test]
 async fn form_urlencoded_sign_up_and_sign_in_work_over_axum(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let app = router(auth_with_adapter(
@@ -111,6 +173,82 @@ async fn form_urlencoded_sign_up_and_sign_in_work_over_axum(
     assert_eq!(sign_in.status(), StatusCode::OK);
     let body = body_json(sign_in).await?;
     assert_eq!(body["user"]["email"], "ada@example.com");
+    Ok(())
+}
+
+#[tokio::test]
+async fn form_urlencoded_cross_site_navigation_is_blocked() -> Result<(), Box<dyn std::error::Error>>
+{
+    let app = router(auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
+    )?)?;
+
+    let response = app
+        .oneshot(
+            request(
+                Method::POST,
+                "/api/auth/sign-up/email",
+                "name=Victim&email=victim%40example.com&password=secret123",
+                None,
+            )?
+            .with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")?
+            .with_header(
+                header::HeaderName::from_static("sec-fetch-site"),
+                "cross-site",
+            )?
+            .with_header(
+                header::HeaderName::from_static("sec-fetch-mode"),
+                "navigate",
+            )?
+            .with_header(
+                header::HeaderName::from_static("sec-fetch-dest"),
+                "document",
+            )?
+            .with_header(header::ORIGIN, "https://evil.example.com")?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = body_json(response).await?;
+    assert_eq!(body["code"], "CROSS_SITE_NAVIGATION_LOGIN_BLOCKED");
+    Ok(())
+}
+
+#[tokio::test]
+async fn form_urlencoded_same_site_navigation_from_trusted_origin_is_allowed(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let app = router(auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
+    )?)?;
+
+    let response = app
+        .oneshot(
+            request(
+                Method::POST,
+                "/api/auth/sign-up/email",
+                "name=Same+Site&email=samesite%40example.com&password=secret123",
+                None,
+            )?
+            .with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")?
+            .with_header(
+                header::HeaderName::from_static("sec-fetch-site"),
+                "same-site",
+            )?
+            .with_header(
+                header::HeaderName::from_static("sec-fetch-mode"),
+                "navigate",
+            )?
+            .with_header(
+                header::HeaderName::from_static("sec-fetch-dest"),
+                "document",
+            )?
+            .with_header(header::ORIGIN, "http://localhost:3000")?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
     Ok(())
 }
 

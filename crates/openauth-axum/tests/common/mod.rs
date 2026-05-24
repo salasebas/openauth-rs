@@ -17,6 +17,9 @@ use url::Url;
 pub const SECRET: &str = "test-secret-123456789012345678901234";
 pub const BODY_LIMIT: usize = 10 * 1024 * 1024;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResponseExtensionMarker(pub &'static str);
+
 pub fn auth_with_options(options: OpenAuthOptions) -> Result<OpenAuth, openauth::OpenAuthError> {
     OpenAuth::builder().options(options).secret(SECRET).build()
 }
@@ -81,6 +84,9 @@ pub fn response_contract_endpoint(path: &'static str) -> AsyncAuthEndpoint {
                 response
                     .headers_mut()
                     .append("x-openauth-test", HeaderValue::from_static("two"));
+                response
+                    .extensions_mut()
+                    .insert(ResponseExtensionMarker("response-contract"));
                 Ok(response)
             })
         },

@@ -23,6 +23,23 @@ async fn ok_route_is_mounted_under_default_base_path() -> Result<(), Box<dyn std
 }
 
 #[tokio::test]
+async fn default_base_path_accepts_trailing_slash_root() -> Result<(), Box<dyn std::error::Error>> {
+    let app = router(auth_with_options(OpenAuthOptions::default())?)?;
+
+    let root_without_slash = app
+        .clone()
+        .oneshot(request(Method::GET, "/api/auth", "", None)?)
+        .await?;
+    assert_eq!(root_without_slash.status(), StatusCode::NOT_FOUND);
+
+    let root_with_slash = app
+        .oneshot(request(Method::GET, "/api/auth/", "", None)?)
+        .await?;
+    assert_eq!(root_with_slash.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
 async fn custom_base_path_mounts_all_auth_routes() -> Result<(), Box<dyn std::error::Error>> {
     let app = OpenAuth::builder()
         .secret(SECRET)
@@ -166,20 +183,26 @@ async fn plugin_endpoint_is_reachable_through_catch_all() -> Result<(), Box<dyn 
 
 #[tokio::test]
 async fn every_core_auth_route_is_mounted_through_axum() -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let auth = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default()
             .base_url("http://localhost:3000/api/auth")
             .user(UserOptions::default().delete_user(DeleteUserOptions::default().enabled(true)))
             .social_provider(FakeProvider::new("github")),
-    )?)?;
+    )?;
+    let cases = auth
+        .endpoint_registry()
+        .into_iter()
+        .map(RouteCase::from_endpoint)
+        .collect::<Vec<_>>();
+    let app = router(auth)?;
 
-    for case in core_route_cases() {
+    for case in cases {
         let response = app
             .clone()
             .oneshot(request(
                 case.method.clone(),
-                case.path,
+                &case.path,
                 case.body,
                 case.cookie,
             )?)
@@ -197,74 +220,38 @@ async fn every_core_auth_route_is_mounted_through_axum() -> Result<(), Box<dyn s
 
 struct RouteCase {
     method: Method,
-    path: &'static str,
+    path: String,
     body: &'static str,
     cookie: Option<&'static str>,
 }
 
-fn core_route_cases() -> Vec<RouteCase> {
-    vec![
-        RouteCase::post("/api/auth/sign-up/email", "{}"),
-        RouteCase::post("/api/auth/sign-in/email", "{}"),
-        RouteCase::post("/api/auth/sign-in/social", "{}"),
-        RouteCase::post("/api/auth/sign-in/oauth2", "{}"),
-        RouteCase::get("/api/auth/callback/github?state=missing"),
-        RouteCase::post("/api/auth/callback/github", "{}"),
-        RouteCase::post("/api/auth/link-social", "{}"),
-        RouteCase::get("/api/auth/error?error=invalid_request"),
-        RouteCase::get("/api/auth/get-session"),
-        RouteCase::post("/api/auth/get-session", "{}"),
-        RouteCase::get("/api/auth/list-sessions"),
-        RouteCase::post("/api/auth/update-session", "{}"),
-        RouteCase::post("/api/auth/revoke-session", "{}"),
-        RouteCase::post("/api/auth/revoke-sessions", "{}"),
-        RouteCase::post("/api/auth/revoke-other-sessions", "{}"),
-        RouteCase::get("/api/auth/list-accounts"),
-        RouteCase::post("/api/auth/unlink-account", "{}"),
-        RouteCase::post("/api/auth/get-access-token", "{}"),
-        RouteCase::post("/api/auth/refresh-token", "{}"),
-        RouteCase::get("/api/auth/account-info"),
-        RouteCase::post("/api/auth/update-user", "{}"),
-        RouteCase::post("/api/auth/change-email", "{}"),
-        RouteCase::post("/api/auth/send-verification-email", "{}"),
-        RouteCase::get("/api/auth/verify-email?token=missing"),
-        RouteCase::post("/api/auth/delete-user", "{}"),
-        RouteCase::get("/api/auth/delete-user/callback?token=missing"),
-        RouteCase::post("/api/auth/change-password", "{}"),
-        RouteCase::post("/api/auth/set-password", "{}"),
-        RouteCase::post("/api/auth/verify-password", "{}"),
-        RouteCase::post("/api/auth/request-password-reset", "{}"),
-        RouteCase::get("/api/auth/reset-password/missing?callbackURL=/reset"),
-        RouteCase::post("/api/auth/reset-password", "{}"),
-        RouteCase::post_with_cookie("/api/auth/sign-out", "{}", "x=1"),
-    ]
+impl RouteCase {
+    fn from_endpoint(endpoint: openauth::EndpointInfo) -> Self {
+        let path = materialize_route_path(&endpoint.path);
+        let path = match endpoint.path.as_str() {
+            "/callback/:id" => format!("{path}?state=missing"),
+            "/error" => format!("{path}?error=invalid_request"),
+            "/reset-password/:token" => format!("{path}?callbackURL=/reset"),
+            "/verify-email" | "/delete-user/callback" => format!("{path}?token=missing"),
+            _ => path,
+        };
+        let body = if endpoint.method == Method::POST {
+            "{}"
+        } else {
+            ""
+        };
+        let cookie = (endpoint.path == "/sign-out").then_some("x=1");
+
+        Self {
+            method: endpoint.method,
+            path,
+            body,
+            cookie,
+        }
+    }
 }
 
-impl RouteCase {
-    fn get(path: &'static str) -> Self {
-        Self {
-            method: Method::GET,
-            path,
-            body: "",
-            cookie: None,
-        }
-    }
-
-    fn post(path: &'static str, body: &'static str) -> Self {
-        Self {
-            method: Method::POST,
-            path,
-            body,
-            cookie: None,
-        }
-    }
-
-    fn post_with_cookie(path: &'static str, body: &'static str, cookie: &'static str) -> Self {
-        Self {
-            method: Method::POST,
-            path,
-            body,
-            cookie: Some(cookie),
-        }
-    }
+fn materialize_route_path(path: &str) -> String {
+    let path = path.replace(":id", "github").replace(":token", "missing");
+    format!("/api/auth{path}")
 }

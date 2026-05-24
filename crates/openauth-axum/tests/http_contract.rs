@@ -61,6 +61,26 @@ async fn axum_adapter_preserves_duplicate_response_headers(
 }
 
 #[tokio::test]
+async fn axum_adapter_preserves_response_extensions() -> Result<(), Box<dyn std::error::Error>> {
+    let app = router(
+        OpenAuth::builder()
+            .secret(SECRET)
+            .async_endpoint(response_contract_endpoint("/contract"))
+            .build()?,
+    )?;
+
+    let response = app
+        .oneshot(request(Method::GET, "/api/auth/contract", "", None)?)
+        .await?;
+
+    assert_eq!(
+        response.extensions().get::<ResponseExtensionMarker>(),
+        Some(&ResponseExtensionMarker("response-contract"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn axum_adapter_preserves_empty_response_bodies() -> Result<(), Box<dyn std::error::Error>> {
     let app = router(
         OpenAuth::builder()

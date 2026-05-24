@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::{header, Response, StatusCode};
+use axum::http::{header, HeaderValue, Response, StatusCode};
 use openauth::ApiErrorResponse;
 
 /// Errors returned while constructing an Axum router for OpenAuth.
@@ -51,12 +51,11 @@ pub(crate) fn json_error_response(
     .unwrap_or_else(|_| {
         b"{\"code\":\"INTERNAL_SERVER_ERROR\",\"message\":\"Internal server error\"}".to_vec()
     });
-    match Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(body))
-    {
-        Ok(response) => response,
-        Err(_) => Response::new(Body::empty()),
-    }
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    response
 }

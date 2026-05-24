@@ -24,6 +24,13 @@ async fn configurable_body_limit_rejects_oversized_requests(
         .await?;
 
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
     let body = body_json(response).await?;
     assert_eq!(body["code"], "PAYLOAD_TOO_LARGE");
     Ok(())
