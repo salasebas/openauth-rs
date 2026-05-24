@@ -89,17 +89,17 @@ per-registration user handle for stronger cross-credential privacy.
 Run the default passkey suite:
 
 ```sh
-cargo test -p openauth-passkey --test passkey
+cargo nextest run -p openauth-passkey --test passkey
 ```
 
 SQLite schema coverage runs by default. Postgres and MySQL schema tests are
 ignored unless Docker Compose services are running:
 
 ```sh
-docker compose up -d postgres mysql
+./scripts/ensure-test-services.sh postgres mysql
 OPENAUTH_TEST_POSTGRES_URL=postgres://user:password@localhost:5432/openauth \
 OPENAUTH_TEST_MYSQL_URL=mysql://user:password@localhost:3306/openauth \
-cargo test -p openauth-passkey --test passkey -- --ignored
+cargo nextest run -p openauth-passkey --test passkey --run-ignored ignored-only
 ```
 
 ## Links

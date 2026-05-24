@@ -50,12 +50,16 @@ pub fn table_options(prefix: &str, table: &str) -> TableOptions {
 }
 
 pub fn unique_prefix(adapter_prefix: &str) -> String {
-    let millis = SystemTime::now()
+    let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
+        .map(|duration| duration.as_nanos() as u64)
         .unwrap_or_default();
-    let sequence = TEST_ID.fetch_add(1, Ordering::Relaxed);
-    format!("{adapter_prefix}_{millis}_{sequence}")
+    let process = std::process::id() & 0xffff;
+    let sequence = TEST_ID.fetch_add(1, Ordering::Relaxed) & 0xfff;
+    format!(
+        "{adapter_prefix}_{process:x}_{:08x}_{sequence:x}",
+        nanos & 0xffff_ffff
+    )
 }
 
 pub async fn assert_round_trips_json_arrays_and_create_select<A>(

@@ -59,6 +59,23 @@ top-level crate, then add feature crates as your application needs them.
 
 Source code lives at [sebasxsala/openauth-rs](https://github.com/sebasxsala/openauth-rs).
 
+## Testing
+
+Install nextest for faster local and CI test runs:
+
+```bash
+cargo install --locked cargo-nextest
+```
+
+Bring up Docker-backed integration services through the repository helper. It
+recreates stale `openauth-*` containers and verifies that ports are published:
+
+```bash
+./scripts/ensure-test-services.sh postgres mysql redis valkey
+cargo nextest run --workspace --all-features
+cargo test --workspace --doc --all-features
+```
+
 ## Enterprise Identity Model
 
 `openauth-oauth-provider` is for OpenAuth acting as an OAuth 2.1/OIDC

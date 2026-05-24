@@ -86,9 +86,9 @@ let adapter = DeadpoolPostgresAdapter::connect_tls(
 The integration tests use Postgres from the root `docker-compose.yml`.
 
 ```bash
-docker compose up -d postgres
+./scripts/ensure-test-services.sh postgres
 OPENAUTH_TEST_POSTGRES_URL=postgres://user:password@localhost:5432/openauth \
-  cargo test -p openauth-deadpool-postgres --all-targets
+  cargo nextest run -p openauth-deadpool-postgres --all-targets
 ```
 
 If your local Docker volume was created with an older database name, either

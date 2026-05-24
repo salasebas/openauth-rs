@@ -59,15 +59,16 @@ For Postgres production deployments that do not otherwise use SQLx,
 SQLite tests can run without Docker:
 
 ```sh
-CARGO_TARGET_DIR=/private/tmp/openauth-sqlx-target cargo test -p openauth-sqlx --features sqlite --lib --tests
+CARGO_TARGET_DIR=/private/tmp/openauth-sqlx-target cargo nextest run -p openauth-sqlx --features sqlite
 ```
 
 Postgres and MySQL tests expect Docker Compose services with an `openauth`
 database and a user with DDL permissions:
 
 ```sh
-CARGO_TARGET_DIR=/private/tmp/openauth-sqlx-target cargo test -p openauth-sqlx --features postgres --test postgres_adapter
-CARGO_TARGET_DIR=/private/tmp/openauth-sqlx-target cargo test -p openauth-sqlx --features mysql --test mysql_adapter
+./scripts/ensure-test-services.sh postgres mysql
+CARGO_TARGET_DIR=/private/tmp/openauth-sqlx-target cargo nextest run -p openauth-sqlx --features postgres --test postgres_adapter
+CARGO_TARGET_DIR=/private/tmp/openauth-sqlx-target cargo nextest run -p openauth-sqlx --features mysql --test mysql_adapter
 ```
 
 Defaults:
@@ -85,7 +86,7 @@ before rerunning the suite:
 
 ```sh
 docker compose down -v
-docker compose up -d --wait mysql
+./scripts/ensure-test-services.sh mysql
 ```
 
 Known limits:

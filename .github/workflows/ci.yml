@@ -87,7 +87,7 @@ jobs:
           - package: openauth-redis
             services: redis valkey
           - package: openauth-scim
-            services: ""
+            services: postgres mysql
           - package: openauth-stripe
             services: ""
           - package: openauth-example-full-app
@@ -100,12 +100,18 @@ jobs:
       - name: Show Rust toolchain
         run: rustup show
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Start database services
         if: matrix.services != ''
-        run: docker compose up -d --wait ${{ matrix.services }}
+        run: ./scripts/ensure-test-services.sh ${{ matrix.services }}
 
-      - name: Test
-        run: cargo test -p ${{ matrix.package }} --all-features
+      - name: Test with nextest
+        run: cargo nextest run -p ${{ matrix.package }} --all-features
+
+      - name: Test doctests
+        run: cargo test -p ${{ matrix.package }} --doc --all-features
 
       - name: Stop database services
         if: always() && matrix.services != ''

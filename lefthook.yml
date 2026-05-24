@@ -9,6 +9,3 @@ pre-commit:
       glob: "{crates/**/*.rs,examples/**/*.rs,tests/**/*.rs}"
       run: cargo fmt --all
       stage_fixed: true
-    lint:
-      glob: "{Cargo.toml,crates/**/Cargo.toml,examples/**/Cargo.toml,crates/**/*.rs,examples/**/*.rs,tests/**/*.rs}"
-      run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings

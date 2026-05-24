@@ -1274,12 +1274,16 @@ fn test_options() -> OpenAuthOptions {
 }
 
 fn unique_sql_prefix() -> String {
-    let millis = SystemTime::now()
+    let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
+        .map(|duration| duration.as_nanos() as u64)
         .unwrap_or_default();
-    let sequence = SQL_TEST_ID.fetch_add(1, Ordering::Relaxed);
-    format!("oa_public_{millis}_{sequence}")
+    let process = std::process::id() & 0xffff;
+    let sequence = SQL_TEST_ID.fetch_add(1, Ordering::Relaxed) & 0xfff;
+    format!(
+        "oa_public_{process:x}_{:08x}_{sequence:x}",
+        nanos & 0xffff_ffff
+    )
 }
 
 fn json_request(

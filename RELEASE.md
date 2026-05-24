@@ -8,11 +8,8 @@ its maintainers.
 This repository does not use Better Auth’s Changesets setup; that flow is
 built around pnpm and npm package publishing.
 
-OpenAuth uses **Cargo** and is intended to be released via **GitHub releases**
-and **crates.io** (for example with OIDC trusted publishing from GitHub
-Actions, analogous to PyPI Trusted Publishing). A release workflow is not wired
-up in this repo yet; the steps below are the manual equivalent of what that
-workflow would automate.
+OpenAuth uses **Cargo** and is released via **GitHub releases** and
+**crates.io**. The tag-based release workflow mirrors the manual process below.
 
 1. Bump the workspace version in the root `Cargo.toml` under
    `[workspace.package] version`. Member crates use `version.workspace = true`.
@@ -22,12 +19,16 @@ workflow would automate.
    must match what you intend to publish on crates.io.
 3. Refresh the lockfile: `cargo check` or `cargo build --workspace` so
    `Cargo.lock` reflects the bump (commit the lockfile change when it differs).
-4. Run tests: `cargo test --workspace`.
-5. Publish crates to crates.io in **dependency order** (dependencies before
+4. Run tests: `./scripts/ensure-test-services.sh postgres mysql redis valkey`,
+   then `cargo nextest run --workspace --all-features`, then
+   `cargo test --workspace --doc --all-features`.
+5. Update the root `CHANGELOG.md` and each crate-level `CHANGELOG.md` with the
+   release notes for the version being published.
+6. Publish crates to crates.io in **dependency order** (dependencies before
    dependents). Use `cargo publish -p <crate-name>` from the repository root
    for each package, and wait for each newly published version to be visible
    on crates.io before publishing crates that depend on it.
-6. Create a **GitHub release** tagging the commit that matches the published
+7. Create a **GitHub release** tagging the commit that matches the published
    version.
 
 When a CI workflow exists, expect it to mirror this sequence: verify the
@@ -43,30 +44,37 @@ uploading.
 The current workspace packages must be published in this order:
 
 1. `openauth-oauth` — no OpenAuth workspace dependencies.
-2. `openauth-scim` — no OpenAuth workspace dependencies.
-3. `openauth-sso` — no OpenAuth workspace dependencies.
-4. `openauth-stripe` — no OpenAuth workspace dependencies.
-5. `openauth-social-providers` — depends on `openauth-oauth`.
-6. `openauth-core` — depends on `openauth-oauth` and
+2. `openauth-oidc` — no OpenAuth workspace dependencies.
+3. `openauth-stripe` — no OpenAuth workspace dependencies.
+4. `openauth-social-providers` — depends on `openauth-oauth`.
+5. `openauth-core` — depends on `openauth-oauth` and
    `openauth-social-providers`.
-7. `openauth-i18n` — depends on `openauth-core`.
-8. `openauth-plugins` — depends on `openauth-core`, `openauth-oauth`, and
+6. `openauth-saml` — depends on `openauth-core`.
+7. `openauth-scim` — depends on `openauth-core`.
+8. `openauth-i18n` — depends on `openauth-core`.
+9. `openauth-plugins` — depends on `openauth-core`, `openauth-oauth`, and
    `openauth-social-providers`.
-9. `openauth-sqlx` — depends on `openauth-core`.
-10. `openauth-telemetry` — depends on `openauth-core`.
-11. `openauth-tokio-postgres` — depends on `openauth-core`.
-12. `openauth-deadpool-postgres` — depends on `openauth-core` and
+10. `openauth-sqlx` — depends on `openauth-core`.
+11. `openauth-telemetry` — depends on `openauth-core`.
+12. `openauth-tokio-postgres` — depends on `openauth-core`.
+13. `openauth-deadpool-postgres` — depends on `openauth-core` and
     `openauth-tokio-postgres`.
-13. `openauth-passkey` — depends on `openauth-core`.
-14. `openauth-redis` — depends on `openauth-core`.
-15. `openauth-oauth-provider` — depends on `openauth-core` and
+14. `openauth-passkey` — depends on `openauth-core`.
+15. `openauth-redis` — depends on `openauth-core`.
+16. `openauth-sso` — depends on `openauth-core`, `openauth-oauth`,
+    `openauth-oidc`, and `openauth-saml`.
+17. `openauth-oauth-provider` — depends on `openauth-core` and
     `openauth-plugins`.
-16. `openauth` — depends on `openauth-core`, `openauth-deadpool-postgres`,
-    `openauth-passkey`, `openauth-plugins`, `openauth-sqlx`,
+18. `openauth` — depends on `openauth-core`,
+    `openauth-deadpool-postgres`, `openauth-i18n`, `openauth-oidc`,
+    `openauth-passkey`, `openauth-plugins`, `openauth-saml`,
+    `openauth-scim`, `openauth-sqlx`, `openauth-sso`,
     `openauth-telemetry`, and `openauth-tokio-postgres`.
-17. `openauth-fred` — depends on `openauth-core`, and its publish
+19. `openauth-fred` — depends on `openauth-core`, and its publish
     verification uses a dev-dependency on `openauth`.
-18. `openauth-axum` — depends on `openauth`.
+20. `openauth-axum` — depends on `openauth`.
+21. `openauth-cli` — depends on `openauth`, `openauth-core`,
+    `openauth-plugins`, and `openauth-sqlx`.
 
 ## Crate names
 
@@ -75,15 +83,18 @@ workspace currently includes:
 
 - `openauth` — main umbrella crate (re-exports / integration surface)
 - `openauth-axum`
+- `openauth-cli`
 - `openauth-core`
 - `openauth-deadpool-postgres`
 - `openauth-fred`
 - `openauth-i18n`
+- `openauth-oidc`
 - `openauth-oauth`
 - `openauth-oauth-provider`
 - `openauth-passkey`
 - `openauth-plugins`
 - `openauth-redis`
+- `openauth-saml`
 - `openauth-scim`
 - `openauth-social-providers`
 - `openauth-sqlx`

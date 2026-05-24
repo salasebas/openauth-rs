@@ -20,7 +20,7 @@ The `data/` directory is local development state and should not be committed.
 From the repository root:
 
 ```bash
-docker compose up -d postgres mysql redis valkey
+./scripts/ensure-test-services.sh postgres mysql redis valkey
 ```
 
 Postgres:

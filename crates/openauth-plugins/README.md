@@ -81,8 +81,8 @@ the plugin schema and key user-facing flows against Postgres, MySQL, Redis, and
 Valkey:
 
 ```sh
-docker compose up -d postgres mysql redis valkey
-CARGO_TARGET_DIR=/private/tmp/openauth-plugins-target cargo test -p openauth-plugins integration_matrix -- --ignored
+./scripts/ensure-test-services.sh postgres mysql redis valkey
+CARGO_TARGET_DIR=/private/tmp/openauth-plugins-target cargo nextest run -p openauth-plugins integration_matrix --run-ignored ignored-only
 ```
 
 MongoDB is not part of the plugin matrix yet because this workspace does not
