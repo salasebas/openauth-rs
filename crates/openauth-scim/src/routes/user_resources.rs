@@ -114,6 +114,9 @@ pub(super) async fn load_user_resources(
     provider: &AuthenticatedScimProvider,
     filter: Option<&str>,
 ) -> Result<Vec<ScimUserResource>, ScimErrorOrOpenAuth> {
+    if let Some(filter) = filter {
+        parse_filter(filter).map_err(ScimErrorOrOpenAuth::Scim)?;
+    }
     let db_filters = filter.and_then(|filter| parse_user_filter(filter).ok());
     let accounts = adapter
         .find_many(

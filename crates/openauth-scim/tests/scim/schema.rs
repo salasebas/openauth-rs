@@ -52,6 +52,17 @@ fn scim_plugin_registers_snake_case_plural_schema() -> Result<(), Box<dyn std::e
     assert!(user_id.index);
     assert!(user_id.foreign_key.is_some());
 
+    let context_without_ownership = create_auth_context(OpenAuthOptions {
+        plugins: vec![scim(ScimOptions::default())],
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let stable_user_id = context_without_ownership
+        .db_schema
+        .field("scimProvider", "userId")?;
+    assert_eq!(stable_user_id.name, "user_id");
+    assert!(!stable_user_id.required);
+
     let user_profile = context
         .db_schema
         .table("scimUserProfile")
@@ -197,4 +208,82 @@ fn scim_plugin_registers_endpoint_media_types_and_openapi_metadata() {
         })
         .expect("metadata endpoint should exist");
     assert!(metadata.options.allowed_media_types.is_empty());
+}
+
+#[test]
+fn scim_openapi_documents_requests_and_responses() {
+    let plugin = scim(ScimOptions::default());
+
+    let generate_token = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| {
+            endpoint.method == http::Method::POST && endpoint.path == "/scim/generate-token"
+        })
+        .expect("generate token endpoint should exist");
+    let generate_openapi = generate_token
+        .options
+        .openapi
+        .as_ref()
+        .expect("generate token OpenAPI metadata");
+    assert!(generate_openapi.request_body.is_some());
+    assert!(generate_openapi.responses.contains_key("201"));
+    assert!(generate_openapi.responses.contains_key("400"));
+
+    let create_user = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.method == http::Method::POST && endpoint.path == "/scim/v2/Users")
+        .expect("create user endpoint should exist");
+    let create_user_openapi = create_user
+        .options
+        .openapi
+        .as_ref()
+        .expect("create user OpenAPI metadata");
+    assert!(create_user_openapi.request_body.is_some());
+    assert!(create_user_openapi.responses.contains_key("201"));
+    assert!(create_user_openapi.responses.contains_key("409"));
+
+    let patch_user = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| {
+            endpoint.method == http::Method::PATCH && endpoint.path == "/scim/v2/Users/:userId"
+        })
+        .expect("patch user endpoint should exist");
+    let patch_user_openapi = patch_user
+        .options
+        .openapi
+        .as_ref()
+        .expect("patch user OpenAPI metadata");
+    assert!(patch_user_openapi.request_body.is_some());
+    assert!(patch_user_openapi.responses.contains_key("204"));
+
+    let bulk = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.method == http::Method::POST && endpoint.path == "/scim/v2/Bulk")
+        .expect("bulk endpoint should exist");
+    let bulk_openapi = bulk
+        .options
+        .openapi
+        .as_ref()
+        .expect("bulk OpenAPI metadata");
+    assert!(bulk_openapi.request_body.is_some());
+    assert!(bulk_openapi.responses.contains_key("200"));
+
+    let schemas = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| {
+            endpoint.method == http::Method::GET && endpoint.path == "/scim/v2/Schemas"
+        })
+        .expect("schemas endpoint should exist");
+    let schemas_openapi = schemas
+        .options
+        .openapi
+        .as_ref()
+        .expect("schemas OpenAPI metadata");
+    assert!(schemas_openapi.request_body.is_none());
+    assert!(schemas_openapi.responses.contains_key("200"));
 }

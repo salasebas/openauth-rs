@@ -1,13 +1,125 @@
 use super::*;
 
 pub(super) fn scim_endpoint_options(operation_id: &str, description: &str) -> AuthEndpointOptions {
+    let mut operation = OpenApiOperation::new(operation_id)
+        .description(description)
+        .tag("SCIM")
+        .response(
+            success_status(operation_id),
+            openapi_response(description, "application/scim+json"),
+        )
+        .response("400", openapi_error_response("Bad SCIM request"))
+        .response(
+            "401",
+            openapi_error_response("Invalid or missing SCIM bearer token"),
+        )
+        .response("403", openapi_error_response("SCIM access denied"))
+        .response("404", openapi_error_response("SCIM resource not found"))
+        .response("409", openapi_error_response("SCIM resource conflict"))
+        .response(
+            "412",
+            openapi_error_response("SCIM resource version precondition failed"),
+        )
+        .response(
+            "501",
+            openapi_error_response("SCIM endpoint is not implemented"),
+        );
+
+    if request_body_operation(operation_id) {
+        operation = operation.request_body(openapi_request_body(operation_id));
+    }
+
     AuthEndpointOptions::new()
         .operation_id(operation_id)
-        .openapi(
-            OpenApiOperation::new(operation_id)
-                .description(description)
-                .tag("SCIM"),
-        )
+        .openapi(operation)
+}
+
+fn success_status(operation_id: &str) -> &'static str {
+    match operation_id {
+        "generateSCIMToken" | "createSCIMUser" | "createSCIMGroup" => "201",
+        "patchSCIMUser" | "deleteSCIMUser" | "deleteSCIMGroup" => "204",
+        "getSCIMMe" => "501",
+        _ => "200",
+    }
+}
+
+fn request_body_operation(operation_id: &str) -> bool {
+    matches!(
+        operation_id,
+        "generateSCIMToken"
+            | "deleteSCIMProviderConnection"
+            | "createSCIMUser"
+            | "updateSCIMUser"
+            | "patchSCIMUser"
+            | "searchSCIMUsers"
+            | "createSCIMGroup"
+            | "updateSCIMGroup"
+            | "patchSCIMGroup"
+            | "searchSCIMGroups"
+            | "searchSCIMResources"
+            | "bulkSCIM"
+    )
+}
+
+fn openapi_request_body(operation_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "required": true,
+        "content": {
+            "application/json": {
+                "schema": openapi_named_object_schema(operation_id)
+            },
+            "application/scim+json": {
+                "schema": openapi_named_object_schema(operation_id)
+            }
+        }
+    })
+}
+
+fn openapi_response(description: &str, content_type: &str) -> serde_json::Value {
+    serde_json::json!({
+        "description": description,
+        "content": {
+            content_type: {
+                "schema": {
+                    "type": "object"
+                }
+            }
+        }
+    })
+}
+
+fn openapi_error_response(description: &str) -> serde_json::Value {
+    serde_json::json!({
+        "description": description,
+        "content": {
+            "application/scim+json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "schemas": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        },
+                        "status": { "type": "string" },
+                        "scimType": { "type": "string" },
+                        "detail": { "type": "string" }
+                    }
+                }
+            },
+            "application/json": {
+                "schema": {
+                    "type": "object"
+                }
+            }
+        }
+    })
+}
+
+fn openapi_named_object_schema(name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "title": name
+    })
 }
 
 pub(super) fn path_param(request: &ApiRequest, name: &str) -> Option<String> {

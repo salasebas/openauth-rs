@@ -771,6 +771,112 @@ async fn list_and_search_users_apply_projection_and_extended_filters() {
 }
 
 #[tokio::test]
+async fn users_route_rejects_invalid_list_filter_with_scim_error() {
+    let (adapter, router) = router_with_adapter().expect("router should build");
+    ScimProviderStore::new(adapter.as_ref())
+        .create(CreateScimProviderInput {
+            provider_id: "okta".to_owned(),
+            scim_token: "base-token".to_owned(),
+            organization_id: None,
+            user_id: None,
+        })
+        .await
+        .expect("provider should create");
+    let token = encode_bearer_token("base-token", "okta", None);
+
+    let response = router
+        .handle_async(auth_request(
+            Method::GET,
+            "/scim/v2/Users?filter=userName%20eq",
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response);
+    assert_eq!(body["scimType"], "invalidFilter");
+    assert_eq!(body["status"], "400");
+}
+
+#[tokio::test]
+async fn users_search_route_rejects_invalid_filter_with_scim_error() {
+    let (adapter, router) = router_with_adapter().expect("router should build");
+    ScimProviderStore::new(adapter.as_ref())
+        .create(CreateScimProviderInput {
+            provider_id: "okta".to_owned(),
+            scim_token: "base-token".to_owned(),
+            organization_id: None,
+            user_id: None,
+        })
+        .await
+        .expect("provider should create");
+    let token = encode_bearer_token("base-token", "okta", None);
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/scim/v2/Users/.search",
+            r#"{"filter":"userName eq"}"#,
+            Some(&token),
+        ))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response);
+    assert_eq!(body["scimType"], "invalidFilter");
+    assert_eq!(body["status"], "400");
+}
+
+#[tokio::test]
+async fn users_route_accepts_valid_extended_filter_after_validation() {
+    let (adapter, router) = router_with_adapter().expect("router should build");
+    ScimProviderStore::new(adapter.as_ref())
+        .create(CreateScimProviderInput {
+            provider_id: "okta".to_owned(),
+            scim_token: "base-token".to_owned(),
+            organization_id: None,
+            user_id: None,
+        })
+        .await
+        .expect("provider should create");
+    let token = encode_bearer_token("base-token", "okta", None);
+
+    for (email, department) in [
+        ("identity@example.com", "Identity"),
+        ("billing@example.com", "Billing"),
+    ] {
+        let response = router
+            .handle_async(json_request(
+                Method::POST,
+                "/scim/v2/Users",
+                &format!(
+                    r#"{{"userName":"{email}","urn:ietf:params:scim:schemas:extension:enterprise:2.0:User":{{"department":"{department}"}}}}"#
+                ),
+                Some(&token),
+            ))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    let response = router
+        .handle_async(auth_request(
+            Method::GET,
+            "/scim/v2/Users?filter=urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department%20eq%20%22Identity%22",
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response);
+    assert_eq!(body["totalResults"], 1);
+    assert_eq!(body["Resources"][0]["userName"], "identity@example.com");
+}
+
+#[tokio::test]
 async fn user_resource_includes_read_only_group_memberships() {
     let (adapter, router, context) =
         router_with_context_and_organization(ScimOptions::default()).expect("router");
