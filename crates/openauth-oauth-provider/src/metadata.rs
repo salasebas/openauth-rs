@@ -84,7 +84,11 @@ pub fn oidc_server_metadata(
 ) -> OidcServerMetadata {
     OidcServerMetadata {
         auth: auth_server_metadata(context, options),
-        claims_supported: options.claims.clone(),
+        claims_supported: if options.advertised_claims_supported.is_empty() {
+            options.claims.clone()
+        } else {
+            options.advertised_claims_supported.clone()
+        },
         userinfo_endpoint: format!("{}/oauth2/userinfo", context.base_url),
         subject_types_supported: if options.pairwise_secret.is_some() {
             vec!["public".to_owned(), "pairwise".to_owned()]

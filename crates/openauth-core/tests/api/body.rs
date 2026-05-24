@@ -11,6 +11,11 @@ struct SignInBody {
     remember_me: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct RepeatedBody {
+    resource: Vec<String>,
+}
+
 #[test]
 fn parse_request_body_accepts_json_content_type_with_parameters(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -47,6 +52,28 @@ fn parse_request_body_accepts_urlencoded_form_values() -> Result<(), Box<dyn std
             email: "ada+test@example.com".to_owned(),
             password: "two words".to_owned(),
             remember_me: Some(true),
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn parse_request_body_collects_repeated_urlencoded_form_values(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let request = request(
+        "application/x-www-form-urlencoded",
+        b"resource=https%3A%2F%2Fapi.example.com&resource=https%3A%2F%2Ffiles.example.com".to_vec(),
+    )?;
+
+    let body: RepeatedBody = parse_request_body(&request)?;
+
+    assert_eq!(
+        body,
+        RepeatedBody {
+            resource: vec![
+                "https://api.example.com".to_owned(),
+                "https://files.example.com".to_owned(),
+            ],
         }
     );
     Ok(())

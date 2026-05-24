@@ -1,0 +1,223 @@
+use super::common::*;
+
+#[test]
+fn oauth_provider_uses_upstream_default_scopes_grants_and_expirations(
+) -> Result<(), OAuthProviderConfigError> {
+    let plugin = oauth_provider(OAuthProviderOptions {
+        login_page: "/login".into(),
+        consent_page: "/consent".into(),
+        ..OAuthProviderOptions::default()
+    })?;
+
+    assert_eq!(plugin.id, "oauth-provider");
+    assert_eq!(
+        plugin.options.scopes,
+        ["openid", "profile", "email", "offline_access"]
+    );
+    assert_eq!(
+        plugin.options.claims,
+        [
+            "sub",
+            "iss",
+            "aud",
+            "exp",
+            "iat",
+            "sid",
+            "scope",
+            "azp",
+            "email",
+            "email_verified",
+            "name",
+            "picture",
+            "family_name",
+            "given_name"
+        ]
+    );
+    assert_eq!(plugin.options.code_expires_in, 600);
+    assert_eq!(plugin.options.access_token_expires_in, 3600);
+    assert_eq!(plugin.options.refresh_token_expires_in, 2_592_000);
+    assert_eq!(
+        plugin.options.grant_types,
+        [
+            GrantType::AuthorizationCode,
+            GrantType::ClientCredentials,
+            GrantType::RefreshToken
+        ]
+    );
+    assert_eq!(plugin.options.store_client_secret, SecretStorage::Hashed);
+    Ok(())
+}
+
+#[test]
+fn oauth_provider_contributes_plural_snake_case_schema() -> Result<(), Box<dyn std::error::Error>> {
+    let context =
+        create_auth_context_with_adapter(options_with_provider(default_provider()?), adapter())?;
+    let clients = context
+        .db_schema
+        .table("oauth_client")
+        .ok_or_else(|| OpenAuthError::InvalidConfig("missing oauth client schema".to_owned()))?;
+    let refresh_tokens = context
+        .db_schema
+        .table("oauth_refresh_token")
+        .ok_or_else(|| OpenAuthError::InvalidConfig("missing refresh token schema".to_owned()))?;
+    let access_tokens = context
+        .db_schema
+        .table("oauth_access_token")
+        .ok_or_else(|| OpenAuthError::InvalidConfig("missing access token schema".to_owned()))?;
+    let consents = context
+        .db_schema
+        .table("oauth_consent")
+        .ok_or_else(|| OpenAuthError::InvalidConfig("missing consent schema".to_owned()))?;
+
+    assert_eq!(clients.name, "oauth_clients");
+    assert_eq!(refresh_tokens.name, "oauth_refresh_tokens");
+    assert_eq!(access_tokens.name, "oauth_access_tokens");
+    assert_eq!(consents.name, "oauth_consents");
+    assert_eq!(
+        clients.field("client_id").map(|field| field.name.as_str()),
+        Some("client_id")
+    );
+    assert_eq!(
+        clients
+            .field("token_endpoint_auth_method")
+            .map(|field| field.name.as_str()),
+        Some("token_endpoint_auth_method")
+    );
+    assert_eq!(
+        clients
+            .field("redirect_uris")
+            .map(|field| field.name.as_str()),
+        Some("redirect_uris")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn metadata_endpoint_returns_oidc_server_metadata() -> Result<(), Box<dyn std::error::Error>>
+{
+    let router = router(default_provider()?, adapter())?;
+    let response = router
+        .handle_async(request(
+            Method::GET,
+            "/api/auth/.well-known/openid-configuration",
+            "",
+            None,
+        )?)
+        .await?;
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&header::HeaderValue::from_static(
+            "public, max-age=15, stale-while-revalidate=15, stale-if-error=86400"
+        ))
+    );
+    let body = json_body(response)?;
+
+    assert_eq!(body["issuer"], BASE_URL);
+    assert_eq!(
+        body["authorization_endpoint"],
+        format!("{BASE_URL}/oauth2/authorize")
+    );
+    assert_eq!(body["token_endpoint"], format!("{BASE_URL}/oauth2/token"));
+    assert_eq!(
+        body["userinfo_endpoint"],
+        format!("{BASE_URL}/oauth2/userinfo")
+    );
+    assert_eq!(
+        body["scopes_supported"],
+        json!(["openid", "profile", "email", "offline_access"])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn metadata_endpoint_advertises_custom_claims_supported(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            advertised_claims_supported: vec![
+                "sub".to_owned(),
+                "https://example.com/organization".to_owned(),
+            ],
+            ..default_options()
+        })?,
+        adapter(),
+    )?;
+    let response = router
+        .handle_async(request(
+            Method::GET,
+            "/api/auth/.well-known/openid-configuration",
+            "",
+            None,
+        )?)
+        .await?;
+    let body = json_body(response)?;
+
+    assert_eq!(
+        body["claims_supported"],
+        json!(["sub", "https://example.com/organization"])
+    );
+    Ok(())
+}
+
+#[test]
+fn oauth_provider_rejects_client_registration_scopes_not_in_server_scopes() {
+    let result = oauth_provider(OAuthProviderOptions {
+        login_page: "/login".into(),
+        consent_page: "/consent".into(),
+        client_registration_allowed_scopes: vec!["admin".into()],
+        ..OAuthProviderOptions::default()
+    });
+
+    assert_eq!(
+        result.map(|_| ()),
+        Err(OAuthProviderConfigError::UnknownClientRegistrationScope(
+            "admin".into()
+        ))
+    );
+}
+
+#[test]
+fn oauth_provider_rejects_refresh_token_without_authorization_code_grant() {
+    let result = oauth_provider(OAuthProviderOptions {
+        login_page: "/login".into(),
+        consent_page: "/consent".into(),
+        grant_types: vec![GrantType::RefreshToken],
+        ..OAuthProviderOptions::default()
+    });
+
+    assert_eq!(
+        result.map(|_| ()),
+        Err(OAuthProviderConfigError::RefreshTokenRequiresAuthorizationCode)
+    );
+}
+
+#[test]
+fn oauth_provider_rejects_short_pairwise_secret() {
+    let result = oauth_provider(OAuthProviderOptions {
+        login_page: "/login".into(),
+        consent_page: "/consent".into(),
+        pairwise_secret: Some("too-short".into()),
+        ..OAuthProviderOptions::default()
+    });
+
+    assert_eq!(
+        result.map(|_| ()),
+        Err(OAuthProviderConfigError::PairwiseSecretTooShort)
+    );
+}
+
+#[test]
+fn oauth_provider_rejects_hashed_client_secrets_without_jwt_plugin() {
+    let result = oauth_provider(OAuthProviderOptions {
+        login_page: "/login".into(),
+        consent_page: "/consent".into(),
+        disable_jwt_plugin: true,
+        store_client_secret: SecretStorage::Hashed,
+        ..OAuthProviderOptions::default()
+    });
+
+    assert_eq!(
+        result.map(|_| ()),
+        Err(OAuthProviderConfigError::HashedClientSecretsRequireJwtPlugin)
+    );
+}

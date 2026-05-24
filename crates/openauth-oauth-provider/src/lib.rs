@@ -29,8 +29,17 @@ pub use error::OAuthProviderError;
 pub use metadata::{auth_server_metadata, oidc_server_metadata};
 pub use models::{OAuthAccessToken, OAuthConsent, OAuthRefreshToken, SchemaClient};
 pub use options::{
-    GrantType, OAuthProviderConfigError, OAuthProviderOptions, OAuthProviderPlugin,
-    ResolvedOAuthProviderOptions, SecretStorage, TokenEndpointAuthMethod,
+    ClientPrivilegeAction, ClientPrivilegesInput, ClientPrivilegesResolver, ClientReferenceInput,
+    ClientReferenceResolver, ClientSecretHashInput, ClientSecretHashResolver,
+    ClientSecretVerifyInput, ClientSecretVerifyResolver, CustomAccessTokenClaimsInput,
+    CustomAccessTokenClaimsResolver, CustomIdTokenClaimsInput, CustomIdTokenClaimsResolver,
+    CustomTokenResponseFieldsInput, CustomTokenResponseFieldsResolver, CustomUserInfoClaimsInput,
+    CustomUserInfoClaimsResolver, GrantType, OAuthProviderConfigError, OAuthProviderOptions,
+    OAuthProviderPlugin, OAuthTokenPrefixes, PromptRedirectInput, PromptRedirectResolver,
+    RefreshTokenFormatDecodeOutput, RefreshTokenFormatEncodeInput, RefreshTokenFormatter,
+    RequestUriResolver, RequestUriResolverInput, ResolvedOAuthProviderOptions, SecretStorage,
+    StringGeneratorResolver, TokenEndpointAuthMethod, TokenHashInput, TokenHashResolver,
+    TrustedClientCache,
 };
 pub use schema::{
     oauth_provider_schema, OAUTH_ACCESS_TOKEN_MODEL, OAUTH_CLIENT_MODEL, OAUTH_CONSENT_MODEL,
@@ -101,9 +110,10 @@ fn resolve_options(
     );
     let scope_set: HashSet<&str> = scopes.iter().map(String::as_str).collect();
 
+    let client_registration_default_scopes = options.client_registration_default_scopes;
     let client_registration_allowed_scopes = merge_allowed_scopes(
         options.client_registration_allowed_scopes,
-        &options.client_registration_default_scopes,
+        &client_registration_default_scopes,
     );
     for scope in &client_registration_allowed_scopes {
         if !scope_set.contains(scope.as_str()) {
@@ -115,6 +125,13 @@ fn resolve_options(
     for scope in &options.advertised_scopes_supported {
         if !scope_set.contains(scope.as_str()) {
             return Err(OAuthProviderConfigError::UnknownAdvertisedScope(
+                scope.clone(),
+            ));
+        }
+    }
+    for scope in &options.client_credential_grant_default_scopes {
+        if !scope_set.contains(scope.as_str()) {
+            return Err(OAuthProviderConfigError::UnknownClientCredentialGrantScope(
                 scope.clone(),
             ));
         }
@@ -151,19 +168,50 @@ fn resolve_options(
         grant_types,
         login_page: options.login_page,
         consent_page: options.consent_page,
+        signup_page: options.signup_page,
+        select_account_page: options.select_account_page,
+        post_login_page: options.post_login_page,
+        signup_redirect: options.signup_redirect,
+        select_account_redirect: options.select_account_redirect,
+        post_login_redirect: options.post_login_redirect,
         code_expires_in: options.code_expires_in,
         access_token_expires_in: options.access_token_expires_in,
         m2m_access_token_expires_in: options.m2m_access_token_expires_in,
         id_token_expires_in: options.id_token_expires_in,
         refresh_token_expires_in: options.refresh_token_expires_in,
+        client_credential_grant_default_scopes: options.client_credential_grant_default_scopes,
+        scope_expirations: options.scope_expirations,
+        client_registration_default_scopes,
+        client_registration_client_secret_expiration: options
+            .client_registration_client_secret_expiration,
         allow_unauthenticated_client_registration: options
             .allow_unauthenticated_client_registration,
         allow_dynamic_client_registration: options.allow_dynamic_client_registration,
+        allow_public_client_prelogin: options.allow_public_client_prelogin,
+        cached_trusted_clients: options.cached_trusted_clients,
+        trusted_client_cache: TrustedClientCache::default(),
+        client_reference: options.client_reference,
+        client_privileges: options.client_privileges,
+        custom_access_token_claims: options.custom_access_token_claims,
+        custom_id_token_claims: options.custom_id_token_claims,
+        custom_token_response_fields: options.custom_token_response_fields,
+        custom_userinfo_claims: options.custom_userinfo_claims,
+        request_uri_resolver: options.request_uri_resolver,
+        prefixes: options.prefixes,
+        generate_client_id: options.generate_client_id,
+        generate_client_secret: options.generate_client_secret,
+        generate_opaque_access_token: options.generate_opaque_access_token,
+        generate_refresh_token: options.generate_refresh_token,
+        format_refresh_token: options.format_refresh_token,
         disable_jwt_plugin: options.disable_jwt_plugin,
         store_client_secret,
         store_tokens: options.store_tokens,
+        hash_client_secret: options.hash_client_secret,
+        verify_client_secret_hash: options.verify_client_secret_hash,
+        hash_token: options.hash_token,
         pairwise_secret: options.pairwise_secret,
         advertised_scopes_supported: options.advertised_scopes_supported,
+        advertised_claims_supported: options.advertised_claims_supported,
         valid_audiences: options.valid_audiences,
     })
 }

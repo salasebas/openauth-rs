@@ -17,6 +17,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::net::IpAddr;
 use time::OffsetDateTime;
 
 use crate::error::{OAuthErrorBody, OAuthProviderError};
@@ -170,6 +171,13 @@ pub(crate) fn hmac_sha256_base64url(value: &str, secret: &str) -> Result<String,
     Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
 }
 
+pub(crate) fn hmac_sha256_base64(value: &str, secret: &str) -> Result<String, OpenAuthError> {
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+        .map_err(|error| OpenAuthError::Crypto(error.to_string()))?;
+    mac.update(value.as_bytes());
+    Ok(STANDARD.encode(mac.finalize().into_bytes()))
+}
+
 pub(crate) fn verify_hash(value: &str, hash: &str) -> bool {
     constant_time_equal(sha256_base64url(value), hash)
 }
@@ -203,12 +211,13 @@ pub(crate) fn is_loopback_redirect_match(registered: &str, requested: &str) -> b
         && registered.path() == requested.path()
         && registered.query() == requested.query()
         && registered.host_str() == requested.host_str()
-        && is_loopback_host(registered.host_str())
-        && is_loopback_host(requested.host_str())
+        && is_loopback_ip_literal(registered.host_str())
+        && is_loopback_ip_literal(requested.host_str())
 }
 
-fn is_loopback_host(host: Option<&str>) -> bool {
-    matches!(host, Some("localhost" | "127.0.0.1" | "::1"))
+fn is_loopback_ip_literal(host: Option<&str>) -> bool {
+    host.and_then(|host| host.parse::<IpAddr>().ok())
+        .is_some_and(|ip| ip.is_loopback())
 }
 
 pub(crate) fn create_query(model: &str, data: DbRecord) -> Create {

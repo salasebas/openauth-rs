@@ -8,7 +8,7 @@ use time::{Duration, OffsetDateTime};
 
 use crate::error::OAuthProviderError;
 use crate::models::SchemaClient;
-use crate::options::ResolvedOAuthProviderOptions;
+use crate::options::{ClientReferenceInput, ResolvedOAuthProviderOptions};
 use crate::schema::OAUTH_CLIENT_MODEL;
 use crate::token::store_client_secret;
 use crate::utils::{
@@ -54,7 +54,8 @@ pub struct OAuthClient {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateOAuthClientInput {
     pub is_register: bool,
-    pub user_id: Option<String>,
+    pub user: Option<openauth_core::db::User>,
+    pub session: Option<openauth_core::db::Session>,
 }
 
 pub async fn create_oauth_client(
@@ -69,7 +70,7 @@ pub async fn create_oauth_client(
     }
 
     if input.is_register
-        && input.user_id.is_none()
+        && input.user.is_none()
         && !options.allow_unauthenticated_client_registration
     {
         return Err(OAuthProviderError::new(
@@ -81,10 +82,16 @@ pub async fn create_oauth_client(
     }
 
     if body.scope.is_none() {
-        body.scope = Some(options.scopes.join(" "));
+        let default_scopes =
+            if input.is_register && !options.client_registration_default_scopes.is_empty() {
+                &options.client_registration_default_scopes
+            } else {
+                &options.scopes
+            };
+        body.scope = Some(default_scopes.join(" "));
     }
 
-    if input.user_id.is_none()
+    if input.user.is_none()
         && body
             .grant_types
             .as_ref()
@@ -98,11 +105,13 @@ pub async fn create_oauth_client(
         .into());
     }
 
-    if input.user_id.is_none() {
+    if input.user.is_none() {
         body.token_endpoint_auth_method = Some("none".to_owned());
         if body.client_type.as_deref() == Some("web") {
             body.client_type = None;
         }
+    } else if body.token_endpoint_auth_method.is_none() {
+        body.token_endpoint_auth_method = Some("client_secret_basic".to_owned());
     }
     if input.is_register {
         body.enable_end_session = None;
@@ -110,20 +119,44 @@ pub async fn create_oauth_client(
 
     check_oauth_client(&body, options, input.is_register)?;
     let is_public = body.token_endpoint_auth_method.as_deref() == Some("none");
-    let client_id = random_string(32);
-    let client_secret = (!is_public).then(|| random_string(32));
-    let stored_secret = match client_secret.as_deref() {
-        Some(secret) => Some(store_client_secret(context, options, secret)?),
+    let client_id = match &options.generate_client_id {
+        Some(generator) => generator.generate().await?,
+        None => random_string(32),
+    };
+    let raw_client_secret = if is_public {
+        None
+    } else {
+        Some(match &options.generate_client_secret {
+            Some(generator) => generator.generate().await?,
+            None => random_string(32),
+        })
+    };
+    let stored_secret = match raw_client_secret.as_deref() {
+        Some(secret) => Some(store_client_secret(context, options, secret).await?),
         None => None,
     };
     let now = now();
+    let reference_id = match &options.client_reference {
+        Some(resolver) => {
+            resolver
+                .resolve(ClientReferenceInput {
+                    user: input.user.clone(),
+                    session: input.session.clone(),
+                })
+                .await?
+        }
+        None => None,
+    };
     let mut schema = oauth_to_schema(&body);
     schema.id = Some(random_id("oauth_client"));
     schema.client_id = client_id.clone();
     schema.client_secret = stored_secret;
-    schema.client_secret_expires_at = client_secret.as_ref().map(|_| {
+    schema.client_secret_expires_at = raw_client_secret.as_ref().map(|_| {
         if input.is_register {
-            now + Duration::days(365)
+            options
+                .client_registration_client_secret_expiration
+                .map(|seconds| now + Duration::seconds(seconds as i64))
+                .unwrap_or(OffsetDateTime::UNIX_EPOCH)
         } else {
             OffsetDateTime::UNIX_EPOCH
         }
@@ -132,7 +165,12 @@ pub async fn create_oauth_client(
     schema.updated_at = Some(now);
     schema.public = Some(is_public);
     schema.disabled = None;
-    schema.user_id = input.user_id;
+    schema.user_id = if reference_id.is_some() {
+        None
+    } else {
+        input.user.as_ref().map(|user| user.id.clone())
+    };
+    schema.reference_id = reference_id;
 
     let created = adapter
         .create(create_query(
@@ -141,7 +179,8 @@ pub async fn create_oauth_client(
         ))
         .await?;
     let mut client = schema_to_oauth(&schema_client_from_record(created)?);
-    client.client_secret = client_secret;
+    client.client_secret = raw_client_secret
+        .map(|secret| add_prefix(options.prefixes.client_secret.as_deref(), secret));
     Ok(client)
 }
 
@@ -151,6 +190,27 @@ pub fn check_oauth_client(
     is_register: bool,
 ) -> Result<(), OpenAuthError> {
     let is_public = client.token_endpoint_auth_method.as_deref() == Some("none");
+    if let Some(method) = client.token_endpoint_auth_method.as_deref() {
+        if !matches!(
+            method,
+            "none" | "client_secret_basic" | "client_secret_post"
+        ) {
+            return Err(OAuthProviderError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_client_metadata",
+                "token_endpoint_auth_method is invalid",
+            )
+            .into());
+        }
+    }
+    if is_register && client.skip_consent.is_some() {
+        return Err(OAuthProviderError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "skip_consent cannot be set during dynamic client registration",
+        )
+        .into());
+    }
     if let Some(client_type) = &client.client_type {
         if is_public && client_type != "native" && client_type != "user-agent-based" {
             return Err(OAuthProviderError::new(
@@ -174,6 +234,21 @@ pub fn check_oauth_client(
         .grant_types
         .clone()
         .unwrap_or_else(|| vec!["authorization_code".to_owned()]);
+    if grant_types.is_empty()
+        || grant_types.iter().any(|grant| {
+            !matches!(
+                grant.as_str(),
+                "authorization_code" | "client_credentials" | "refresh_token"
+            )
+        })
+    {
+        return Err(OAuthProviderError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "grant_types contains an unsupported grant",
+        )
+        .into());
+    }
     if grant_types
         .iter()
         .any(|grant| grant == "authorization_code")
@@ -196,11 +271,43 @@ pub fn check_oauth_client(
             .into());
         }
     }
+    if let Some(post_logout_redirect_uris) = client.post_logout_redirect_uris.as_ref() {
+        if post_logout_redirect_uris.is_empty() {
+            return Err(OAuthProviderError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_redirect_uri",
+                "post_logout_redirect_uris must not be empty",
+            )
+            .into());
+        }
+        for redirect_uri in post_logout_redirect_uris {
+            if !validate_url(redirect_uri) {
+                return Err(OAuthProviderError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_redirect_uri",
+                    "post_logout_redirect_uri is invalid",
+                )
+                .into());
+            }
+        }
+    }
 
     let response_types = client
         .response_types
         .clone()
         .unwrap_or_else(|| vec!["code".to_owned()]);
+    if response_types.is_empty()
+        || response_types
+            .iter()
+            .any(|response_type| response_type != "code")
+    {
+        return Err(OAuthProviderError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "response_types contains an unsupported response type",
+        )
+        .into());
+    }
     if grant_types
         .iter()
         .any(|grant| grant == "authorization_code")
@@ -289,6 +396,24 @@ pub async fn get_client(
         .await?
         .map(schema_client_from_record)
         .transpose()
+}
+
+pub async fn get_client_cached(
+    adapter: &dyn DbAdapter,
+    options: &ResolvedOAuthProviderOptions,
+    client_id: &str,
+) -> Result<Option<SchemaClient>, OpenAuthError> {
+    if !options.cached_trusted_clients.contains(client_id) {
+        return get_client(adapter, client_id).await;
+    }
+    if let Some(client) = options.trusted_client_cache.get(client_id)? {
+        return Ok(Some(client));
+    }
+    let client = get_client(adapter, client_id).await?;
+    if let Some(client) = client.as_ref() {
+        options.trusted_client_cache.insert(client.clone())?;
+    }
+    Ok(client)
 }
 
 pub async fn update_client(
@@ -535,4 +660,11 @@ fn pairwise_sector(url: &url::Url) -> Option<String> {
         Some(port) => format!("{host}:{port}"),
         None => host.to_owned(),
     })
+}
+
+fn add_prefix(prefix: Option<&str>, value: String) -> String {
+    match prefix {
+        Some(prefix) => format!("{prefix}{value}"),
+        None => value,
+    }
 }

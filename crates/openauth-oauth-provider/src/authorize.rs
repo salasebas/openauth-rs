@@ -1,7 +1,7 @@
 use openauth_core::db::DbAdapter;
 use openauth_core::error::OpenAuthError;
 
-use crate::consent::{find_consent, has_granted_scopes};
+use crate::consent::{find_consent_for_reference, has_granted_scopes};
 use crate::models::SchemaClient;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +51,13 @@ pub async fn decide_authorize(
     }
 
     let user_id = session_user_id.unwrap_or_default();
-    let consent = find_consent(adapter, user_id, &client.client_id).await?;
+    let consent = find_consent_for_reference(
+        adapter,
+        user_id,
+        &client.client_id,
+        client.reference_id.as_deref(),
+    )
+    .await?;
     if consent
         .as_ref()
         .is_some_and(|consent| has_granted_scopes(consent, requested_scopes))
