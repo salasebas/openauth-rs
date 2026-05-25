@@ -23,6 +23,8 @@ use http::Request;
 use openauth_oauth::oauth2::SocialOAuthProvider;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,6 +35,21 @@ pub use builder::{
 pub use secrets::SecretMaterial;
 
 use origins::push_trusted_origin;
+
+pub type ContextTelemetryFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+pub type ContextTelemetryPublisher =
+    Arc<dyn Fn(ContextTelemetryEvent) -> ContextTelemetryFuture + Send + Sync>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContextTelemetryEvent {
+    pub event_type: String,
+    pub anonymous_id: Option<String>,
+    pub payload: serde_json::Value,
+}
+
+pub(super) fn noop_telemetry_publisher() -> ContextTelemetryPublisher {
+    Arc::new(|_| Box::pin(async move {}))
+}
 
 #[derive(Clone)]
 pub struct AuthContext {
@@ -58,6 +75,7 @@ pub struct AuthContext {
     pub plugin_error_codes: BTreeMap<String, PluginErrorCode>,
     pub plugin_database_hooks: Vec<crate::plugin::PluginDatabaseHook>,
     pub plugin_migrations: Vec<crate::plugin::PluginMigration>,
+    pub telemetry_publisher: ContextTelemetryPublisher,
     pub logger: Logger,
 }
 
@@ -144,6 +162,10 @@ impl AuthContext {
         };
         runner.spawn(task);
         true
+    }
+
+    pub async fn publish_telemetry(&self, event: ContextTelemetryEvent) {
+        (self.telemetry_publisher)(event).await;
     }
 
     #[cfg(feature = "oauth")]

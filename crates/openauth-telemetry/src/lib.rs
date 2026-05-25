@@ -58,6 +58,7 @@ type TrackFn =
     Arc<dyn Fn(TelemetryEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// Live telemetry handle ([`Self::publish`] is a no-op when telemetry is disabled).
+#[derive(Clone)]
 pub struct TelemetryPublisher {
     hard_noop: bool,
     enabled: bool,

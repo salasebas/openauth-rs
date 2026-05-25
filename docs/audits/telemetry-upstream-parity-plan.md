@@ -49,7 +49,11 @@ OpenAuth:
 - `crates/openauth-telemetry/README.md`
 - `crates/openauth-telemetry/PARITY.md`
 - `crates/openauth/Cargo.toml`
+- `crates/openauth/src/auth.rs`
 - `crates/openauth/src/lib.rs`
+- `crates/openauth/tests/public_api.rs`
+- `crates/openauth-core/src/context.rs`
+- `crates/openauth-core/src/context/builder.rs`
 - `crates/openauth-cli/src/commands/db.rs`
 - `crates/openauth-cli/src/telemetry.rs`
 - `crates/openauth-cli/tests/commands.rs`
@@ -79,6 +83,7 @@ OpenAuth:
 - Package manager detection previously emitted `"unknown"` for missing Cargo version; this audit now emits `null`.
 - Root `openauth` facade previously re-exported telemetry unconditionally; this audit gates re-exports behind the `telemetry` feature.
 - OpenAuth CLI previously did not emit upstream-style generate/migrate telemetry; this follow-up wires `cli_generate` and `cli_migrate` producers where CLI execution is already async.
+- OpenAuth context previously had no telemetry publisher contract; this follow-up adds a core-level no-op telemetry sink and root async initializers that wire it to `openauth-telemetry`.
 - Parity notes were moved to `crates/openauth-telemetry/PARITY.md` instead of adding more crate README content.
 
 ## Proposed Fixes
@@ -92,6 +97,7 @@ OpenAuth:
 - Document root feature-gate behavior and remaining intentional differences outside the README.
 - Add OAuth-gated social provider metadata parity for safe provider options.
 - Add OpenAuth CLI telemetry producers for generate/migrate outcomes without changing CLI command results when telemetry is disabled.
+- Add async root initialization APIs that wire `AuthContext::publish_telemetry` without adding a core dependency on `openauth-telemetry`.
 
 ## Tests To Add Or Update
 
@@ -105,18 +111,19 @@ OpenAuth:
 - Detection info serializes nullable versions.
 - OAuth-gated social providers include safe option metadata and never include client ids or client secrets.
 - CLI `generate --from-empty` emits a debug `cli_generate` event containing outcome and sanitized config when telemetry is explicitly enabled.
+- Root async builder initializes the context telemetry publisher, emits `init`, and routes explicit context telemetry events through the same anonymous id behavior as upstream.
 
 ## Current Server-Side Parity Estimate
 
-Estimated server-only parity after this audit: **93%**.
+Estimated server-only parity after this audit: **97%**.
 
 Supported:
 
-- Publisher lifecycle, enablement, debug behavior, test suppression, custom-track/HTTP transport behavior, anonymous project id shape, arbitrary event publishing, Rust-specific host detectors, redacted config snapshots for modeled OpenAuth options, root feature gating, OAuth-gated social provider metadata, and OpenAuth CLI generate/migrate event producers.
+- Publisher lifecycle, enablement, debug behavior, test suppression, custom-track/HTTP transport behavior, anonymous project id shape, arbitrary event publishing, Rust-specific host detectors, redacted config snapshots for modeled OpenAuth options, root feature gating, OAuth-gated social provider metadata, OpenAuth CLI generate/migrate event producers, and async root-context telemetry publisher wiring.
 
 Remaining gaps:
 
-- OpenAuth has no telemetry wiring in core auth context initialization, so application code must call `create_telemetry` directly.
+- Existing synchronous OpenAuth initialization keeps a no-op telemetry publisher; users should choose the async initializer when they want upstream-style initialized context telemetry.
 - Rust social provider telemetry cannot safely introspect per-provider callback overrides such as `verifyIdToken` or `refreshAccessToken`; it reports stable trait/option metadata without invoking provider methods.
 - Better Auth option fields not modeled in OpenAuth remain `null` or `false`, including global hooks, logger, onAPIError, model names/field mappings, verification cleanup, and advanced database generator details.
 - Project ID generation is process-local and Rust/Cargo-based, not a line-by-line package.json cache port.
@@ -128,7 +135,7 @@ Remaining gaps:
 
 ## Intentionally Left Unchanged
 
-- Do not wire telemetry into `openauth-core::AuthContext` in this audit because OpenAuth initialization is synchronous and core cannot depend on the telemetry crate without a dependency cycle. Add a separate async/root-context design before changing this boundary.
+- Do not make synchronous OpenAuth initialization block on telemetry or create a runtime internally.
 - Do not add telemetry auth endpoints, admin/debug endpoints, migrations, database writes, or authorization checks.
 - Do not port client/browser behavior.
 - Do not put CLI event producer policy inside the telemetry crate; the CLI owns CLI-specific outcomes and calls the generic publisher.

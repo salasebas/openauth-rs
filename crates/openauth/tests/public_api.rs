@@ -16,8 +16,16 @@ use openauth::{
     SessionAdditionalField, SessionAuth, SessionOptions, SignOutResult, SocialOAuthProvider,
     TrustedOriginOptions, UpdateUserInput, UserOptions, VerificationEmail,
 };
+#[cfg(feature = "telemetry")]
+use openauth::{
+    ContextTelemetryEvent, CustomTrackFn, TelemetryContext, TelemetryOptions, TelemetryTestHooks,
+};
 use serde_json::Value;
 use std::collections::BTreeMap;
+#[cfg(feature = "telemetry")]
+use std::future::Future;
+#[cfg(feature = "telemetry")]
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -85,6 +93,61 @@ fn openauth_builder_exposes_primary_initializer() -> Result<(), Box<dyn std::err
     )?;
 
     assert_eq!(response.status(), StatusCode::OK);
+    Ok(())
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test]
+async fn openauth_async_builder_wires_context_telemetry_publisher(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let captured = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let custom_track: CustomTrackFn = {
+        let captured = Arc::clone(&captured);
+        Arc::new(move |event| {
+            let captured = Arc::clone(&captured);
+            Box::pin(async move {
+                captured.lock().await.push(event);
+            }) as Pin<Box<dyn Future<Output = ()> + Send>>
+        })
+    };
+
+    let auth = OpenAuth::builder()
+        .secret("secret-a-at-least-32-chars-long!!")
+        .telemetry(TelemetryOptions::new().enabled(true))
+        .rate_limit(RateLimitOptions::memory().enabled(false))
+        .telemetry_context(TelemetryContext {
+            skip_test_check: true,
+            custom_track: Some(custom_track),
+            test_hooks: Some(TelemetryTestHooks {
+                anonymous_id: Some("stable-context-id".to_owned()),
+                ..TelemetryTestHooks::default()
+            }),
+            ..TelemetryContext::default()
+        })
+        .build_async()
+        .await?;
+
+    auth.context()
+        .publish_telemetry(ContextTelemetryEvent {
+            event_type: "custom_event".to_owned(),
+            anonymous_id: Some("caller-provided-id".to_owned()),
+            payload: serde_json::json!({ "server": true }),
+        })
+        .await;
+
+    let events = captured.lock().await;
+    let init = events
+        .iter()
+        .find(|event| event.event_type == "init")
+        .ok_or("missing init telemetry event")?;
+    let custom = events
+        .iter()
+        .find(|event| event.event_type == "custom_event")
+        .ok_or("missing custom telemetry event")?;
+
+    assert_eq!(init.anonymous_id.as_deref(), Some("stable-context-id"));
+    assert_eq!(custom.anonymous_id.as_deref(), Some("stable-context-id"));
+    assert_eq!(custom.payload["server"], true);
     Ok(())
 }
 
