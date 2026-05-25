@@ -10,4 +10,5 @@ pub mod plugins;
 pub(crate) mod prompt;
 pub mod schema;
 pub mod secret;
+pub(crate) mod telemetry;
 pub mod workspace;

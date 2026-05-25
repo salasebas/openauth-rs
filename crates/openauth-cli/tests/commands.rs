@@ -182,3 +182,58 @@ fn plugins_list_json_exposes_enriched_contract() {
         .stdout(predicate::str::contains("\"snippet_supported\""))
         .stdout(predicate::str::contains("\"migration_impact\""));
 }
+
+#[test]
+fn generate_emits_debug_telemetry_when_enabled() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        temp.path().join("openauth.toml"),
+        r#"
+[project]
+framework = "axum"
+base_url = "http://localhost:3000/api/auth"
+base_path = "/api/auth"
+production = false
+
+[database]
+adapter = "sqlx"
+provider = "sqlite"
+url_env = "DATABASE_URL"
+migrations_dir = "migrations/openauth"
+
+[security]
+secret_env = "OPENAUTH_SECRET_FOR_TEST"
+
+[plugins]
+enabled = ["username"]
+"#,
+    )
+    .expect("write config");
+
+    Command::cargo_bin("openauth")
+        .expect("binary")
+        .args([
+            "generate",
+            "--cwd",
+            temp.path().to_str().expect("utf8 path"),
+            "--from-empty",
+            "--output",
+            "migrations/openauth/0001_init.sql",
+        ])
+        .env("OPENAUTH_TELEMETRY", "true")
+        .env("OPENAUTH_TELEMETRY_DEBUG", "true")
+        .env(
+            "OPENAUTH_TELEMETRY_ENDPOINT",
+            "http://telemetry.invalid/collect",
+        )
+        .env("RUST_ENV", "development")
+        .env("TEST", "false")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("\"type\": \"cli_generate\""))
+        .stderr(predicate::str::contains("\"outcome\": \"generated\""))
+        .stderr(predicate::str::contains("\"adapter\": \"sqlx\""))
+        .stderr(predicate::str::contains("\"database\": \"sqlite\""))
+        .stderr(predicate::str::contains("\"plugins\": ["))
+        .stderr(predicate::str::contains("\"username\""));
+}

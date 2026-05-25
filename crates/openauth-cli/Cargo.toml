@@ -56,6 +56,7 @@ openauth.workspace = true
 openauth-core.workspace = true
 openauth-plugins.workspace = true
 openauth-sqlx = { workspace = true, features = ["mysql", "postgres", "sqlite"] }
+openauth-telemetry.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
