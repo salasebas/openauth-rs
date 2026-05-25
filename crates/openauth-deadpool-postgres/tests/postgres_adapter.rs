@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use deadpool_postgres::{Config, PoolConfig};
 use http::{header, Method, Request, StatusCode};
@@ -14,6 +14,7 @@ use openauth_core::db::{
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     AdvancedOptions, OpenAuthOptions, RateLimitConsumeInput, RateLimitRule, RateLimitStore,
+    UserAdditionalField, UserOptions,
 };
 use openauth_deadpool_postgres::migration::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_deadpool_postgres::{DeadpoolPostgresAdapter, DeadpoolPostgresRateLimitStore};
@@ -1233,6 +1234,63 @@ async fn deadpool_postgres_adapter_supports_core_auth_route_flows(
 }
 
 #[tokio::test]
+async fn deadpool_postgres_adapter_supports_additional_user_fields_route_flow(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(options_with_additional_user_fields())?;
+    let pg_schema = unique_prefix();
+    raw_client()
+        .await?
+        .execute(&format!(r#"CREATE SCHEMA "{pg_schema}""#), &[])
+        .await?;
+
+    let mut config = Config::new();
+    config.url = Some(database_url());
+    config.options = Some(format!("-csearch_path={pg_schema}"));
+    let adapter = Arc::new(DeadpoolPostgresAdapter::from_config_with_schema(
+        config,
+        context.db_schema.clone(),
+        4,
+    )?);
+    adapter.create_schema(&context.db_schema, None).await?;
+    let router = AuthRouter::with_async_endpoints(
+        context,
+        Vec::new(),
+        core_auth_async_endpoints(adapter.clone()),
+    )?;
+
+    let email = format!("additional-{pg_schema}@example.com");
+    let sign_up = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            &format!(r#"{{"name":"Ada","email":"{email}","password":"secret123","role":"admin"}}"#),
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(sign_up.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(sign_up.body())?;
+    assert_eq!(body["user"]["role"], "admin");
+    assert_eq!(body["user"]["timezone"], "UTC");
+    assert!(body["user"]["nickname"].is_null());
+
+    let record = adapter
+        .find_one(FindOne::new("user").where_clause(Where::new("email", DbValue::String(email))))
+        .await?
+        .ok_or("missing user")?;
+    assert_eq!(
+        record.get("role"),
+        Some(&DbValue::String("admin".to_owned()))
+    );
+    assert_eq!(
+        record.get("timezone"),
+        Some(&DbValue::String("UTC".to_owned()))
+    );
+    assert_eq!(record.get("nickname"), Some(&DbValue::Null));
+    Ok(())
+}
+
+#[tokio::test]
 async fn deadpool_postgres_adapter_supports_password_reset_verifications(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(adapter().await?);
@@ -1303,6 +1361,36 @@ fn router(adapter: Arc<DeadpoolPostgresAdapter>) -> Result<AuthRouter, OpenAuthE
         ..OpenAuthOptions::default()
     })?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
+}
+
+fn options_with_additional_user_fields() -> OpenAuthOptions {
+    OpenAuthOptions {
+        secret: Some(secret().to_owned()),
+        advanced: AdvancedOptions {
+            disable_csrf_check: true,
+            disable_origin_check: true,
+            ..AdvancedOptions::default()
+        },
+        user: UserOptions {
+            additional_fields: BTreeMap::from([
+                (
+                    "role".to_owned(),
+                    UserAdditionalField::new(DbFieldType::String),
+                ),
+                (
+                    "nickname".to_owned(),
+                    UserAdditionalField::new(DbFieldType::String).optional(),
+                ),
+                (
+                    "timezone".to_owned(),
+                    UserAdditionalField::new(DbFieldType::String)
+                        .default_value(DbValue::String("UTC".to_owned())),
+                ),
+            ]),
+            ..UserOptions::default()
+        },
+        ..OpenAuthOptions::default()
+    }
 }
 
 fn json_request(
