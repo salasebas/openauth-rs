@@ -50,19 +50,24 @@ The current workspace packages must be published in this order:
    `openauth-social-providers`.
 5. `openauth-stripe` — depends on `openauth-core`.
 6. `openauth-saml` — depends on `openauth-core`.
-7. `openauth-scim` — depends on `openauth-core`.
-8. `openauth-i18n` — depends on `openauth-core`.
-9. `openauth-plugins` — depends on `openauth-core`, `openauth-oauth`, and
-   `openauth-social-providers`.
-10. `openauth-sqlx` — depends on `openauth-core`.
-11. `openauth-telemetry` — depends on `openauth-core`.
-12. `openauth-tokio-postgres` — depends on `openauth-core`.
-13. `openauth-deadpool-postgres` — depends on `openauth-core` and
+7. `openauth-i18n` — depends on `openauth-core`.
+8. `openauth-sqlx` — depends on `openauth-core`.
+9. `openauth-telemetry` — depends on `openauth-core`.
+10. `openauth-tokio-postgres` — depends on `openauth-core`.
+11. `openauth-deadpool-postgres` — depends on `openauth-core` and
     `openauth-tokio-postgres`.
-14. `openauth-passkey` — depends on `openauth-core`.
-15. `openauth-redis` — depends on `openauth-core`.
-16. `openauth-sso` — depends on `openauth-core`, `openauth-oauth`,
-    `openauth-oidc`, and `openauth-saml`.
+12. `openauth-redis` — depends on `openauth-core`.
+13. `openauth-plugins` — depends on `openauth-core`, `openauth-oauth`, and
+    `openauth-social-providers`; publish verification also uses
+    `openauth-redis` and `openauth-sqlx`.
+14. `openauth-passkey` — depends on `openauth-core`; publish verification also
+    uses `openauth-sqlx`.
+15. `openauth-sso` — depends on `openauth-core`, `openauth-oauth`,
+    `openauth-oidc`, and `openauth-saml`; publish verification also uses
+    `openauth-sqlx`.
+16. `openauth-scim` — depends on `openauth-core`; publish verification also
+    uses `openauth-deadpool-postgres`, `openauth-plugins`, `openauth-sqlx`, and
+    `openauth-tokio-postgres`.
 17. `openauth-oauth-provider` — depends on `openauth-core` and
     `openauth-plugins`.
 18. `openauth` — depends on `openauth-core`,
