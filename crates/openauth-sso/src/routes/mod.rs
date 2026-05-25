@@ -17,8 +17,10 @@ mod sign_in;
 mod slo;
 mod support;
 
+#[cfg(feature = "saml")]
 use http::Method;
 use openauth_core::api::AsyncAuthEndpoint;
+#[cfg(feature = "saml")]
 use serde_json::json;
 
 #[cfg(feature = "saml")]
@@ -28,6 +30,7 @@ use crate::options::SsoOptions;
 use crate::saml_impl::security::{validate_saml_config_algorithms_with_policy, SamlSecurityError};
 #[cfg(feature = "saml")]
 use crate::saml_impl::signature::SamlSignatureValidationError;
+#[cfg(feature = "saml")]
 use crate::utils;
 
 pub fn endpoints(options: Arc<SsoOptions>) -> Vec<AsyncAuthEndpoint> {

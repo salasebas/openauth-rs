@@ -92,6 +92,13 @@ impl<'a> SsoStateStore<'a> {
             })
     }
 
+    #[cfg_attr(
+        not(feature = "saml"),
+        expect(
+            dead_code,
+            reason = "SSO state deletion is used by SAML session cleanup"
+        )
+    )]
     pub async fn delete(&self, identifier: &str) -> Result<(), OpenAuthError> {
         if let Some(storage) = &self.secondary_storage {
             return storage.delete(identifier).await;

@@ -33,6 +33,7 @@ pub(super) async fn register_oidc_provider(
     Ok(())
 }
 
+#[cfg(feature = "saml")]
 pub(super) async fn register_saml_provider(
     router: &openauth_core::api::AuthRouter,
     cookie: &str,
@@ -61,6 +62,7 @@ pub(super) async fn register_saml_provider(
     Ok(())
 }
 
+#[cfg(feature = "saml")]
 pub(super) async fn register_saml_provider_allowing_unsigned_assertions(
     router: &openauth_core::api::AuthRouter,
     cookie: &str,
@@ -89,6 +91,7 @@ pub(super) async fn register_saml_provider_allowing_unsigned_assertions(
     Ok(())
 }
 
+#[cfg(feature = "saml")]
 pub(super) async fn register_saml_provider_with_post_single_logout_service(
     router: &openauth_core::api::AuthRouter,
     cookie: &str,
@@ -123,6 +126,7 @@ pub(super) async fn register_saml_provider_with_post_single_logout_service(
     Ok(())
 }
 
+#[cfg(feature = "saml")]
 pub(super) async fn seed_saml_provider_record(
     adapter: &MemoryAdapter,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -332,6 +336,7 @@ pub(super) fn default_oidc_sso_options_requiring_discovery(base_url: &str) -> Ss
     }
 }
 
+#[cfg(feature = "saml")]
 pub(super) fn default_saml_sso_options() -> SsoOptions {
     SsoOptions {
         default_sso: vec![SsoProvider {
@@ -404,6 +409,7 @@ pub(super) async fn seed_runtime_discovery_oidc_provider(
     Ok(())
 }
 
+#[cfg(feature = "saml")]
 pub(super) async fn saml_sign_in_relay_state(
     router: &openauth_core::api::AuthRouter,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -422,6 +428,7 @@ pub(super) async fn saml_sign_in_relay_state(
         .ok_or_else(|| "missing RelayState".into())
 }
 
+#[cfg(feature = "saml")]
 pub(super) async fn post_saml_acs(
     router: &openauth_core::api::AuthRouter,
     saml_response: &str,
@@ -441,6 +448,7 @@ pub(super) async fn post_saml_acs(
         .await?)
 }
 
+#[cfg(feature = "saml")]
 pub(super) fn set_cookie_header(
     response: &http::Response<Vec<u8>>,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -458,6 +466,7 @@ pub(super) fn set_cookie_header(
     Ok(cookies.join("; "))
 }
 
+#[cfg(feature = "saml")]
 pub(super) fn inflate_redirect_binding(value: &str) -> Result<String, Box<dyn std::error::Error>> {
     let bytes = base64::engine::general_purpose::STANDARD.decode(value.as_bytes())?;
     let mut decoder = DeflateDecoder::new(bytes.as_slice());
@@ -466,6 +475,7 @@ pub(super) fn inflate_redirect_binding(value: &str) -> Result<String, Box<dyn st
     Ok(xml)
 }
 
+#[cfg(feature = "saml")]
 pub(super) fn logout_request_id_from_location(
     location: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -482,6 +492,7 @@ pub(super) fn logout_request_id_from_location(
         .ok_or_else(|| "missing LogoutRequest ID".into())
 }
 
+#[cfg(feature = "saml")]
 pub(super) fn logout_response_xml(
     in_response_to: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -496,6 +507,7 @@ pub(super) fn logout_response_xml(
     Ok(base64::engine::general_purpose::STANDARD.encode(xml.as_bytes()))
 }
 
+#[cfg(feature = "saml")]
 pub(super) fn logout_request_xml(id: &str) -> Result<String, Box<dyn std::error::Error>> {
     let issue_instant =
         time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?;
@@ -509,6 +521,7 @@ pub(super) fn logout_request_xml(id: &str) -> Result<String, Box<dyn std::error:
     Ok(base64::engine::general_purpose::STANDARD.encode(xml.as_bytes()))
 }
 
+#[cfg(feature = "saml")]
 pub(super) fn valid_saml_response(
     in_response_to: &str,
     assertion_id: &str,
@@ -546,6 +559,7 @@ pub(super) fn valid_saml_response(
     Ok(base64::engine::general_purpose::STANDARD.encode(xml.as_bytes()))
 }
 
+#[cfg(feature = "saml")]
 pub(super) fn encrypted_saml_response(
     in_response_to: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -563,6 +577,7 @@ pub(super) fn encrypted_saml_response(
     Ok(base64::engine::general_purpose::STANDARD.encode(xml.as_bytes()))
 }
 
+#[cfg(feature = "saml")]
 pub(super) fn signed_marker_saml_response(
     in_response_to: &str,
     assertion_id: &str,
@@ -577,6 +592,7 @@ pub(super) fn signed_marker_saml_response(
     Ok(base64::engine::general_purpose::STANDARD.encode(signed.as_bytes()))
 }
 
+#[cfg(feature = "saml")]
 pub(super) fn tamper_base64_xml(
     encoded: &str,
     from: &str,

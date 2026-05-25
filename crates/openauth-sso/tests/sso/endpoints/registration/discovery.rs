@@ -57,6 +57,10 @@ async fn register_discovers_oidc_endpoints_when_skip_discovery_is_false(
         body["oidcConfig"]["introspectionEndpoint"],
         format!("{}/introspection", oidc.base_url)
     );
+    assert!(
+        body["oidcConfig"]["scopes"].is_null(),
+        "discovered scopes_supported must not become configured request scopes"
+    );
 
     let records = adapter.records("ssoProvider").await;
     let Some(DbValue::String(config)) = records[0].get("oidcConfig") else {
@@ -79,6 +83,10 @@ async fn register_discovers_oidc_endpoints_when_skip_discovery_is_false(
         oidc.base_url
     )));
     assert!(config.contains(r#""tokenEndpointAuthentication":"client_secret_basic""#));
+    assert!(
+        !config.contains(r#""scopes":"#),
+        "stored OIDC config should preserve only explicitly configured scopes"
+    );
 
     Ok(())
 }
