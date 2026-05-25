@@ -3,13 +3,19 @@ use std::sync::Arc;
 
 use http::{Method, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
-use openauth_core::context::create_auth_context_with_adapter;
-use openauth_core::db::{DbValue, MemoryAdapter};
+use openauth_core::context::{create_auth_context_with_adapter, AuthContext};
+use openauth_core::cookies::{sign_cookie_value, verify_cookie_value};
+use openauth_core::db::{DbRecord, DbValue, MemoryAdapter, Session};
 use openauth_core::options::OpenAuthOptions;
+use openauth_core::session::{CreateSessionInput, DbSessionStore};
 use openauth_plugins::admin::{admin, AdminOptions, PermissionMap, Role};
 use serde_json::json;
+use time::{Duration, OffsetDateTime};
 
-use super::{create_user, json_body, request, secret, session_cookie, set_cookie_values, Fixture};
+use super::{
+    cookie_header_from_response, create_user, json_body, request, secret, session_cookie,
+    set_cookie_values, Fixture,
+};
 
 #[tokio::test]
 async fn create_user_requires_admin_session_for_http_request(
@@ -373,6 +379,90 @@ async fn core_list_sessions_filters_impersonated_sessions() -> Result<(), Box<dy
 }
 
 #[tokio::test]
+async fn stop_impersonating_rejects_admin_cookie_for_different_user(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Fixture { context, router } = super::fixture()?;
+    let admin_a = create_user(&context, "admin-a-stop@example.com", "admin").await?;
+    let admin_b = create_user(&context, "admin-b-stop@example.com", "admin").await?;
+    let target = create_user(&context, "target-stop@example.com", "user").await?;
+    let admin_b_session = create_admin_test_session(&context, &admin_b.id, None).await?;
+    let impersonated_session =
+        create_admin_test_session(&context, &target.id, Some(&admin_a.id)).await?;
+    let cookie = format!(
+        "{}; {}",
+        signed_session_cookie(&context, &impersonated_session.token)?,
+        signed_admin_session_cookie(&context, &admin_b_session.token, None)?
+    );
+
+    let response = router
+        .handle_async(request(
+            Method::POST,
+            "/admin/stop-impersonating",
+            None,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!set_cookie_values(&response)
+        .iter()
+        .any(|cookie| cookie.starts_with(&context.auth_cookies.session_token.name)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn impersonation_preserves_dont_remember_cookie_state(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Fixture { context, router } = super::fixture()?;
+    let admin = create_user(&context, "admin-dont-remember@example.com", "admin").await?;
+    let target = create_user(&context, "target-dont-remember@example.com", "user").await?;
+    let admin_session = create_admin_test_session(&context, &admin.id, None).await?;
+    let admin_cookie = format!(
+        "{}; {}={}",
+        signed_session_cookie(&context, &admin_session.token)?,
+        context.auth_cookies.dont_remember_token.name,
+        sign_cookie_value("true", &context.secret)?
+    );
+
+    let impersonated = router
+        .handle_async(request(
+            Method::POST,
+            "/admin/impersonate-user",
+            Some(json!({ "userId": target.id })),
+            Some(&admin_cookie),
+        )?)
+        .await?;
+
+    assert_eq!(impersonated.status(), StatusCode::OK);
+    let admin_cookie_value = set_cookie_value(&impersonated, "better-auth.admin_session")
+        .ok_or("missing admin session cookie")?;
+    let expected_admin_cookie = format!("{}:true", admin_session.token);
+    assert_eq!(
+        verify_cookie_value(&admin_cookie_value, &context.secret)?,
+        Some(expected_admin_cookie)
+    );
+
+    let stop = router
+        .handle_async(request(
+            Method::POST,
+            "/admin/stop-impersonating",
+            None,
+            Some(&cookie_header_from_response(&impersonated)),
+        )?)
+        .await?;
+
+    assert_eq!(stop.status(), StatusCode::OK);
+    let restored_dont_remember =
+        set_cookie_value(&stop, &context.auth_cookies.dont_remember_token.name)
+            .ok_or("missing restored dont-remember cookie")?;
+    assert_eq!(
+        verify_cookie_value(&restored_dont_remember, &context.secret)?,
+        Some("true".to_owned())
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn set_user_password_rejects_invalid_lengths_and_empty_fields(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Fixture { context, router } = super::fixture()?;
@@ -448,4 +538,58 @@ fn admin_role() -> Role {
             vec!["list".to_owned(), "revoke".to_owned(), "delete".to_owned()],
         ),
     ]))
+}
+
+async fn create_admin_test_session(
+    context: &AuthContext,
+    user_id: &str,
+    impersonated_by: Option<&str>,
+) -> Result<Session, Box<dyn std::error::Error>> {
+    let adapter = context.adapter().ok_or("missing adapter")?;
+    let mut input =
+        CreateSessionInput::new(user_id, OffsetDateTime::now_utc() + Duration::hours(1));
+    if let Some(impersonated_by) = impersonated_by {
+        input = input.additional_fields(DbRecord::from([(
+            "impersonated_by".to_owned(),
+            DbValue::String(impersonated_by.to_owned()),
+        )]));
+    }
+    Ok(DbSessionStore::new(adapter.as_ref())
+        .create_session(input)
+        .await?)
+}
+
+fn signed_session_cookie(
+    context: &AuthContext,
+    token: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(format!(
+        "{}={}",
+        context.auth_cookies.session_token.name,
+        sign_cookie_value(token, &context.secret)?
+    ))
+}
+
+fn signed_admin_session_cookie(
+    context: &AuthContext,
+    token: &str,
+    dont_remember: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(format!(
+        "better-auth.admin_session={}",
+        sign_cookie_value(
+            &format!("{}:{}", token, dont_remember.unwrap_or_default()),
+            &context.secret,
+        )?
+    ))
+}
+
+fn set_cookie_value(response: &http::Response<Vec<u8>>, name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    set_cookie_values(response).into_iter().find_map(|cookie| {
+        cookie
+            .strip_prefix(&prefix)
+            .and_then(|value| value.split(';').next())
+            .map(str::to_owned)
+    })
 }

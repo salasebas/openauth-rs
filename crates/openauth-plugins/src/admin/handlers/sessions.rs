@@ -7,7 +7,8 @@ use time::{Duration, OffsetDateTime};
 
 use crate::admin::access::has_permission;
 use crate::admin::cookies::{
-    cookie_header, expire_admin_cookie, read_admin_cookie, session_cookie, set_admin_cookie,
+    cookie_header, expire_admin_cookie, read_admin_cookie, read_dont_remember_cookie,
+    session_cookie, session_cookie_with_dont_remember, set_admin_cookie,
 };
 use crate::admin::errors;
 use crate::admin::models::{RevokeSessionBody, UserIdBody};
@@ -82,11 +83,12 @@ pub async fn impersonate_user(
     let session = store
         .create_session(&target.id, expires_at, Some(admin.id.clone()))
         .await?;
-    let dont_remember = None;
+    let header = cookie_header(&request);
+    let dont_remember = read_dont_remember_cookie(context, &header)?;
     let mut cookies = vec![set_admin_cookie(
         context,
         &admin_session.token,
-        dont_remember,
+        dont_remember.as_deref(),
     )?];
     cookies.extend(session_cookie(context, &session.token)?);
     response::json_with_cookies(
@@ -103,17 +105,17 @@ pub async fn stop_impersonating(
     let Some((session, _user)) = current_admin(context, &request).await? else {
         return errors::unauthorized();
     };
-    if session.impersonated_by.is_none() {
+    let Some(impersonated_by) = session.impersonated_by.as_deref() else {
         return errors::error_response(
             StatusCode::BAD_REQUEST,
             "BAD_REQUEST",
             "You are not impersonating anyone",
         );
-    }
+    };
     let adapter = require_adapter(context)?;
     let store = AdminStore::new(adapter.as_ref());
     let header = cookie_header(&request);
-    let Some((admin_token, _dont_remember)) = read_admin_cookie(context, &header)? else {
+    let Some((admin_token, dont_remember)) = read_admin_cookie(context, &header)? else {
         return errors::error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "ADMIN_SESSION_NOT_FOUND",
@@ -127,8 +129,16 @@ pub async fn stop_impersonating(
             "Failed to find admin session",
         );
     };
+    if admin_session.user_id != impersonated_by {
+        return errors::error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "ADMIN_SESSION_NOT_FOUND",
+            "Failed to find admin session",
+        );
+    }
     store.delete_session(&session.token).await?;
-    let mut cookies = session_cookie(context, &admin_session.token)?;
+    let mut cookies =
+        session_cookie_with_dont_remember(context, &admin_session.token, dont_remember.is_some())?;
     cookies.push(expire_admin_cookie(context));
     response::json_with_cookies(
         StatusCode::OK,

@@ -67,12 +67,36 @@ pub fn read_admin_cookie(
     )))
 }
 
+pub fn read_dont_remember_cookie(
+    context: &AuthContext,
+    cookie_header: &str,
+) -> Result<Option<String>, OpenAuthError> {
+    let Some(value) = parse_cookies(cookie_header)
+        .get(&context.auth_cookies.dont_remember_token.name)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    verify_cookie_value(&value, &context.secret)
+}
+
 pub fn session_cookie(context: &AuthContext, token: &str) -> Result<Vec<Cookie>, OpenAuthError> {
+    session_cookie_with_dont_remember(context, token, false)
+}
+
+pub fn session_cookie_with_dont_remember(
+    context: &AuthContext,
+    token: &str,
+    dont_remember: bool,
+) -> Result<Vec<Cookie>, OpenAuthError> {
     set_session_cookie(
         &context.auth_cookies,
         &context.secret,
         token,
-        SessionCookieOptions::default(),
+        SessionCookieOptions {
+            dont_remember,
+            ..SessionCookieOptions::default()
+        },
     )
 }
 
