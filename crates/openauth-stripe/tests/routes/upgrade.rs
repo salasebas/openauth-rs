@@ -81,6 +81,12 @@ async fn subscription_upgrade_creates_local_subscription_and_checkout_session(
         .contains("line_items%5B0%5D%5Bprice%5D=price_pro"));
     assert!(checkout_request
         .body
+        .contains("customer_update%5Bname%5D=auto"));
+    assert!(checkout_request
+        .body
+        .contains("customer_update%5Baddress%5D=auto"));
+    assert!(checkout_request
+        .body
         .contains("subscription_data%5Bmetadata%5D%5BuserId%5D=user_1"));
     assert!(checkout_request.body.contains(&format!(
         "subscription_data%5Bmetadata%5D%5BsubscriptionId%5D={subscription_id}"
@@ -156,6 +162,39 @@ async fn subscription_upgrade_requires_verified_email_when_configured(
 }
 
 #[tokio::test]
+async fn subscription_upgrade_maps_dynamic_plan_provider_failure(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CaptureTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport("sk_test", transport),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled_dynamic(|| {
+        Box::pin(async { Err::<Vec<StripePlan>, _>(OpenAuthError::Api("plans failed".to_owned())) })
+    }));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, _adapter, cookie_header) = authenticated_context().await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(br#"{"plan":"pro","successUrl":"/ok","cancelUrl":"/pricing"}"#.to_vec())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "FAILED_TO_FETCH_PLANS");
+    Ok(())
+}
+
+#[tokio::test]
 async fn subscription_upgrade_rejects_same_active_plan_and_interval(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let transport = Arc::new(CaptureTransport::default());
@@ -183,6 +222,55 @@ async fn subscription_upgrade_rejects_same_active_plan_and_interval(
         .requests()?
         .iter()
         .all(|request| request.path != "/v1/checkout/sessions"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_upgrade_creates_checkout_when_local_active_has_no_stripe_subscription(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CaptureTransport::default());
+    let plugin = stripe(stripe_options(Arc::clone(&transport)));
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    openauth_core::db::DbAdapter::update(
+        &adapter,
+        openauth_core::db::Update::new("user")
+            .where_clause(openauth_core::db::Where::new(
+                "id",
+                DbValue::String("user_1".to_owned()),
+            ))
+            .data("stripe_customer_id", DbValue::String("cus_123".to_owned())),
+    )
+    .await?;
+    create_subscription_record(&adapter, "sub_local", "user_1", "active", Some("cus_123")).await?;
+    openauth_core::db::DbAdapter::update(
+        &adapter,
+        openauth_core::db::Update::new("subscription")
+            .where_clause(openauth_core::db::Where::new(
+                "id",
+                DbValue::String("sub_local".to_owned()),
+            ))
+            .data("stripe_subscription_id", DbValue::Null),
+    )
+    .await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(br#"{"plan":"pro","successUrl":"/ok","cancelUrl":"/pricing"}"#.to_vec())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(transport
+        .requests()?
+        .iter()
+        .any(|request| request.path == "/v1/checkout/sessions"));
     Ok(())
 }
 
@@ -890,6 +978,47 @@ async fn subscription_upgrade_uses_lookup_key_locale_trial_success_wrapper_and_c
     assert!(checkout_request.body.contains(
         "success_url=http%3A%2F%2Flocalhost%3A3000%2Fsubscription%2Fsuccess%3FcallbackURL%3D%252Fdone%26checkoutSessionId%3D%7BCHECKOUT_SESSION_ID%7D"
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_upgrade_resolves_dynamic_plan_provider(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CaptureTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled_dynamic(|| {
+        Box::pin(async { Ok(vec![StripePlan::new("pro").price_id("price_pro")]) })
+    }));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, _adapter, cookie_header) = authenticated_context().await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(br#"{"plan":"pro","successUrl":"/ok","cancelUrl":"/pricing"}"#.to_vec())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = transport.requests()?;
+    assert!(requests.iter().any(|request| {
+        request.path == "/v1/checkout/sessions"
+            && request
+                .body
+                .contains("line_items%5B0%5D%5Bprice%5D=price_pro")
+    }));
     Ok(())
 }
 

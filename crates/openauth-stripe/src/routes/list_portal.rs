@@ -11,8 +11,8 @@ use time::OffsetDateTime;
 use super::reference::{authorize_reference_for_customer_type, ReferenceResolutionInput};
 use super::support::{
     active_subscription_customer, active_subscription_records, db_string, error_response,
-    json_response, query_param, redirect_response, require_session, subscription_record_to_json,
-    validate_redirect_url,
+    json_response, query_param, redirect_response, require_session,
+    resolve_subscription_options_for_endpoint, subscription_record_to_json, validate_redirect_url,
 };
 use crate::errors::StripeErrorCode;
 use crate::metadata::SubscriptionMetadata;
@@ -34,6 +34,11 @@ pub fn list_active_subscriptions(options: StripeOptions) -> openauth_core::api::
                 let subscription_options = options.subscription.as_ref().ok_or_else(|| {
                     OpenAuthError::InvalidConfig("stripe subscriptions are not enabled".to_owned())
                 })?;
+                let subscription_options =
+                    match resolve_subscription_options_for_endpoint(subscription_options).await? {
+                        Ok(subscription_options) => subscription_options,
+                        Err(response) => return Ok(response),
+                    };
                 let Some(adapter) = context.adapter() else {
                     return json_response(StatusCode::OK, &Vec::<Value>::new());
                 };
@@ -43,8 +48,9 @@ pub fn list_active_subscriptions(options: StripeOptions) -> openauth_core::api::
                         context,
                         adapter: adapter.as_ref(),
                         options: &options,
-                        subscription_options,
-                        user_id: &current_session.user.id,
+                        subscription_options: &subscription_options,
+                        user: &current_session.user,
+                        session: &current_session.session,
                         session_token: &current_session.session.token,
                         explicit_reference_id: query_param(&request, "referenceId"),
                         customer_type: customer_type.as_deref(),
@@ -59,7 +65,7 @@ pub fn list_active_subscriptions(options: StripeOptions) -> openauth_core::api::
                 let subscriptions = records
                     .into_iter()
                     .map(|record| {
-                        subscription_record_with_plan_metadata(record, subscription_options)
+                        subscription_record_with_plan_metadata(record, &subscription_options)
                     })
                     .collect::<Vec<_>>();
                 json_response(StatusCode::OK, &subscriptions)
@@ -133,6 +139,11 @@ pub fn subscription_success(options: StripeOptions) -> openauth_core::api::Async
                 let Some(subscription_options) = options.subscription.as_ref() else {
                     return redirect_response(&callback);
                 };
+                let subscription_options =
+                    match resolve_subscription_options_for_endpoint(subscription_options).await? {
+                        Ok(subscription_options) => subscription_options,
+                        Err(response) => return Ok(response),
+                    };
                 let Ok(checkout_session) = options
                     .stripe_client
                     .retrieve_checkout_session(&checkout_session_id)
@@ -201,7 +212,7 @@ pub fn subscription_success(options: StripeOptions) -> openauth_core::api::Async
                     return redirect_response(&callback);
                 };
                 let Some(resolved) =
-                    resolve_plan_item(subscription_options, &stripe_subscription.items.data)
+                    resolve_plan_item(&subscription_options, &stripe_subscription.items.data)
                 else {
                     return redirect_response(&callback);
                 };
@@ -333,6 +344,11 @@ pub fn create_billing_portal(options: StripeOptions) -> openauth_core::api::Asyn
                 let subscription_options = options.subscription.as_ref().ok_or_else(|| {
                     OpenAuthError::InvalidConfig("stripe subscriptions are not enabled".to_owned())
                 })?;
+                let subscription_options =
+                    match resolve_subscription_options_for_endpoint(subscription_options).await? {
+                        Ok(subscription_options) => subscription_options,
+                        Err(response) => return Ok(response),
+                    };
                 let customer_type = body
                     .get("customerType")
                     .and_then(Value::as_str)
@@ -348,8 +364,9 @@ pub fn create_billing_portal(options: StripeOptions) -> openauth_core::api::Asyn
                         context,
                         adapter: adapter.as_ref(),
                         options: &options,
-                        subscription_options,
-                        user_id: &current_session.user.id,
+                        subscription_options: &subscription_options,
+                        user: &current_session.user,
+                        session: &current_session.session,
                         session_token: &current_session.session.token,
                         explicit_reference_id: body
                             .get("referenceId")
@@ -405,11 +422,19 @@ pub fn create_billing_portal(options: StripeOptions) -> openauth_core::api::Asyn
                         map.insert("locale".to_owned(), Value::String(locale.to_owned()));
                     }
                 }
-                let portal = options
+                let portal = match options
                     .stripe_client
                     .create_billing_portal_session(params)
                     .await
-                    .map_err(|error| OpenAuthError::Api(error.to_string()))?;
+                {
+                    Ok(portal) => portal,
+                    Err(_) => {
+                        return error_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            StripeErrorCode::UnableToCreateBillingPortal,
+                        );
+                    }
+                };
                 let mut response = portal;
                 if let Value::Object(map) = &mut response {
                     map.insert("redirect".to_owned(), Value::Bool(!disable_redirect));

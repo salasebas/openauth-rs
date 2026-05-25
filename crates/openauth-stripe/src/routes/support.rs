@@ -9,6 +9,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::errors::StripeErrorCode;
+use crate::options::SubscriptionOptions;
 
 pub(super) async fn require_session(
     context: &AuthContext,
@@ -38,6 +39,18 @@ pub(super) async fn require_session(
     Ok(Some(
         openauth_core::context::request_state::CurrentSession { session, user },
     ))
+}
+
+pub(super) async fn resolve_subscription_options_for_endpoint(
+    subscription_options: &SubscriptionOptions,
+) -> Result<Result<SubscriptionOptions, ApiResponse>, OpenAuthError> {
+    match subscription_options.resolve_plans().await {
+        Ok(subscription_options) => Ok(Ok(subscription_options)),
+        Err(_) => Ok(Err(error_response(
+            StatusCode::BAD_REQUEST,
+            StripeErrorCode::FailedToFetchPlans,
+        )?)),
+    }
 }
 
 pub(super) async fn find_subscription_for_reference(

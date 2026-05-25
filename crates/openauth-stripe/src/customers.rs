@@ -327,16 +327,15 @@ async fn stored_user_customer_id(
 
 async fn find_existing_user_customer(
     stripe_client: &StripeClient,
-    user_id: &str,
+    _user_id: &str,
     email: &str,
 ) -> Result<Option<Value>, OpenAuthError> {
-    let escaped_user_id = escape_stripe_search_value(user_id);
-    let query = format!(
-        "metadata[\"userId\"]:\"{escaped_user_id}\" AND metadata[\"customerType\"]:\"user\""
-    );
+    let escaped_email = escape_stripe_search_value(email);
+    let query =
+        format!("email:\"{escaped_email}\" AND -metadata[\"customerType\"]:\"organization\"");
     match stripe_client.search_customers(&query).await {
         Ok(search_result) => {
-            if let Some(customer) = find_user_customer(&search_result, user_id) {
+            if let Some(customer) = find_user_customer(&search_result) {
                 return Ok(Some(customer));
             }
         }
@@ -348,7 +347,7 @@ async fn find_existing_user_customer(
                 }))
                 .await
                 .map_err(|error| OpenAuthError::Api(error.to_string()))?;
-            if let Some(customer) = find_user_customer(&list_result, user_id) {
+            if let Some(customer) = find_user_customer(&list_result) {
                 return Ok(Some(customer));
             }
         }
@@ -356,20 +355,18 @@ async fn find_existing_user_customer(
     Ok(None)
 }
 
-fn find_user_customer(customers: &Value, user_id: &str) -> Option<Value> {
+fn find_user_customer(customers: &Value) -> Option<Value> {
     customers
         .get("data")?
         .as_array()?
         .iter()
         .find_map(|customer| {
-            let metadata = customer.get("metadata")?;
-            let matches_user = metadata.get("userId").and_then(Value::as_str) == Some(user_id);
-            let matches_type = metadata.get("customerType").and_then(Value::as_str) == Some("user");
-            if matches_user && matches_type {
-                Some(customer.clone())
-            } else {
-                None
-            }
+            let is_organization = customer
+                .get("metadata")
+                .and_then(|metadata| metadata.get("customerType"))
+                .and_then(Value::as_str)
+                == Some("organization");
+            (!is_organization).then(|| customer.clone())
         })
 }
 

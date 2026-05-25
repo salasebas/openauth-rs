@@ -1,6 +1,6 @@
 use http::StatusCode;
 use openauth_core::context::AuthContext;
-use openauth_core::db::{DbAdapter, DbValue, FindOne, Where};
+use openauth_core::db::{DbAdapter, DbValue, FindOne, Session, User, Where};
 use openauth_core::error::OpenAuthError;
 
 use crate::errors::StripeErrorCode;
@@ -18,7 +18,8 @@ pub(super) struct ReferenceResolutionInput<'a> {
     pub adapter: &'a dyn DbAdapter,
     pub options: &'a StripeOptions,
     pub subscription_options: &'a SubscriptionOptions,
-    pub user_id: &'a str,
+    pub user: &'a User,
+    pub session: &'a Session,
     pub session_token: &'a str,
     pub explicit_reference_id: Option<String>,
     pub customer_type: Option<&'a str>,
@@ -28,15 +29,16 @@ pub(super) struct ReferenceResolutionInput<'a> {
 pub(super) async fn authorize_reference(
     context: &AuthContext,
     subscription_options: &SubscriptionOptions,
-    user_id: &str,
+    user: &User,
+    session: &Session,
     explicit_reference_id: Option<String>,
     action: AuthorizeReferenceAction,
 ) -> Result<Result<String, ReferenceAuthorizationFailure>, OpenAuthError> {
     let Some(reference_id) = explicit_reference_id else {
-        return Ok(Ok(user_id.to_owned()));
+        return Ok(Ok(user.id.clone()));
     };
 
-    if reference_id == user_id {
+    if reference_id == user.id {
         return Ok(Ok(reference_id));
     }
 
@@ -49,7 +51,9 @@ pub(super) async fn authorize_reference(
 
     let authorized = authorize_reference(
         AuthorizeReferenceInput {
-            user_id: user_id.to_owned(),
+            user_id: user.id.clone(),
+            user: user.clone(),
+            session: session.clone(),
             reference_id: reference_id.clone(),
             action,
         },
@@ -75,7 +79,8 @@ pub(super) async fn authorize_reference_for_customer_type(
             authorize_reference(
                 input.context,
                 input.subscription_options,
-                input.user_id,
+                input.user,
+                input.session,
                 input.explicit_reference_id,
                 input.action,
             )
@@ -116,7 +121,8 @@ pub(super) async fn authorize_reference_for_customer_type(
             authorize_reference(
                 input.context,
                 input.subscription_options,
-                input.user_id,
+                input.user,
+                input.session,
                 Some(reference_id),
                 input.action,
             )

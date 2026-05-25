@@ -5,6 +5,7 @@ use openauth_core::plugin::PluginSchemaContribution;
 use crate::options::StripeOptions;
 
 pub fn schema_contributions(options: &StripeOptions) -> Vec<PluginSchemaContribution> {
+    let subscriptions_enabled = options.subscription.as_ref().is_some_and(|sub| sub.enabled);
     let mut contributions = vec![PluginSchemaContribution::field(
         "user",
         "stripeCustomerId",
@@ -17,13 +18,39 @@ pub fn schema_contributions(options: &StripeOptions) -> Vec<PluginSchemaContribu
             DbField::new("stripe_customer_id", DbFieldType::String).optional(),
         ));
     }
-    if options.subscription.as_ref().is_some_and(|sub| sub.enabled) {
+    let mut subscription_table = subscriptions_enabled.then(subscription_table);
+    let mut custom_contributions = Vec::new();
+    for contribution in &options.schema {
+        match contribution {
+            PluginSchemaContribution::Table {
+                logical_name,
+                table,
+            } if logical_name == "subscription" => {
+                if let Some(base_table) = subscription_table.as_mut() {
+                    merge_subscription_table(base_table, table);
+                }
+            }
+            PluginSchemaContribution::Field { table, .. }
+                if table == "subscription" && !subscriptions_enabled => {}
+            _ => custom_contributions.push(contribution.clone()),
+        }
+    }
+    if let Some(subscription_table) = subscription_table {
         contributions.push(PluginSchemaContribution::table(
             "subscription",
-            subscription_table(),
+            subscription_table,
         ));
     }
+    contributions.extend(custom_contributions);
     contributions
+}
+
+fn merge_subscription_table(base: &mut DbTable, custom: &DbTable) {
+    base.name = custom.name.clone();
+    base.order = custom.order.or(base.order);
+    for (logical_name, field) in &custom.fields {
+        base.fields.insert(logical_name.clone(), field.clone());
+    }
 }
 
 fn subscription_table() -> DbTable {

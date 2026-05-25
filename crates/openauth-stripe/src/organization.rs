@@ -232,6 +232,7 @@ async fn sync_subscription_seats(
     let Some(subscription_options) = options.subscription.as_ref() else {
         return Ok(());
     };
+    let subscription_options = subscription_options.resolve_plans().await?;
     let subscriptions = adapter
         .find_many(FindMany::new("subscription").where_clause(Where::new(
             "reference_id",
@@ -252,7 +253,7 @@ async fn sync_subscription_seats(
     let Some(plan_name) = record_string(&subscription, "plan") else {
         return Ok(());
     };
-    let Some(plan) = utils::get_plan_by_name(subscription_options, plan_name) else {
+    let Some(plan) = utils::get_plan_by_name(&subscription_options, plan_name) else {
         return Ok(());
     };
     let Some(seat_price_id) = plan.seat_price_id.as_deref() else {

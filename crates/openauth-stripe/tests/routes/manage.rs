@@ -166,6 +166,49 @@ impl StripeTransport for EmptySubscriptionListTransport {
     }
 }
 
+#[derive(Default)]
+struct FailingBillingPortalTransport {
+    requests: Mutex<Vec<StripeRequest>>,
+}
+
+impl FailingBillingPortalTransport {
+    fn requests(&self) -> Result<Vec<StripeRequest>, String> {
+        self.requests
+            .lock()
+            .map(|requests| requests.clone())
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl StripeTransport for FailingBillingPortalTransport {
+    fn send<'a>(&'a self, request: StripeRequest) -> StripeTransportFuture<'a> {
+        let response = if request.path == "/v1/billing_portal/sessions" {
+            StripeResponse {
+                status: 500,
+                body: json!({ "error": { "message": "portal unavailable" } }),
+            }
+        } else {
+            StripeResponse {
+                status: 200,
+                body: json!({ "id": "ok" }),
+            }
+        };
+        if let Err(error) = self
+            .requests
+            .lock()
+            .map(|mut requests| requests.push(request))
+        {
+            let message = error.to_string();
+            return Box::pin(async move {
+                Err(openauth_stripe::stripe_api::StripeApiError::Transport(
+                    message,
+                ))
+            });
+        }
+        Box::pin(async move { Ok(response) })
+    }
+}
+
 #[tokio::test]
 async fn restore_subscription_releases_active_schedule_and_clears_local_schedule(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -388,6 +431,110 @@ async fn restore_subscription_skips_release_for_inactive_schedule(
         .find(|record| record.get("id") == Some(&DbValue::String("sub_active".to_owned())))
         .ok_or("subscription")?;
     assert_eq!(subscription.get("stripe_schedule_id"), Some(&DbValue::Null));
+    Ok(())
+}
+
+#[tokio::test]
+async fn restore_subscription_rejects_without_pending_cancel_or_schedule(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CaptureTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![
+        StripePlan::new("pro").price_id("price_pro")
+    ]));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/restore")
+        .ok_or("restore endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    create_subscription_record(&adapter, "sub_active", "user_1", "active", Some("cus_123")).await?;
+    openauth_core::db::DbAdapter::update(
+        &adapter,
+        openauth_core::db::Update::new("subscription")
+            .where_clause(openauth_core::db::Where::new(
+                "id",
+                DbValue::String("sub_active".to_owned()),
+            ))
+            .data(
+                "stripe_subscription_id",
+                DbValue::String("stripe_sub_active".to_owned()),
+            ),
+    )
+    .await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/restore")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(br#"{"subscriptionId":"stripe_sub_active"}"#.to_vec())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "SUBSCRIPTION_NOT_PENDING_CHANGE");
+    assert!(!transport
+        .requests()?
+        .iter()
+        .any(|request| request.path.starts_with("/v1/")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn billing_portal_maps_stripe_failure_to_plugin_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(FailingBillingPortalTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![
+        StripePlan::new("pro").price_id("price_pro")
+    ]));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/billing-portal")
+        .ok_or("billing portal endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    openauth_core::db::DbAdapter::update(
+        &adapter,
+        openauth_core::db::Update::new("user")
+            .where_clause(openauth_core::db::Where::new(
+                "id",
+                DbValue::String("user_1".to_owned()),
+            ))
+            .data("stripe_customer_id", DbValue::String("cus_user".to_owned())),
+    )
+    .await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/billing-portal")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(br#"{"returnUrl":"/account"}"#.to_vec())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "UNABLE_TO_CREATE_BILLING_PORTAL");
+    assert!(transport
+        .requests()?
+        .iter()
+        .any(|request| request.path == "/v1/billing_portal/sessions"));
     Ok(())
 }
 

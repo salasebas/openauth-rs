@@ -2,6 +2,7 @@ use http::{Method, Request, StatusCode};
 use openauth_core::context::{create_auth_context_with_adapter, AuthContext};
 use openauth_core::cookies::{set_session_cookie, CookieOptions, SessionCookieOptions};
 use openauth_core::db::{Create, DbAdapter, DbRecord, DbValue, FindOne, MemoryAdapter, Where};
+use openauth_core::error::OpenAuthError;
 use openauth_core::options::OpenAuthOptions;
 use openauth_core::session::{CreateSessionInput, DbSessionStore};
 use openauth_core::user::{CreateUserInput, DbUserStore};
@@ -12,7 +13,7 @@ use openauth_stripe::stripe;
 use openauth_stripe::stripe_api::{
     StripeClient, StripeRequest, StripeResponse, StripeTransport, StripeTransportFuture,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -46,8 +47,10 @@ enum CustomerTransportMode {
     #[default]
     CreateCustomer,
     SearchFindsUserCustomer,
+    SearchFindsDashboardCustomer,
     SearchFailsListFindsUserCustomer,
     ExistingCustomerEmailDiffers,
+    CreateCustomerFails,
 }
 
 impl StripeTransport for CustomerTransport {
@@ -66,6 +69,20 @@ impl StripeTransport for CustomerTransport {
                             "id": "cus_search_user",
                             "object": "customer",
                             "metadata": { "userId": "user_1", "customerType": "user" }
+                        }]
+                    }),
+                }
+            }
+            (CustomerTransportMode::SearchFindsDashboardCustomer, "/v1/customers/search", _) => {
+                StripeResponse {
+                    status: 200,
+                    body: json!({
+                        "object": "search_result",
+                        "data": [{
+                            "id": "cus_dashboard",
+                            "object": "customer",
+                            "email": "ada@example.com",
+                            "metadata": {}
                         }]
                     }),
                 }
@@ -102,6 +119,12 @@ impl StripeTransport for CustomerTransport {
                 status: 200,
                 body: json!({ "object": "list", "data": [] }),
             },
+            (CustomerTransportMode::CreateCustomerFails, "/v1/customers", "POST") => {
+                StripeResponse {
+                    status: 400,
+                    body: json!({ "error": { "message": "create failed" } }),
+                }
+            }
             (_, "/v1/customers", _) => StripeResponse {
                 status: 200,
                 body: json!({ "id": "cus_created", "object": "customer" }),
@@ -324,6 +347,32 @@ async fn upgrade_reuses_customer_found_by_search() -> Result<(), Box<dyn std::er
 }
 
 #[tokio::test]
+async fn upgrade_reuses_dashboard_customer_found_by_email_search(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CustomerTransport::new(
+        CustomerTransportMode::SearchFindsDashboardCustomer,
+    ));
+    let (response, adapter, requests) = upgrade_with_transport(transport.clone()).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_user_customer(&adapter, "cus_dashboard").await?;
+    assert!(requests
+        .iter()
+        .any(|request| request.path == "/v1/customers/search"
+            && request.body.contains("email%3A%22ada%40example.com%22")
+            && request
+                .body
+                .contains("-metadata%5B%22customerType%22%5D%3A%22organization%22")));
+    assert!(!requests
+        .iter()
+        .any(|request| request.method == "POST" && request.path == "/v1/customers"));
+    assert!(requests.iter().any(|request| {
+        request.path == "/v1/checkout/sessions" && request.body.contains("customer=cus_dashboard")
+    }));
+    Ok(())
+}
+
+#[tokio::test]
 async fn linked_existing_customer_invokes_customer_create_hook(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let hook_calls = Arc::new(AtomicUsize::new(0));
@@ -395,6 +444,59 @@ async fn upgrade_falls_back_to_customer_list_and_ignores_org_customer(
         .ok_or("checkout request")?;
     assert!(checkout.body.contains("customer=cus_list_user"));
     assert_user_customer(&adapter, "cus_list_user").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn upgrade_maps_stripe_customer_create_failure_to_plugin_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CustomerTransport::new(
+        CustomerTransportMode::CreateCustomerFails,
+    ));
+    let (response, _adapter, requests) = upgrade_with_transport(Arc::clone(&transport)).await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_error_code(&response, "UNABLE_TO_CREATE_CUSTOMER")?;
+    assert!(requests
+        .iter()
+        .any(|request| request.method == "POST" && request.path == "/v1/customers"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn upgrade_maps_customer_create_params_failure_to_plugin_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CustomerTransport::default());
+    let client_transport: Arc<dyn StripeTransport> = transport.clone();
+    let plugin = stripe(
+        StripeOptions::new(
+            StripeClient::with_transport("sk_test", client_transport),
+            "whsec_test",
+        )
+        .get_customer_create_params(|_, _| {
+            Box::pin(async { Err(OpenAuthError::Api("callback failed".to_owned())) })
+        })
+        .subscription(SubscriptionOptions::enabled(vec![
+            StripePlan::new("pro").price_id("price_pro")
+        ])),
+    );
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, _adapter, cookie_header) = authenticated_context().await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(br#"{"plan":"pro","successUrl":"/ok","cancelUrl":"/pricing"}"#.to_vec())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_error_code(&response, "UNABLE_TO_CREATE_CUSTOMER")?;
     Ok(())
 }
 
@@ -484,6 +586,116 @@ async fn upgrade_creates_and_persists_organization_customer_before_checkout(
 }
 
 #[tokio::test]
+async fn organization_upgrade_maps_customer_create_failure_to_plugin_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CustomerTransport::new(
+        CustomerTransportMode::CreateCustomerFails,
+    ));
+    let client_transport: Arc<dyn StripeTransport> = transport.clone();
+    let plugin = stripe(
+        StripeOptions::new(
+            StripeClient::with_transport("sk_test", client_transport),
+            "whsec_test",
+        )
+        .organization(OrganizationStripeOptions::enabled())
+        .subscription(
+            SubscriptionOptions::enabled(vec![StripePlan::new("pro").price_id("price_pro")])
+                .authorize_reference(|input, _| {
+                    Box::pin(async move { Ok(input.reference_id == "org_1") })
+                }),
+        ),
+    );
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    adapter
+        .create(
+            Create::new("organization")
+                .data("id", DbValue::String("org_1".to_owned()))
+                .data("name", DbValue::String("Acme".to_owned()))
+                .data("slug", DbValue::String("acme".to_owned()))
+                .force_allow_id(),
+        )
+        .await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"customerType":"organization","referenceId":"org_1","plan":"pro","successUrl":"/ok","cancelUrl":"/pricing"}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_error_code(&response, "UNABLE_TO_CREATE_CUSTOMER")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn organization_upgrade_maps_customer_create_params_failure_to_plugin_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CustomerTransport::default());
+    let client_transport: Arc<dyn StripeTransport> = transport.clone();
+    let plugin = stripe(
+        StripeOptions::new(
+            StripeClient::with_transport("sk_test", client_transport),
+            "whsec_test",
+        )
+        .organization(
+            OrganizationStripeOptions::enabled().get_customer_create_params(|_, _| {
+                Box::pin(async { Err(OpenAuthError::Api("org callback failed".to_owned())) })
+            }),
+        )
+        .subscription(
+            SubscriptionOptions::enabled(vec![StripePlan::new("pro").price_id("price_pro")])
+                .authorize_reference(|input, _| {
+                    Box::pin(async move { Ok(input.reference_id == "org_1") })
+                }),
+        ),
+    );
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    adapter
+        .create(
+            Create::new("organization")
+                .data("id", DbValue::String("org_1".to_owned()))
+                .data("name", DbValue::String("Acme".to_owned()))
+                .data("slug", DbValue::String("acme".to_owned()))
+                .force_allow_id(),
+        )
+        .await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"customerType":"organization","referenceId":"org_1","plan":"pro","successUrl":"/ok","cancelUrl":"/pricing"}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_error_code(&response, "UNABLE_TO_CREATE_CUSTOMER")?;
+    assert!(!transport
+        .requests()?
+        .iter()
+        .any(|request| request.method == "POST" && request.path == "/v1/customers"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_customer_on_sign_up_creates_and_links_user_customer(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let transport = Arc::new(CustomerTransport::default());
@@ -523,6 +735,51 @@ async fn create_customer_on_sign_up_creates_and_links_user_customer(
         .iter()
         .any(|request| request.method == "POST" && request.path == "/v1/customers"));
     assert_user_customer(&adapter, "cus_created").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_customer_on_sign_up_reuses_list_fallback_customer(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CustomerTransport::new(
+        CustomerTransportMode::SearchFailsListFindsUserCustomer,
+    ));
+    let client_transport: Arc<dyn StripeTransport> = transport.clone();
+    let plugin = stripe(
+        StripeOptions::new(
+            StripeClient::with_transport("sk_test", client_transport),
+            "whsec_test",
+        )
+        .create_customer_on_sign_up(true),
+    );
+    let adapter = MemoryAdapter::new();
+    let adapter_arc: Arc<dyn DbAdapter> = Arc::new(adapter.clone());
+    let context = create_auth_context_with_adapter(
+        OpenAuthOptions {
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            plugins: vec![plugin],
+            ..OpenAuthOptions::default()
+        },
+        adapter_arc,
+    )?;
+    let hooked_adapter = context.adapter().ok_or("context adapter")?;
+
+    DbUserStore::new(hooked_adapter.as_ref())
+        .create_user(
+            CreateUserInput::new("Ada Lovelace", "ada@example.com")
+                .id("user_1")
+                .email_verified(true),
+        )
+        .await?;
+
+    let requests = transport.requests()?;
+    assert!(requests
+        .iter()
+        .any(|request| request.method == "GET" && request.path == "/v1/customers"));
+    assert!(!requests
+        .iter()
+        .any(|request| request.method == "POST" && request.path == "/v1/customers"));
+    assert_user_customer(&adapter, "cus_list_user").await?;
     Ok(())
 }
 
@@ -625,6 +882,15 @@ async fn assert_user_customer(
         stored_user.get("stripe_customer_id"),
         Some(&DbValue::String(customer_id.to_owned()))
     );
+    Ok(())
+}
+
+fn assert_error_code(
+    response: &http::Response<Vec<u8>>,
+    expected: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], expected);
     Ok(())
 }
 

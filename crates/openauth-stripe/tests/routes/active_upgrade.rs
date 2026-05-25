@@ -5,6 +5,191 @@ struct ActiveUpgradeTransport {
     requests: Mutex<Vec<StripeRequest>>,
     schedule: Option<Value>,
     include_seat_item: bool,
+    schedule_source: Option<&'static str>,
+    fail_billing_portal: bool,
+}
+
+#[derive(Default)]
+struct DuplicateLineItemTransport {
+    requests: Mutex<Vec<StripeRequest>>,
+}
+
+#[derive(Default)]
+struct StaleDestinationLineItemTransport {
+    requests: Mutex<Vec<StripeRequest>>,
+}
+
+impl StaleDestinationLineItemTransport {
+    fn requests(&self) -> Result<Vec<StripeRequest>, String> {
+        self.requests
+            .lock()
+            .map(|requests| requests.clone())
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl StripeTransport for StaleDestinationLineItemTransport {
+    fn send<'a>(&'a self, request: StripeRequest) -> StripeTransportFuture<'a> {
+        let response = match (request.path.as_str(), request.method.as_str()) {
+            ("/v1/subscriptions", _) => json!({
+                "object": "list",
+                "data": [{
+                    "id": "stripe_sub_active",
+                    "object": "subscription",
+                    "status": "active",
+                    "cancel_at_period_end": false,
+                    "items": {
+                        "data": [
+                            {
+                                "id": "si_base",
+                                "price": {
+                                    "id": "price_basic_base",
+                                    "object": "price",
+                                    "recurring": { "interval": "month", "usage_type": "licensed" }
+                                },
+                                "quantity": 1
+                            },
+                            {
+                                "id": "si_events",
+                                "price": {
+                                    "id": "price_basic_events",
+                                    "object": "price",
+                                    "recurring": { "interval": "month", "usage_type": "metered" }
+                                }
+                            },
+                            {
+                                "id": "si_stale_security",
+                                "price": {
+                                    "id": "price_premium_security",
+                                    "object": "price",
+                                    "recurring": { "interval": "month", "usage_type": "metered" }
+                                }
+                            }
+                        ]
+                    }
+                }]
+            }),
+            ("/v1/subscription_schedules", "POST") => json!({
+                "id": "sched_new",
+                "object": "subscription_schedule",
+                "phases": [{
+                    "start_date": 1700000000,
+                    "end_date": 1702592000,
+                    "items": [
+                        { "price": { "id": "price_basic_base" }, "quantity": 1 },
+                        { "price": { "id": "price_basic_events" } },
+                        { "price": { "id": "price_premium_security" } }
+                    ]
+                }]
+            }),
+            ("/v1/subscription_schedules/sched_new", _) => json!({
+                "id": "sched_new",
+                "object": "subscription_schedule"
+            }),
+            ("/v1/subscriptions/stripe_sub_active", _) => json!({
+                "id": "stripe_sub_active",
+                "object": "subscription",
+                "status": "active"
+            }),
+            _ => json!({ "id": "ok" }),
+        };
+        if let Err(error) = self
+            .requests
+            .lock()
+            .map(|mut requests| requests.push(request))
+        {
+            let message = error.to_string();
+            return Box::pin(async move {
+                Err(openauth_stripe::stripe_api::StripeApiError::Transport(
+                    message,
+                ))
+            });
+        }
+        Box::pin(async move {
+            Ok(StripeResponse {
+                status: 200,
+                body: response,
+            })
+        })
+    }
+}
+
+impl DuplicateLineItemTransport {
+    fn requests(&self) -> Result<Vec<StripeRequest>, String> {
+        self.requests
+            .lock()
+            .map(|requests| requests.clone())
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl StripeTransport for DuplicateLineItemTransport {
+    fn send<'a>(&'a self, request: StripeRequest) -> StripeTransportFuture<'a> {
+        let response = match (request.path.as_str(), request.method.as_str()) {
+            ("/v1/subscriptions", _) => json!({
+                "object": "list",
+                "data": [{
+                    "id": "stripe_sub_active",
+                    "object": "subscription",
+                    "status": "active",
+                    "cancel_at_period_end": false,
+                    "items": {
+                        "data": [
+                            {
+                                "id": "si_base",
+                                "price": {
+                                    "id": "price_starter",
+                                    "object": "price",
+                                    "recurring": { "interval": "month", "usage_type": "licensed" }
+                                },
+                                "quantity": 1
+                            },
+                            {
+                                "id": "si_addon_a",
+                                "price": {
+                                    "id": "price_events",
+                                    "object": "price",
+                                    "recurring": { "interval": "month", "usage_type": "metered" }
+                                }
+                            },
+                            {
+                                "id": "si_addon_b",
+                                "price": {
+                                    "id": "price_events",
+                                    "object": "price",
+                                    "recurring": { "interval": "month", "usage_type": "metered" }
+                                }
+                            }
+                        ]
+                    }
+                }]
+            }),
+            ("/v1/subscriptions/stripe_sub_active", _) => json!({
+                "id": "stripe_sub_active",
+                "object": "subscription",
+                "status": "active"
+            }),
+            _ => json!({ "id": "ok" }),
+        };
+        if let Err(error) = self
+            .requests
+            .lock()
+            .map(|mut requests| requests.push(request))
+        {
+            let message = error.to_string();
+            return Box::pin(async move {
+                Err(openauth_stripe::stripe_api::StripeApiError::Transport(
+                    message,
+                ))
+            });
+        }
+        Box::pin(async move {
+            Ok(StripeResponse {
+                status: 200,
+                body: response,
+            })
+        })
+    }
 }
 
 impl ActiveUpgradeTransport {
@@ -13,6 +198,18 @@ impl ActiveUpgradeTransport {
             requests: Mutex::new(Vec::new()),
             schedule: Some(json!("sched_existing")),
             include_seat_item: false,
+            schedule_source: Some("@better-auth/stripe"),
+            fail_billing_portal: false,
+        }
+    }
+
+    fn with_external_schedule() -> Self {
+        Self {
+            requests: Mutex::new(Vec::new()),
+            schedule: Some(json!("sched_existing")),
+            include_seat_item: false,
+            schedule_source: Some("stripe-dashboard"),
+            fail_billing_portal: false,
         }
     }
 
@@ -21,6 +218,18 @@ impl ActiveUpgradeTransport {
             requests: Mutex::new(Vec::new()),
             schedule: None,
             include_seat_item: true,
+            schedule_source: None,
+            fail_billing_portal: false,
+        }
+    }
+
+    fn with_billing_portal_failure() -> Self {
+        Self {
+            requests: Mutex::new(Vec::new()),
+            schedule: None,
+            include_seat_item: false,
+            schedule_source: None,
+            fail_billing_portal: true,
         }
     }
 
@@ -72,57 +281,93 @@ impl StripeTransport for ActiveUpgradeTransport {
                 }),
             );
         }
-        let response = match (request.path.as_str(), request.method.as_str()) {
-            ("/v1/subscriptions", _) => json!({
-                "object": "list",
-                "data": [{
+        let schedule_source = self.schedule_source.unwrap_or("@better-auth/stripe");
+        let (status, response) = match (request.path.as_str(), request.method.as_str()) {
+            ("/v1/billing_portal/sessions", _) if self.fail_billing_portal => {
+                (500, json!({ "error": { "message": "portal failed" } }))
+            }
+            ("/v1/prices/price_metered_scheduled", _) => (
+                200,
+                json!({
+                    "id": "price_metered_scheduled",
+                    "object": "price",
+                    "recurring": { "interval": "month", "usage_type": "metered" }
+                }),
+            ),
+            ("/v1/subscriptions", _) => (
+                200,
+                json!({
+                    "object": "list",
+                    "data": [{
+                        "id": "stripe_sub_active",
+                        "object": "subscription",
+                        "status": "active",
+                        "cancel_at_period_end": false,
+                        "schedule": schedule,
+                        "items": {
+                            "data": items
+                        }
+                    }]
+                }),
+            ),
+            ("/v1/subscriptions/stripe_sub_active", _) => (
+                200,
+                json!({
                     "id": "stripe_sub_active",
                     "object": "subscription",
-                    "status": "active",
-                    "cancel_at_period_end": false,
-                    "schedule": schedule,
-                    "items": {
-                        "data": items
-                    }
-                }]
-            }),
-            ("/v1/subscriptions/stripe_sub_active", _) => json!({
-                "id": "stripe_sub_active",
-                "object": "subscription",
-                "status": "active"
-            }),
-            ("/v1/subscription_schedules", "GET") => json!({
-                "object": "list",
-                "data": [{
+                    "status": "active"
+                }),
+            ),
+            ("/v1/subscription_schedules", "GET") => (
+                200,
+                json!({
+                        "object": "list",
+                        "data": [{
+                        "id": "sched_existing",
+                        "object": "subscription_schedule",
+                        "status": "active",
+                        "subscription": "stripe_sub_active",
+                        "metadata": { "source": schedule_source }
+                    }]
+                }),
+            ),
+            ("/v1/subscription_schedules", "POST") => (
+                200,
+                json!({
+                    "id": "sched_new",
+                    "object": "subscription_schedule",
+                    "phases": [{
+                        "start_date": 1700000000,
+                        "end_date": 1702592000,
+                        "items": [
+                            {
+                                "price": {
+                                    "id": "price_starter",
+                                    "object": "price"
+                                },
+                                "quantity": 1
+                            },
+                            { "price": "price_starter_events" }
+                        ]
+                    }]
+                }),
+            ),
+            ("/v1/subscription_schedules/sched_new", _) => (
+                200,
+                json!({
+                    "id": "sched_new",
+                    "object": "subscription_schedule"
+                }),
+            ),
+            ("/v1/subscription_schedules/sched_existing/release", _) => (
+                200,
+                json!({
                     "id": "sched_existing",
                     "object": "subscription_schedule",
-                    "status": "active",
-                    "subscription": "stripe_sub_active",
-                    "metadata": { "source": "@better-auth/stripe" }
-                }]
-            }),
-            ("/v1/subscription_schedules", "POST") => json!({
-                "id": "sched_new",
-                "object": "subscription_schedule",
-                "phases": [{
-                    "start_date": 1700000000,
-                    "end_date": 1702592000,
-                    "items": [
-                        { "price": "price_starter", "quantity": 1 },
-                        { "price": "price_starter_events" }
-                    ]
-                }]
-            }),
-            ("/v1/subscription_schedules/sched_new", _) => json!({
-                "id": "sched_new",
-                "object": "subscription_schedule"
-            }),
-            ("/v1/subscription_schedules/sched_existing/release", _) => json!({
-                "id": "sched_existing",
-                "object": "subscription_schedule",
-                "released_subscription": "stripe_sub_active"
-            }),
-            _ => json!({ "id": "ok" }),
+                    "released_subscription": "stripe_sub_active"
+                }),
+            ),
+            _ => (200, json!({ "id": "ok" })),
         };
         if let Err(error) = self
             .requests
@@ -138,7 +383,7 @@ impl StripeTransport for ActiveUpgradeTransport {
         }
         Box::pin(async move {
             Ok(StripeResponse {
-                status: 200,
+                status,
                 body: response,
             })
         })
@@ -241,6 +486,47 @@ async fn subscription_upgrade_uses_billing_portal_for_simple_active_plan_change(
 }
 
 #[tokio::test]
+async fn subscription_upgrade_maps_billing_portal_failure_to_plugin_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(ActiveUpgradeTransport::with_billing_portal_failure());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![
+        StripePlan::new("starter").price_id("price_starter"),
+        StripePlan::new("pro").price_id("price_pro"),
+    ]));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    seed_active_starter_subscription(&adapter).await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"plan":"pro","returnUrl":"/account","successUrl":"/ok","cancelUrl":"/pricing"}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "UNABLE_TO_CREATE_BILLING_PORTAL");
+    Ok(())
+}
+
+#[tokio::test]
 async fn subscription_upgrade_uses_direct_update_for_line_item_changes(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let transport = Arc::new(ActiveUpgradeTransport::default());
@@ -315,6 +601,115 @@ async fn subscription_upgrade_uses_direct_update_for_line_item_changes(
 }
 
 #[tokio::test]
+async fn subscription_upgrade_allows_same_local_plan_when_stripe_price_differs(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(ActiveUpgradeTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![
+        StripePlan::new("starter").price_id("price_starter"),
+        StripePlan::new("pro").price_id("price_pro"),
+    ]));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    seed_active_starter_subscription(&adapter).await?;
+    openauth_core::db::DbAdapter::update(
+        &adapter,
+        openauth_core::db::Update::new("subscription")
+            .where_clause(openauth_core::db::Where::new(
+                "id",
+                DbValue::String("sub_active".to_owned()),
+            ))
+            .data("plan", DbValue::String("pro".to_owned())),
+    )
+    .await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"plan":"pro","returnUrl":"/account","successUrl":"/ok","cancelUrl":"/pricing"}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = transport.requests()?;
+    assert!(requests
+        .iter()
+        .any(|request| request.path == "/v1/billing_portal/sessions"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_upgrade_allows_same_plan_when_local_period_has_expired(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(ActiveUpgradeTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![StripePlan::new(
+        "starter",
+    )
+    .price_id("price_starter")]));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    seed_active_starter_subscription(&adapter).await?;
+    openauth_core::db::DbAdapter::update(
+        &adapter,
+        openauth_core::db::Update::new("subscription")
+            .where_clause(openauth_core::db::Where::new(
+                "id",
+                DbValue::String("sub_active".to_owned()),
+            ))
+            .data(
+                "period_end",
+                DbValue::Timestamp(OffsetDateTime::now_utc() - Duration::days(1)),
+            ),
+    )
+    .await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"plan":"starter","returnUrl":"/account","successUrl":"/ok","cancelUrl":"/pricing"}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(transport
+        .requests()?
+        .iter()
+        .any(|request| request.path == "/v1/billing_portal/sessions"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn subscription_upgrade_schedules_period_end_change_and_stores_schedule_id(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let transport = Arc::new(ActiveUpgradeTransport::default());
@@ -374,6 +769,12 @@ async fn subscription_upgrade_schedules_period_end_change_and_stores_schedule_id
     assert!(update_schedule.body.contains("end_behavior=release"));
     assert!(update_schedule
         .body
+        .contains("phases%5B0%5D%5Bitems%5D%5B0%5D%5Bprice%5D=price_starter"));
+    assert!(!update_schedule
+        .body
+        .contains("phases%5B0%5D%5Bitems%5D%5B0%5D%5Bprice%5D%5Bid%5D"));
+    assert!(update_schedule
+        .body
         .contains("phases%5B1%5D%5Bitems%5D%5B0%5D%5Bprice%5D=price_pro"));
     assert!(update_schedule
         .body
@@ -394,6 +795,200 @@ async fn subscription_upgrade_schedules_period_end_change_and_stores_schedule_id
     assert!(!requests
         .iter()
         .any(|request| request.path == "/v1/billing_portal/sessions"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_upgrade_omits_quantity_for_metered_price_in_scheduled_phase(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(ActiveUpgradeTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![
+        StripePlan::new("starter").price_id("price_starter"),
+        StripePlan::new("metered").price_id("price_metered_scheduled"),
+    ]));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    seed_active_starter_subscription(&adapter).await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"plan":"metered","scheduleAtPeriodEnd":true,"returnUrl":"/account","successUrl":"/ok","cancelUrl":"/pricing"}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = transport.requests()?;
+    let update_schedule = requests
+        .iter()
+        .find(|request| request.path == "/v1/subscription_schedules/sched_new")
+        .ok_or("schedule update request")?;
+    assert!(update_schedule
+        .body
+        .contains("phases%5B1%5D%5Bitems%5D%5B0%5D%5Bprice%5D=price_metered_scheduled"));
+    assert!(!update_schedule
+        .body
+        .contains("phases%5B1%5D%5Bitems%5D%5B0%5D%5Bquantity%5D"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_upgrade_preserves_duplicate_line_item_multiset_delta(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(DuplicateLineItemTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![
+        StripePlan::new("starter")
+            .price_id("price_starter")
+            .line_item(json!({ "price": "price_events" }))
+            .line_item(json!({ "price": "price_events" })),
+        StripePlan::new("pro")
+            .price_id("price_pro")
+            .line_item(json!({ "price": "price_events" })),
+    ]));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    seed_active_starter_subscription(&adapter).await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"plan":"pro","returnUrl":"/account","successUrl":"/ok","cancelUrl":"/pricing"}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = transport.requests()?;
+    let update_request = requests
+        .iter()
+        .find(|request| request.path == "/v1/subscriptions/stripe_sub_active")
+        .ok_or("subscription update request")?;
+    assert_eq!(update_request.body.matches("%5Bdeleted%5D=true").count(), 1);
+    assert!(!update_request.body.contains("=price_events"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_upgrade_does_not_add_destination_line_item_already_present(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(StaleDestinationLineItemTransport::default());
+    let options = asymmetric_line_item_options(Arc::clone(&transport) as Arc<dyn StripeTransport>);
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    seed_active_basic_subscription(&adapter).await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"plan":"premium","returnUrl":"/account","successUrl":"/ok","cancelUrl":"/pricing"}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = transport.requests()?;
+    let update_request = requests
+        .iter()
+        .find(|request| request.path == "/v1/subscriptions/stripe_sub_active")
+        .ok_or("subscription update request")?;
+    assert_eq!(
+        update_request
+            .body
+            .matches("=price_premium_security")
+            .count(),
+        0
+    );
+    assert!(update_request
+        .body
+        .contains("items%5B0%5D%5Bprice%5D=price_premium_base"));
+    assert!(update_request.body.contains("=price_premium_events"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_upgrade_does_not_duplicate_destination_line_item_in_scheduled_phase(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(StaleDestinationLineItemTransport::default());
+    let options = asymmetric_line_item_options(Arc::clone(&transport) as Arc<dyn StripeTransport>);
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    seed_active_basic_subscription(&adapter).await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"plan":"premium","scheduleAtPeriodEnd":true,"returnUrl":"/account","successUrl":"/ok","cancelUrl":"/pricing"}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = transport.requests()?;
+    let update_schedule = requests
+        .iter()
+        .find(|request| request.path == "/v1/subscription_schedules/sched_new")
+        .ok_or("schedule update request")?;
+    assert_eq!(
+        update_schedule
+            .body
+            .matches("phases%5B1%5D%5Bitems%5D")
+            .count(),
+        3
+    );
+    assert_eq!(
+        update_schedule
+            .body
+            .matches("price_premium_security")
+            .count(),
+        1
+    );
     Ok(())
 }
 
@@ -462,6 +1057,65 @@ async fn subscription_upgrade_releases_existing_plugin_schedule_before_immediate
     assert!(requests
         .iter()
         .any(|request| request.path == "/v1/billing_portal/sessions"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_upgrade_does_not_release_external_schedule_before_immediate_change(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(ActiveUpgradeTransport::with_external_schedule());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![
+        StripePlan::new("starter").price_id("price_starter"),
+        StripePlan::new("pro").price_id("price_pro"),
+    ]));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    seed_active_starter_subscription(&adapter).await?;
+    openauth_core::db::DbAdapter::update(
+        &adapter,
+        openauth_core::db::Update::new("subscription")
+            .where_clause(openauth_core::db::Where::new(
+                "id",
+                DbValue::String("sub_active".to_owned()),
+            ))
+            .data(
+                "stripe_schedule_id",
+                DbValue::String("sched_existing".to_owned()),
+            ),
+    )
+    .await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"plan":"pro","returnUrl":"/account","successUrl":"/ok","cancelUrl":"/pricing"}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = transport.requests()?;
+    assert!(requests.iter().any(|request| {
+        request.path == "/v1/subscription_schedules" && request.method == "GET"
+    }));
+    assert!(!requests
+        .iter()
+        .any(|request| request.path == "/v1/subscription_schedules/sched_existing/release"));
     Ok(())
 }
 
@@ -627,4 +1281,37 @@ async fn seed_active_starter_subscription(
     )
     .await?;
     Ok(())
+}
+
+async fn seed_active_basic_subscription(
+    adapter: &MemoryAdapter,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_active_starter_subscription(adapter).await?;
+    openauth_core::db::DbAdapter::update(
+        adapter,
+        openauth_core::db::Update::new("subscription")
+            .where_clause(openauth_core::db::Where::new(
+                "id",
+                DbValue::String("sub_active".to_owned()),
+            ))
+            .data("plan", DbValue::String("basic".to_owned())),
+    )
+    .await?;
+    Ok(())
+}
+
+fn asymmetric_line_item_options(transport: Arc<dyn StripeTransport>) -> StripeOptions {
+    StripeOptions::new(
+        StripeClient::with_transport("sk_test", transport),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![
+        StripePlan::new("basic")
+            .price_id("price_basic_base")
+            .line_item(json!({ "price": "price_basic_events" })),
+        StripePlan::new("premium")
+            .price_id("price_premium_base")
+            .line_item(json!({ "price": "price_premium_events" }))
+            .line_item(json!({ "price": "price_premium_security" })),
+    ]))
 }

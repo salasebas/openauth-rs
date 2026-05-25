@@ -1,6 +1,5 @@
 use http::{Method, StatusCode};
 use openauth_core::api::{create_auth_endpoint, AuthEndpointOptions};
-use openauth_core::error::OpenAuthError;
 use serde_json::json;
 use time::OffsetDateTime;
 
@@ -31,27 +30,52 @@ pub fn stripe_webhook(options: StripeOptions) -> openauth_core::api::AsyncAuthEn
                         StripeErrorCode::StripeSignatureNotFound,
                     );
                 };
+                if options.stripe_webhook_secret.is_empty() {
+                    return error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        StripeErrorCode::StripeWebhookSecretNotFound,
+                    );
+                }
                 let now = OffsetDateTime::now_utc().unix_timestamp();
-                crate::stripe_api::verify_webhook_signature(
+                if crate::stripe_api::verify_webhook_signature(
                     request.body(),
                     signature,
                     &options.stripe_webhook_secret,
                     300,
                     now,
                 )
-                .map_err(|error| OpenAuthError::Api(error.to_string()))?;
-                let event =
-                    serde_json::from_slice::<StripeEvent>(request.body()).map_err(|error| {
-                        OpenAuthError::InvalidRequestBody {
-                            encoding: "JSON",
-                            message: error.to_string(),
-                        }
-                    })?;
-                crate::hooks::handle_stripe_event(context, &options, &event).await?;
+                .is_err()
+                {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        StripeErrorCode::FailedToConstructStripeEvent,
+                    );
+                }
+                let event = match serde_json::from_slice::<StripeEvent>(request.body()) {
+                    Ok(event) => event,
+                    Err(_) => {
+                        return error_response(
+                            StatusCode::BAD_REQUEST,
+                            StripeErrorCode::FailedToConstructStripeEvent,
+                        );
+                    }
+                };
+                if crate::hooks::handle_stripe_event(context, &options, &event)
+                    .await
+                    .is_err()
+                {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        StripeErrorCode::StripeWebhookError,
+                    );
+                }
                 if let Some(on_event) = &options.on_event {
-                    on_event(event)
-                        .await
-                        .map_err(|error| OpenAuthError::Api(error.to_string()))?;
+                    if on_event(event).await.is_err() {
+                        return error_response(
+                            StatusCode::BAD_REQUEST,
+                            StripeErrorCode::StripeWebhookError,
+                        );
+                    }
                 }
                 json_response(StatusCode::OK, &json!({ "success": true }))
             })

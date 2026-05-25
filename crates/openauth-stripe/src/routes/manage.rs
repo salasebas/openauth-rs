@@ -14,7 +14,8 @@ use super::support::{
     clear_subscription_cancel, clear_subscription_schedule, db_string, error_response,
     find_active_stripe_subscription, find_subscription_for_reference, json_response,
     record_has_pending_cancel, record_is_active_or_trialing, require_session,
-    stripe_list_has_active_subscription, validate_redirect_url,
+    resolve_subscription_options_for_endpoint, stripe_list_has_active_subscription,
+    validate_redirect_url,
 };
 use crate::errors::StripeErrorCode;
 use crate::options::{AuthorizeReferenceAction, StripeOptions};
@@ -68,6 +69,11 @@ pub fn cancel_subscription(options: StripeOptions) -> openauth_core::api::AsyncA
                 let subscription_options = options.subscription.as_ref().ok_or_else(|| {
                     OpenAuthError::InvalidConfig("stripe subscriptions are not enabled".to_owned())
                 })?;
+                let subscription_options =
+                    match resolve_subscription_options_for_endpoint(subscription_options).await? {
+                        Ok(subscription_options) => subscription_options,
+                        Err(response) => return Ok(response),
+                    };
                 let Some(adapter) = context.adapter() else {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -79,8 +85,9 @@ pub fn cancel_subscription(options: StripeOptions) -> openauth_core::api::AsyncA
                         context,
                         adapter: adapter.as_ref(),
                         options: &options,
-                        subscription_options,
-                        user_id: &current_session.user.id,
+                        subscription_options: &subscription_options,
+                        user: &current_session.user,
+                        session: &current_session.session,
                         session_token: &current_session.session.token,
                         explicit_reference_id: body.reference_id,
                         customer_type: body.customer_type.as_deref(),
@@ -289,6 +296,11 @@ pub fn restore_subscription(options: StripeOptions) -> openauth_core::api::Async
                 let subscription_options = options.subscription.as_ref().ok_or_else(|| {
                     OpenAuthError::InvalidConfig("stripe subscriptions are not enabled".to_owned())
                 })?;
+                let subscription_options =
+                    match resolve_subscription_options_for_endpoint(subscription_options).await? {
+                        Ok(subscription_options) => subscription_options,
+                        Err(response) => return Ok(response),
+                    };
                 let Some(adapter) = context.adapter() else {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -300,8 +312,9 @@ pub fn restore_subscription(options: StripeOptions) -> openauth_core::api::Async
                         context,
                         adapter: adapter.as_ref(),
                         options: &options,
-                        subscription_options,
-                        user_id: &current_session.user.id,
+                        subscription_options: &subscription_options,
+                        user: &current_session.user,
+                        session: &current_session.session,
                         session_token: &current_session.session.token,
                         explicit_reference_id: body.reference_id,
                         customer_type: body.customer_type.as_deref(),

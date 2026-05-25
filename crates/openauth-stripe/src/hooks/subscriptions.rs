@@ -1,6 +1,6 @@
 use openauth_core::context::AuthContext;
 use openauth_core::crypto::random::generate_random_string;
-use openauth_core::db::{Create, DbValue, FindOne, Update, Where};
+use openauth_core::db::{Create, DbValue, FindMany, FindOne, Update, Where};
 use openauth_core::error::OpenAuthError;
 
 use crate::metadata::SubscriptionMetadata;
@@ -21,6 +21,7 @@ pub(super) async fn on_subscription_deleted(
     let Some(subscription_options) = &options.subscription else {
         return Ok(());
     };
+    let subscription_options = subscription_options.resolve_plans().await?;
     if !subscription_options.enabled {
         return Ok(());
     }
@@ -42,7 +43,7 @@ pub(super) async fn on_subscription_deleted(
         return Ok(());
     };
     let local_subscription = subscription_from_record(&existing);
-    let plan = crate::utils::resolve_plan_item(subscription_options, &subscription.items.data)
+    let plan = crate::utils::resolve_plan_item(&subscription_options, &subscription.items.data)
         .and_then(|resolved| resolved.plan.cloned());
     adapter
         .update(
@@ -94,13 +95,14 @@ pub(super) async fn on_subscription_updated(
     let Some(subscription_options) = &options.subscription else {
         return Ok(());
     };
+    let subscription_options = subscription_options.resolve_plans().await?;
     if !subscription_options.enabled {
         return Ok(());
     }
     let subscription = serde_json::from_value::<StripeSubscription>(event.data.object.clone())
         .map_err(|error| OpenAuthError::Api(error.to_string()))?;
     let Some(resolved) =
-        crate::utils::resolve_plan_item(subscription_options, &subscription.items.data)
+        crate::utils::resolve_plan_item(&subscription_options, &subscription.items.data)
     else {
         return Ok(());
     };
@@ -122,6 +124,30 @@ pub(super) async fn on_subscription_updated(
                 DbValue::String(subscription.id.clone()),
             )))
             .await?
+    };
+    let subscription_record = match subscription_record {
+        Some(subscription_record) => Some(subscription_record),
+        None => {
+            let customer_id = customer_id_from_stripe_subscription(&subscription);
+            if let Some(customer_id) = customer_id {
+                let subscriptions = adapter
+                    .find_many(FindMany::new("subscription").where_clause(Where::new(
+                        "stripe_customer_id",
+                        DbValue::String(customer_id),
+                    )))
+                    .await?;
+                if subscriptions.len() > 1 {
+                    subscriptions.into_iter().find(|record| {
+                        record_string(record, "status")
+                            .is_some_and(crate::utils::is_active_or_trialing)
+                    })
+                } else {
+                    subscriptions.into_iter().next()
+                }
+            } else {
+                None
+            }
+        }
     };
     let Some(subscription_record) = subscription_record else {
         return Ok(());
@@ -254,6 +280,7 @@ pub(super) async fn on_subscription_created(
     let Some(subscription_options) = &options.subscription else {
         return Ok(());
     };
+    let subscription_options = subscription_options.resolve_plans().await?;
     if !subscription_options.enabled {
         return Ok(());
     }
@@ -292,7 +319,7 @@ pub(super) async fn on_subscription_created(
         return Ok(());
     };
     let Some(resolved) =
-        crate::utils::resolve_plan_item(subscription_options, &subscription.items.data)
+        crate::utils::resolve_plan_item(&subscription_options, &subscription.items.data)
     else {
         return Ok(());
     };

@@ -196,7 +196,7 @@ async fn billing_portal_update(
             map.insert("quantity".to_owned(), json!(input.seats));
         }
     }
-    let portal = input
+    let portal = match input
         .options
         .stripe_client
         .create_billing_portal_session(json!({
@@ -217,7 +217,15 @@ async fn billing_portal_update(
             }
         }))
         .await
-        .map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    {
+        Ok(portal) => portal,
+        Err(_) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                StripeErrorCode::UnableToCreateBillingPortal,
+            );
+        }
+    };
     let mut response = portal;
     if let Value::Object(map) = &mut response {
         map.insert("redirect".to_owned(), Value::Bool(!input.disable_redirect));
@@ -300,10 +308,7 @@ async fn schedule_period_end_change(
         .and_then(Value::as_array)
         .and_then(|phases| phases.first())
         .ok_or_else(|| OpenAuthError::Api("subscription schedule has no phases".to_owned()))?;
-    let current_items = current_phase
-        .get("items")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let current_items = normalize_schedule_phase_items(current_phase);
     let start_date = current_phase
         .get("start_date")
         .cloned()
@@ -377,10 +382,12 @@ fn direct_update_items(
         .get("plan")
         .and_then(db_string)
         .and_then(|plan| crate::utils::get_plan_by_name(input.subscription_options, plan));
-    let mut add_prices = line_item_prices(&input.plan.line_items);
-    let remove_prices = old_plan
-        .map(|plan| line_item_prices(&plan.line_items))
+    let old_counts = old_plan
+        .map(|plan| line_item_price_counts(&plan.line_items))
         .unwrap_or_default();
+    let new_counts = line_item_price_counts(&input.plan.line_items);
+    let mut remove_quota = line_item_delta(&old_counts, &new_counts);
+    let mut add_quota = line_item_delta(&new_counts, &old_counts);
     let mut items = Vec::new();
     for item in &active_subscription.items.data {
         if item.id == current_item.id {
@@ -419,17 +426,28 @@ fn direct_update_items(
                     "deleted": true,
                 }));
             }
-        } else if remove_prices.iter().any(|price| price == &item.price.id) {
+        } else if remove_quota.get_mut(&item.price.id).is_some_and(|quota| {
+            if *quota > 0 {
+                *quota -= 1;
+                true
+            } else {
+                false
+            }
+        }) {
             items.push(json!({
                 "id": item.id,
                 "deleted": true,
             }));
-        } else if let Some(position) = add_prices.iter().position(|price| price == &item.price.id) {
-            add_prices.remove(position);
+        } else if let Some(quota) = add_quota.get_mut(&item.price.id) {
+            if *quota > 0 {
+                *quota -= 1;
+            }
         }
     }
-    for price in add_prices {
-        items.push(json!({ "price": price }));
+    for (price, count) in add_quota {
+        for _ in 0..count {
+            items.push(json!({ "price": price }));
+        }
     }
     if let Some(seat_price_id) = input.plan.seat_price_id.as_deref() {
         let already_updated = items.iter().any(|item| {
@@ -478,6 +496,33 @@ fn scheduled_phase_items(
         .collect()
 }
 
+fn normalize_schedule_phase_items(phase: &Value) -> Value {
+    let items = phase
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let price = schedule_item_price_id(item)?;
+            let mut normalized = serde_json::Map::new();
+            normalized.insert("price".to_owned(), Value::String(price));
+            if let Some(quantity) = item.get("quantity").cloned() {
+                normalized.insert("quantity".to_owned(), quantity);
+            }
+            Some(Value::Object(normalized))
+        })
+        .collect::<Vec<_>>();
+    Value::Array(items)
+}
+
+fn schedule_item_price_id(item: &Value) -> Option<String> {
+    match item.get("price")? {
+        Value::String(price) => Some(price.clone()),
+        Value::Object(price) => price.get("id").and_then(Value::as_str).map(str::to_owned),
+        _ => None,
+    }
+}
+
 fn has_direct_subscription_update_changes(
     local_subscription: &DbRecord,
     subscription_options: &SubscriptionOptions,
@@ -519,6 +564,29 @@ fn line_item_prices(line_items: &[Value]) -> Vec<String> {
                 .get("price")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
+        })
+        .collect()
+}
+
+fn line_item_price_counts(line_items: &[Value]) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for price in line_item_prices(line_items) {
+        *counts.entry(price).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn line_item_delta(
+    left: &std::collections::BTreeMap<String, usize>,
+    right: &std::collections::BTreeMap<String, usize>,
+) -> std::collections::BTreeMap<String, usize> {
+    left.iter()
+        .filter_map(|(price, left_count)| {
+            let right_count = right.get(price).copied().unwrap_or(0);
+            left_count
+                .checked_sub(right_count)
+                .filter(|delta| *delta > 0)
+                .map(|delta| (price.clone(), delta))
         })
         .collect()
 }

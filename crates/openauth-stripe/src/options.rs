@@ -4,6 +4,7 @@ use openauth_core::api::ApiRequest;
 use openauth_core::context::AuthContext;
 use openauth_core::db::{Session, User};
 use openauth_core::error::OpenAuthError;
+use openauth_core::plugin::PluginSchemaContribution;
 use serde_json::json;
 
 use crate::models::{StripeEvent, StripeSubscription, Subscription};
@@ -19,6 +20,7 @@ pub struct StripeOptions {
     pub on_event: Option<StripeEventHook>,
     pub on_customer_create: Option<CustomerCreateHook>,
     pub get_customer_create_params: Option<GetCustomerCreateParamsHook>,
+    pub schema: Vec<PluginSchemaContribution>,
 }
 
 pub type StripeEventHook = Arc<
@@ -88,6 +90,7 @@ impl StripeOptions {
             on_event: None,
             on_customer_create: None,
             get_customer_create_params: None,
+            schema: Vec::new(),
         }
     }
 
@@ -103,6 +106,11 @@ impl StripeOptions {
 
     pub fn organization(mut self, organization: OrganizationStripeOptions) -> Self {
         self.organization = Some(organization);
+        self
+    }
+
+    pub fn schema(mut self, contribution: PluginSchemaContribution) -> Self {
+        self.schema.push(contribution);
         self
     }
 
@@ -164,6 +172,7 @@ impl StripeOptions {
 pub struct SubscriptionOptions {
     pub enabled: bool,
     pub plans: Arc<Vec<StripePlan>>,
+    pub get_plans: Option<GetPlansHook>,
     pub require_email_verification: bool,
     pub authorize_reference: Option<AuthorizeReferenceHook>,
     pub on_subscription_complete: Option<SubscriptionLifecycleHook>,
@@ -173,6 +182,12 @@ pub struct SubscriptionOptions {
     pub on_subscription_deleted: Option<SubscriptionLifecycleHook>,
     pub get_checkout_session_params: Option<GetCheckoutSessionParamsHook>,
 }
+
+pub type GetPlansHook = Arc<
+    dyn Fn() -> crate::stripe_api::BoxFuture<'static, Result<Vec<StripePlan>, OpenAuthError>>
+        + Send
+        + Sync,
+>;
 
 pub type AuthorizeReferenceHook = Arc<
     dyn Fn(
@@ -235,6 +250,8 @@ pub struct CheckoutSessionParamsInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizeReferenceInput {
     pub user_id: String,
+    pub user: User,
+    pub session: Session,
     pub reference_id: String,
     pub action: AuthorizeReferenceAction,
 }
@@ -265,6 +282,7 @@ impl SubscriptionOptions {
         Self {
             enabled: true,
             plans: Arc::new(plans),
+            get_plans: None,
             require_email_verification: false,
             authorize_reference: None,
             on_subscription_complete: None,
@@ -274,6 +292,40 @@ impl SubscriptionOptions {
             on_subscription_deleted: None,
             get_checkout_session_params: None,
         }
+    }
+
+    pub fn enabled_dynamic<F>(provider: F) -> Self
+    where
+        F: Fn() -> crate::stripe_api::BoxFuture<'static, Result<Vec<StripePlan>, OpenAuthError>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self {
+            get_plans: Some(Arc::new(provider)),
+            ..Self::enabled(Vec::new())
+        }
+    }
+
+    pub fn plans_provider<F>(mut self, provider: F) -> Self
+    where
+        F: Fn() -> crate::stripe_api::BoxFuture<'static, Result<Vec<StripePlan>, OpenAuthError>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.get_plans = Some(Arc::new(provider));
+        self
+    }
+
+    pub async fn resolve_plans(&self) -> Result<Self, OpenAuthError> {
+        let Some(provider) = &self.get_plans else {
+            return Ok(self.clone());
+        };
+        let plans = provider().await?;
+        let mut resolved = self.clone();
+        resolved.plans = Arc::new(plans);
+        Ok(resolved)
     }
 
     pub fn require_email_verification(mut self, enabled: bool) -> Self {

@@ -19,6 +19,7 @@ pub(super) async fn on_checkout_session_completed(
     let Some(subscription_options) = &options.subscription else {
         return Ok(());
     };
+    let subscription_options = subscription_options.resolve_plans().await?;
     if !subscription_options.enabled {
         return Ok(());
     }
@@ -50,7 +51,7 @@ pub(super) async fn on_checkout_session_completed(
     let stripe_subscription = serde_json::from_value::<StripeSubscription>(stripe_subscription)
         .map_err(|error| OpenAuthError::Api(error.to_string()))?;
     let Some(resolved) =
-        crate::utils::resolve_plan_item(subscription_options, &stripe_subscription.items.data)
+        crate::utils::resolve_plan_item(&subscription_options, &stripe_subscription.items.data)
     else {
         return Ok(());
     };

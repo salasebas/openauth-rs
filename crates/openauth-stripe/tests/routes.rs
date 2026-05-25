@@ -3,6 +3,7 @@ use http::{Method, Request, StatusCode};
 use openauth_core::context::{create_auth_context, create_auth_context_with_adapter, AuthContext};
 use openauth_core::cookies::{set_session_cookie, CookieOptions, SessionCookieOptions};
 use openauth_core::db::{Create, DbAdapter, DbRecord, DbValue, MemoryAdapter};
+use openauth_core::error::OpenAuthError;
 use openauth_core::options::OpenAuthOptions;
 use openauth_core::session::{CreateSessionInput, DbSessionStore};
 use openauth_core::user::{CreateUserInput, DbUserStore};
@@ -27,6 +28,49 @@ impl CaptureTransport {
             .lock()
             .map(|requests| requests.clone())
             .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Default)]
+struct FailingCheckoutSessionTransport {
+    requests: Mutex<Vec<StripeRequest>>,
+}
+
+impl FailingCheckoutSessionTransport {
+    fn requests(&self) -> Result<Vec<StripeRequest>, String> {
+        self.requests
+            .lock()
+            .map(|requests| requests.clone())
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl StripeTransport for FailingCheckoutSessionTransport {
+    fn send<'a>(&'a self, request: StripeRequest) -> StripeTransportFuture<'a> {
+        let response = if request.path.starts_with("/v1/checkout/sessions/") {
+            StripeResponse {
+                status: 404,
+                body: json!({ "error": { "message": "checkout session not found" } }),
+            }
+        } else {
+            StripeResponse {
+                status: 200,
+                body: json!({ "id": "ok" }),
+            }
+        };
+        if let Err(error) = self
+            .requests
+            .lock()
+            .map(|mut requests| requests.push(request))
+        {
+            let message = error.to_string();
+            return Box::pin(async move {
+                Err(openauth_stripe::stripe_api::StripeApiError::Transport(
+                    message,
+                ))
+            });
+        }
+        Box::pin(async move { Ok(response) })
     }
 }
 
@@ -185,7 +229,13 @@ fn stripe_options_with_authorized_references(transport: Arc<CaptureTransport>) -
     )
     .subscription(
         SubscriptionOptions::enabled(vec![StripePlan::new("pro").price_id("price_pro")])
-            .authorize_reference(|_, _| Box::pin(async { Ok(true) })),
+            .authorize_reference(|input, _| {
+                Box::pin(async move {
+                    assert_eq!(input.user.id, "user_1");
+                    assert_eq!(input.session.token, "session_token_1");
+                    Ok(true)
+                })
+            }),
     )
 }
 
@@ -314,6 +364,48 @@ async fn subscription_list_includes_plan_limits_and_interval_price_id(
 }
 
 #[tokio::test]
+async fn subscription_list_resolves_dynamic_plan_provider() -> Result<(), Box<dyn std::error::Error>>
+{
+    let transport = Arc::new(CaptureTransport::default());
+    let plugin = stripe(
+        StripeOptions::new(
+            StripeClient::with_transport(
+                "sk_test",
+                Arc::clone(&transport) as Arc<dyn StripeTransport>,
+            ),
+            "whsec_test",
+        )
+        .subscription(SubscriptionOptions::enabled_dynamic(|| {
+            Box::pin(async {
+                Ok(vec![StripePlan::new("pro")
+                    .price_id("price_dynamic")
+                    .limits(json!({ "projects": 10 }))])
+            })
+        })),
+    );
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/list")
+        .ok_or("list endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    create_subscription_record(&adapter, "sub_active", "user_1", "active", Some("cus_123")).await?;
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("http://localhost:3000/api/auth/subscription/list")
+        .header("cookie", cookie_header)
+        .body(Vec::new())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body[0]["priceId"], "price_dynamic");
+    assert_eq!(body[0]["limits"]["projects"], 10);
+    Ok(())
+}
+
+#[tokio::test]
 async fn subscription_success_reconciles_checkout_session_and_redirects(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let transport = Arc::new(CaptureTransport::default());
@@ -371,6 +463,124 @@ async fn subscription_success_reconciles_checkout_session_and_redirects(
         .iter()
         .any(|request| request.path == "/v1/subscriptions"
             && request.body.contains("customer=cus_123")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_success_resolves_dynamic_plans() -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CaptureTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled_dynamic(|| {
+        Box::pin(async { Ok(vec![StripePlan::new("dynamic-pro").price_id("price_pro")]) })
+    }));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/success")
+        .ok_or("success endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    create_subscription_record(
+        &adapter,
+        "sub_incomplete",
+        "user_1",
+        "incomplete",
+        Some("cus_123"),
+    )
+    .await?;
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("http://localhost:3000/api/auth/subscription/success?callbackURL=/done&checkoutSessionId=cs_test_123")
+        .header("cookie", cookie_header)
+        .body(Vec::new())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let records = adapter.records("subscription").await;
+    let subscription = records
+        .iter()
+        .find(|record| record.get("id") == Some(&DbValue::String("sub_incomplete".to_owned())))
+        .ok_or("subscription")?;
+    assert_eq!(
+        subscription.get("plan"),
+        Some(&DbValue::String("dynamic-pro".to_owned()))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_success_redirects_without_checkout_session_id(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CaptureTransport::default());
+    let plugin = stripe(stripe_options(Arc::clone(&transport)));
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/success")
+        .ok_or("success endpoint")?;
+    let (context, _adapter, cookie_header) = authenticated_context().await?;
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("http://localhost:3000/api/auth/subscription/success?callbackURL=/dashboard")
+        .header("cookie", cookie_header)
+        .body(Vec::new())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response.headers().get(http::header::LOCATION),
+        Some(&http::HeaderValue::from_static("/dashboard"))
+    );
+    assert!(transport.requests()?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_success_redirects_when_checkout_session_retrieval_fails(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(FailingCheckoutSessionTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![
+        StripePlan::new("pro").price_id("price_pro")
+    ]));
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/success")
+        .ok_or("success endpoint")?;
+    let (context, _adapter, cookie_header) = authenticated_context().await?;
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("http://localhost:3000/api/auth/subscription/success?callbackURL=/dashboard&checkoutSessionId=cs_invalid")
+        .header("cookie", cookie_header)
+        .body(Vec::new())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response.headers().get(http::header::LOCATION),
+        Some(&http::HeaderValue::from_static("/dashboard"))
+    );
+    assert!(transport
+        .requests()?
+        .iter()
+        .any(|request| request.path == "/v1/checkout/sessions/cs_invalid"));
     Ok(())
 }
 
@@ -596,6 +806,138 @@ async fn webhook_endpoint_verifies_signature_and_calls_on_event(
         seen.lock().map_err(|error| error.to_string())?.as_slice(),
         ["invoice.paid"]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn webhook_endpoint_rejects_empty_webhook_secret_with_config_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let plugin = stripe(StripeOptions::new(StripeClient::new("sk_test"), ""));
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/stripe/webhook")
+        .ok_or("webhook endpoint")?;
+    let context = create_auth_context(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let payload = br#"{"id":"evt_123","type":"invoice.paid","data":{"object":{"id":"in_123"}}}"#;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp();
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/stripe/webhook")
+        .header("stripe-signature", format!("t={timestamp},v1=bad"))
+        .body(payload.to_vec())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "STRIPE_WEBHOOK_SECRET_NOT_FOUND");
+    Ok(())
+}
+
+#[tokio::test]
+async fn webhook_endpoint_maps_invalid_signature_to_construct_event_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let plugin = stripe(StripeOptions::new(
+        StripeClient::new("sk_test"),
+        "whsec_test",
+    ));
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/stripe/webhook")
+        .ok_or("webhook endpoint")?;
+    let context = create_auth_context(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let payload = br#"{"id":"evt_123","type":"invoice.paid","data":{"object":{"id":"in_123"}}}"#;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp();
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/stripe/webhook")
+        .header("stripe-signature", format!("t={timestamp},v1=bad"))
+        .body(payload.to_vec())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "FAILED_TO_CONSTRUCT_STRIPE_EVENT");
+    Ok(())
+}
+
+#[tokio::test]
+async fn webhook_endpoint_maps_invalid_json_to_construct_event_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let plugin = stripe(StripeOptions::new(
+        StripeClient::new("sk_test"),
+        "whsec_test",
+    ));
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/stripe/webhook")
+        .ok_or("webhook endpoint")?;
+    let context = create_auth_context(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let payload = br#"{"id":"evt_123","type":"invoice.paid""#;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp();
+    let mut mac = Hmac::<Sha256>::new_from_slice(b"whsec_test")?;
+    mac.update(format!("{timestamp}.").as_bytes());
+    mac.update(payload);
+    let signature = hex::encode(mac.finalize().into_bytes());
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/stripe/webhook")
+        .header("stripe-signature", format!("t={timestamp},v1={signature}"))
+        .body(payload.to_vec())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "FAILED_TO_CONSTRUCT_STRIPE_EVENT");
+    Ok(())
+}
+
+#[tokio::test]
+async fn webhook_endpoint_wraps_event_hook_errors() -> Result<(), Box<dyn std::error::Error>> {
+    let options = StripeOptions::new(StripeClient::new("sk_test"), "whsec_test").on_event(|_| {
+        Box::pin(async { Err(openauth_core::error::OpenAuthError::Api("boom".to_owned())) })
+    });
+    let plugin = stripe(options);
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/stripe/webhook")
+        .ok_or("webhook endpoint")?;
+    let context = create_auth_context(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let payload = br#"{"id":"evt_123","type":"invoice.paid","data":{"object":{"id":"in_123"}}}"#;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp();
+    let mut mac = Hmac::<Sha256>::new_from_slice(b"whsec_test")?;
+    mac.update(format!("{timestamp}.").as_bytes());
+    mac.update(payload);
+    let signature = hex::encode(mac.finalize().into_bytes());
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/stripe/webhook")
+        .header("stripe-signature", format!("t={timestamp},v1={signature}"))
+        .body(payload.to_vec())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "STRIPE_WEBHOOK_ERROR");
     Ok(())
 }
 
