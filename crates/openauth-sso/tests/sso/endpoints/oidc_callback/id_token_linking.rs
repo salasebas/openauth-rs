@@ -32,10 +32,13 @@ async fn register_oidc_provider_with_id_token_profile_endpoints(
 }
 
 #[tokio::test]
-async fn oidc_callback_uses_userinfo_when_id_token_is_present_without_jwks(
+async fn oidc_callback_discovers_jwks_and_uses_userinfo_when_id_token_is_present(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let oidc = MockOidcServer::start().await?;
-    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let (adapter, router) = router_with_options_and_trusted_origins(
+        SsoOptions::default(),
+        vec![oidc.base_url.clone()],
+    )?;
     let cookie = seed_session(&adapter).await?;
     router
         .handle_async(json_request(
@@ -44,20 +47,20 @@ async fn oidc_callback_uses_userinfo_when_id_token_is_present_without_jwks(
             &format!(
                 r#"{{
                     "providerId":"okta",
-                    "issuer":"https://idp.example.com",
+                    "issuer":"{issuer}",
                     "domain":"example.com",
                     "oidcConfig":{{
                         "clientId":"client_123456",
                         "clientSecret":"super-secret",
-                        "authorizationEndpoint":"{}/authorize",
-                        "tokenEndpoint":"{}/token",
-                        "userInfoEndpoint":"{}/userinfo",
-                        "discoveryEndpoint":"{}/.well-known/openid-configuration",
+                        "authorizationEndpoint":"{issuer}/authorize",
+                        "tokenEndpoint":"{issuer}/token",
+                        "userInfoEndpoint":"{issuer}/userinfo",
+                        "discoveryEndpoint":"{issuer}/.well-known/openid-configuration",
                         "skipDiscovery":true,
                         "pkce":true
                     }}
                 }}"#,
-                oidc.base_url, oidc.base_url, oidc.base_url, oidc.base_url
+                issuer = oidc.base_url
             ),
             Some(&cookie),
         )?)

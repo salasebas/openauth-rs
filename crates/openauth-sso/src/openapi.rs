@@ -56,6 +56,7 @@ pub fn sign_in_body_schema() -> BodySchema {
     ])
 }
 
+#[cfg(feature = "saml")]
 pub fn saml_acs_body_schema() -> BodySchema {
     BodySchema::object([
         BodyField::optional("SAMLResponse", JsonSchemaType::String),
@@ -63,6 +64,7 @@ pub fn saml_acs_body_schema() -> BodySchema {
     ])
 }
 
+#[cfg(feature = "saml")]
 pub fn saml_slo_body_schema() -> BodySchema {
     BodySchema::object([
         BodyField::optional("SAMLRequest", JsonSchemaType::String),
@@ -71,6 +73,7 @@ pub fn saml_slo_body_schema() -> BodySchema {
     ])
 }
 
+#[cfg(feature = "saml")]
 pub fn saml_logout_body_schema() -> BodySchema {
     BodySchema::object([BodyField::optional("callbackURL", JsonSchemaType::String).format("uri")])
 }
@@ -153,6 +156,7 @@ pub fn redirect_response(description: &str) -> Value {
     openauth_core::api::redirect_openapi_response(description)
 }
 
+#[cfg(feature = "saml")]
 pub fn html_response(description: &str) -> Value {
     json!({
         "description": description,
@@ -164,6 +168,7 @@ pub fn html_response(description: &str) -> Value {
     })
 }
 
+#[cfg(feature = "saml")]
 pub fn saml_metadata_response() -> Value {
     json!({
         "description": "SAML service provider metadata XML",

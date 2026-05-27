@@ -4,11 +4,13 @@ use super::support::router_with_options;
 
 #[test]
 fn sso_openapi_exposes_public_route_metadata() -> Result<(), Box<dyn std::error::Error>> {
-    let mut options = SsoOptions::default().domain_verification_enabled(true);
+    let options = SsoOptions::default().domain_verification_enabled(true);
     #[cfg(feature = "saml")]
-    {
+    let options = {
+        let mut options = options;
         options.saml.enable_single_logout = true;
-    }
+        options
+    };
     let (_, router) = router_with_options(options)?;
     let openapi = router.openapi_schema();
 

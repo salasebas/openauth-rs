@@ -13,9 +13,11 @@ use crate::linking_impl::validate_provider_domains;
 #[cfg(feature = "oidc")]
 use crate::oidc_impl::discovery::{validate_configured_oidc_endpoint_origins, validate_issuer_url};
 use crate::openapi::{sso_provider_response, update_provider_body_schema};
+#[cfg(feature = "saml")]
+use crate::options::SamlConfig;
 use crate::options::{
-    OidcConfig, OidcMapping, SamlConfig, SamlMapping, SsoAuditEvent, SsoAuditEventKind,
-    SsoAuditSeverity, SsoOptions, TokenEndpointAuthentication,
+    OidcConfig, OidcMapping, SamlMapping, SsoAuditEvent, SsoAuditEventKind, SsoAuditSeverity,
+    SsoOptions, TokenEndpointAuthentication,
 };
 use crate::org::{can_manage_provider, can_register_for_organization};
 use crate::store::{SsoProviderStore, UpdateSsoProviderInput};
@@ -66,6 +68,13 @@ struct UpdateOidcConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(
+    not(feature = "saml"),
+    expect(
+        dead_code,
+        reason = "SAML update payload is rejected when the feature is disabled"
+    )
+)]
 #[serde(rename_all = "camelCase")]
 struct UpdateSamlConfig {
     issuer: Option<String>,

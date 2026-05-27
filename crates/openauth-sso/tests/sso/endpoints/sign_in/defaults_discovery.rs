@@ -22,6 +22,14 @@ async fn sign_in_sso_uses_default_sso_oidc_by_provider_id() -> Result<(), Box<dy
         url.as_str().split('?').next(),
         Some(format!("{}/authorize", oidc.base_url).as_str())
     );
+    let query = url
+        .query_pairs()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        query.get("scope").map(|value| value.as_ref()),
+        Some("openid email profile offline_access"),
+        "missing configured scopes should use the default SSO OIDC request scopes"
+    );
 
     Ok(())
 }
@@ -50,6 +58,14 @@ async fn sign_in_sso_discovers_default_sso_oidc_endpoints_at_runtime(
     assert_eq!(
         url.as_str().split('?').next(),
         Some(format!("{}/authorize", oidc.base_url).as_str())
+    );
+    let query = url
+        .query_pairs()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        query.get("scope").map(|value| value.as_ref()),
+        Some("openid email profile offline_access"),
+        "runtime discovery should not replace default requested scopes with discovered scopes_supported"
     );
 
     Ok(())

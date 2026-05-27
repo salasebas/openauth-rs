@@ -52,6 +52,7 @@ pub fn router_with_options_and_trusted_origins(
     router_with_options_storage_and_trusted_origins(options, None, trusted_origins)
 }
 
+#[cfg(feature = "saml")]
 pub fn router_with_options_and_origin_security(
     options: SsoOptions,
     trusted_origins: Vec<String>,
@@ -169,6 +170,7 @@ impl TestSecondaryStorage {
         self.ttl.lock().ok().and_then(|ttl| ttl.get(key).copied())
     }
 
+    #[cfg(feature = "saml")]
     pub fn deleted_keys(&self) -> Vec<String> {
         self.deleted
             .lock()

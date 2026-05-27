@@ -1,21 +1,27 @@
 use base64::Engine;
+#[cfg(feature = "saml")]
 use flate2::read::DeflateDecoder;
 use http::{header, Method, StatusCode};
 use openauth_core::db::{Create, DbAdapter, DbValue, MemoryAdapter, Update, User, Where};
 use openauth_core::plugin::AuthPlugin;
 use openauth_sso::{
-    CreateSsoProviderInput, DeprecatedAlgorithmBehavior, OidcConfig, SamlConfig, SamlSpMetadata,
-    SsoOptions, SsoProvider, SsoProviderStore, TokenEndpointAuthentication,
+    CreateSsoProviderInput, OidcConfig, SsoOptions, SsoProvider, SsoProviderStore,
+    TokenEndpointAuthentication,
 };
+#[cfg(feature = "saml")]
+use openauth_sso::{DeprecatedAlgorithmBehavior, SamlConfig, SamlSpMetadata};
 use serde_json::json;
+#[cfg(feature = "saml")]
 use std::io::Read;
 use time::OffsetDateTime;
 
+#[cfg(feature = "saml")]
+use super::support::router_with_options_and_origin_security;
 use super::support::{
     form_request, json_body, json_request, router_with_adapter_and_options, router_with_options,
-    router_with_options_and_extra_plugins, router_with_options_and_origin_security,
-    router_with_options_and_secondary_storage, router_with_options_and_trusted_origins,
-    seed_session, seed_session_for_adapter, TestSecondaryStorage,
+    router_with_options_and_extra_plugins, router_with_options_and_secondary_storage,
+    router_with_options_and_trusted_origins, seed_session, seed_session_for_adapter,
+    TestSecondaryStorage,
 };
 
 #[path = "endpoints/audit.rs"]

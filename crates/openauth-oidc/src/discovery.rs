@@ -295,13 +295,14 @@ pub enum OidcRuntimeRequirement {
 
 impl OidcRuntimeRequirement {
     pub fn is_satisfied(self, config: &OidcConfig) -> bool {
-        match self {
-            Self::SignIn => config.authorization_endpoint.is_some(),
-            Self::Callback => {
-                config.token_endpoint.is_some()
-                    && (config.user_info_endpoint.is_some() || config.jwks_endpoint.is_some())
-            }
-        }
+        // Better Auth performs runtime discovery unless the provider has the
+        // complete OIDC endpoint set needed across sign-in and callback.
+        // Preserve the enum for API clarity while keeping both modes aligned
+        // with that upstream contract.
+        let _ = self;
+        config.authorization_endpoint.is_some()
+            && config.token_endpoint.is_some()
+            && config.jwks_endpoint.is_some()
     }
 }
 
@@ -360,7 +361,7 @@ where
         end_session_endpoint: hydrated.end_session_endpoint,
         introspection_endpoint: hydrated.introspection_endpoint,
         token_endpoint_authentication: Some(hydrated.token_endpoint_authentication),
-        scopes: config.scopes.or(hydrated.scopes_supported),
+        scopes: config.scopes,
         mapping: config.mapping,
         override_user_info: config.override_user_info,
     };
@@ -747,19 +748,27 @@ mod tests {
             &config,
             OidcRuntimeRequirement::SignIn
         ));
-        assert!(!needs_runtime_discovery(
-            &config,
-            OidcRuntimeRequirement::Callback
-        ));
-
-        config.authorization_endpoint = Some("https://idp.example.com/authorize".to_owned());
-        config.user_info_endpoint = None;
         assert!(needs_runtime_discovery(
             &config,
             OidcRuntimeRequirement::Callback
         ));
 
+        config.authorization_endpoint = Some("https://idp.example.com/authorize".to_owned());
+        assert!(needs_runtime_discovery(
+            &config,
+            OidcRuntimeRequirement::SignIn
+        ));
+        assert!(needs_runtime_discovery(
+            &config,
+            OidcRuntimeRequirement::Callback
+        ));
+
+        config.user_info_endpoint = None;
         config.jwks_endpoint = Some("https://idp.example.com/keys".to_owned());
+        assert!(!needs_runtime_discovery(
+            &config,
+            OidcRuntimeRequirement::SignIn
+        ));
         assert!(!needs_runtime_discovery(
             &config,
             OidcRuntimeRequirement::Callback
@@ -1154,6 +1163,99 @@ mod tests {
         assert_eq!(
             hydrated.token_endpoint_authentication,
             TokenEndpointAuthentication::ClientSecretBasic
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_discovery_preserves_only_explicit_request_scopes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let base_url = format!("http://{address}");
+        let server_base_url = base_url.clone();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let server_base_url = server_base_url.clone();
+                tokio::spawn(async move {
+                    let mut buffer = [0_u8; 1024];
+                    let Ok(read) = tokio::io::AsyncReadExt::read(&mut stream, &mut buffer).await
+                    else {
+                        return;
+                    };
+                    let request = String::from_utf8_lossy(&buffer[..read]);
+                    let body = if request.starts_with("GET /.well-known/openid-configuration ") {
+                        format!(
+                            r#"{{
+                                "issuer":"{server_base_url}",
+                                "authorization_endpoint":"{server_base_url}/authorize",
+                                "token_endpoint":"{server_base_url}/token",
+                                "jwks_uri":"{server_base_url}/keys",
+                                "scopes_supported":["openid","profile"]
+                            }}"#
+                        )
+                    } else {
+                        r#"{"error":"not_found"}"#.to_owned()
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ =
+                        tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes()).await;
+                });
+            }
+        });
+
+        let config = OidcConfig {
+            issuer: base_url.clone(),
+            pkce: true,
+            client_id: "client".to_owned(),
+            client_secret: "secret".into(),
+            discovery_endpoint: compute_discovery_url(&base_url),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            user_info_endpoint: None,
+            jwks_endpoint: None,
+            revocation_endpoint: None,
+            end_session_endpoint: None,
+            introspection_endpoint: None,
+            token_endpoint_authentication: None,
+            scopes: None,
+            mapping: None,
+            override_user_info: false,
+        };
+
+        let hydrated = ensure_runtime_oidc_config_with_origin_validator(
+            &base_url,
+            config,
+            OidcRuntimeRequirement::SignIn,
+            |url| url.starts_with(&base_url),
+            false,
+        )
+        .await?;
+
+        assert_eq!(hydrated.scopes, None);
+
+        let explicit_config = OidcConfig {
+            scopes: Some(vec!["openid".to_owned(), "email".to_owned()]),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            jwks_endpoint: None,
+            ..hydrated
+        };
+        let explicit_hydrated = ensure_runtime_oidc_config_with_origin_validator(
+            &base_url,
+            explicit_config,
+            OidcRuntimeRequirement::SignIn,
+            |url| url.starts_with(&base_url),
+            false,
+        )
+        .await?;
+
+        assert_eq!(
+            explicit_hydrated.scopes,
+            Some(vec!["openid".to_owned(), "email".to_owned()])
         );
         Ok(())
     }

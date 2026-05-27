@@ -8,7 +8,9 @@ use time::OffsetDateTime;
 
 #[cfg(feature = "oidc")]
 use crate::oidc_impl::flow::oidc_redirect_uri;
-use crate::options::{OidcConfig, SamlConfig};
+use crate::options::OidcConfig;
+#[cfg(feature = "saml")]
+use crate::options::SamlConfig;
 use crate::schema::SSO_PROVIDER_MODEL;
 #[cfg(feature = "saml")]
 use crate::utils::certificate_metadata;

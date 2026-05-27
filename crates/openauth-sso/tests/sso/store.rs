@@ -351,6 +351,7 @@ async fn provider_store_returns_saml_certificate_parse_error_without_raw_cert(
     Ok(())
 }
 
+#[cfg(feature = "saml")]
 const TEST_CERTIFICATE: &str = "\
 MIIDFTCCAf2gAwIBAgIUYqceCSeUr0EzhKEqp7KdKUivL+IwDQYJKoZIhvcNAQEL\
 BQAwGjEYMBYGA1UEAwwPaWRwLmV4YW1wbGUuY29tMB4XDTI2MDUxODA0NDk1N1oX\
