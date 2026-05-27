@@ -20,3 +20,7 @@ temp/
 !.env.example
 !**/.env.example
 !**/.env*.example
+
+# Better Auth upstream clone (local parity only)
+reference/upstream-src/*/
+!reference/upstream-src/README.md
