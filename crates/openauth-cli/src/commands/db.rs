@@ -1,10 +1,11 @@
 use std::path::Path;
 
 use crate::app::{AppContext, AppError, GenerateArgs, MigrateArgs, StatusArgs};
-use crate::db::{self, MigrationOutput};
+use crate::db::{self, DbCliError, MigrationOutput};
 use crate::output::print_json;
 use crate::prompt::confirm;
 use crate::schema::{dialect_from_provider, dialect_name};
+use serde_json::{Map, Value};
 
 pub async fn status(context: &AppContext, args: StatusArgs) -> Result<(), AppError> {
     let config = context.load_config()?;
@@ -23,9 +24,31 @@ pub async fn status(context: &AppContext, args: StatusArgs) -> Result<(), AppErr
 
 pub async fn generate(context: &AppContext, args: GenerateArgs) -> Result<(), AppError> {
     let config = context.load_config()?;
-    let planned = db::plan_with_base(&config, args.from_empty, Some(context.cwd())).await?;
+    let planned = match db::plan_with_base(&config, args.from_empty, Some(context.cwd())).await {
+        Ok(planned) => planned,
+        Err(error @ DbCliError::UnsupportedAdapter(_)) => {
+            crate::telemetry::publish_generate_with_extra(
+                &config,
+                "unsupported_adapter",
+                unsupported_adapter_payload(&config),
+            )
+            .await;
+            return Err(error.into());
+        }
+        Err(error @ DbCliError::UnsupportedProvider(_)) => {
+            crate::telemetry::publish_generate_with_extra(
+                &config,
+                "unsupported_database",
+                unsupported_adapter_payload(&config),
+            )
+            .await;
+            return Err(error.into());
+        }
+        Err(error) => return Err(error.into()),
+    };
     if planned.plan.is_empty() {
         println!("Schema is already up to date.");
+        crate::telemetry::publish_generate(&config, "no_changes").await;
         return Ok(());
     }
     let output = migration_output(
@@ -36,28 +59,66 @@ pub async fn generate(context: &AppContext, args: GenerateArgs) -> Result<(), Ap
     )?;
     let path = db::write_migration_output(&config, &planned, output, args.force)?;
     println!("Generated migration: {}", path.display());
+    crate::telemetry::publish_generate(&config, "generated").await;
     Ok(())
 }
 
 pub async fn migrate(context: &AppContext, args: MigrateArgs) -> Result<(), AppError> {
     let config = context.load_config()?;
-    let planned = db::plan_with_base(&config, false, Some(context.cwd())).await?;
+    let planned = match db::plan_with_base(&config, false, Some(context.cwd())).await {
+        Ok(planned) => planned,
+        Err(error @ DbCliError::UnsupportedAdapter(_)) => {
+            crate::telemetry::publish_migrate_with_extra(
+                &config,
+                "unsupported_adapter",
+                unsupported_adapter_payload(&config),
+            )
+            .await;
+            return Err(error.into());
+        }
+        Err(error @ DbCliError::UnsupportedProvider(_)) => {
+            crate::telemetry::publish_migrate_with_extra(
+                &config,
+                "unsupported_database",
+                unsupported_adapter_payload(&config),
+            )
+            .await;
+            return Err(error.into());
+        }
+        Err(error) => return Err(error.into()),
+    };
     if planned.plan.is_empty() {
         println!("No migrations needed.");
+        crate::telemetry::publish_migrate(&config, "no_changes").await;
         return Ok(());
     }
     print_plan(&planned);
     if args.dry_run {
         println!("Dry run complete; no changes were applied.");
+        crate::telemetry::publish_migrate(&config, "dry_run").await;
         return Ok(());
     }
     if !confirm("Apply these migrations?", args.yes)? {
         println!("Migration cancelled.");
+        crate::telemetry::publish_migrate(&config, "aborted").await;
         return Ok(());
     }
     db::migrate_with_base(&config, Some(context.cwd())).await?;
     println!("Migration completed successfully.");
+    crate::telemetry::publish_migrate(&config, "migrated").await;
     Ok(())
+}
+
+fn unsupported_adapter_payload(config: &crate::config::CliConfig) -> Map<String, Value> {
+    let mut payload = Map::new();
+    payload.insert(
+        "adapter".to_owned(),
+        Value::String(config.database.adapter.clone()),
+    );
+    if let Some(provider) = &config.database.provider {
+        payload.insert("database".to_owned(), Value::String(provider.clone()));
+    }
+    payload
 }
 
 fn migration_output(

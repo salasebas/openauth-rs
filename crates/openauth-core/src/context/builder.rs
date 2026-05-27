@@ -20,8 +20,8 @@ use super::origins::resolve_trusted_origins;
 use super::plugins::initialize_plugins;
 use super::secrets::{resolve_legacy_secret, validate_secret, DEFAULT_SECRET};
 use super::{
-    AuthContext, AuthEnvironment, PasswordContext, PasswordPolicy, RateLimitContext,
-    SecretMaterial, SessionConfig,
+    noop_telemetry_publisher, AuthContext, AuthEnvironment, PasswordContext, PasswordPolicy,
+    RateLimitContext, SecretMaterial, SessionConfig,
 };
 
 pub fn create_auth_context(options: OpenAuthOptions) -> Result<AuthContext, OpenAuthError> {
@@ -148,6 +148,7 @@ pub fn create_auth_context_with_environment_and_adapter(
         plugin_error_codes: BTreeMap::new(),
         plugin_database_hooks: Vec::new(),
         plugin_migrations: Vec::new(),
+        telemetry_publisher: noop_telemetry_publisher(),
         logger,
     };
     initialize_plugins(&mut context)?;

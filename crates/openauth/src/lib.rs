@@ -6,6 +6,11 @@ pub use auth::{
     open_auth, open_auth_with_adapter, open_auth_with_adapter_and_endpoints,
     open_auth_with_endpoints, OpenAuth, OpenAuthBuilder,
 };
+#[cfg(feature = "telemetry")]
+pub use auth::{
+    open_auth_async, open_auth_with_adapter_and_endpoints_async, open_auth_with_adapter_async,
+    open_auth_with_endpoints_async,
+};
 pub use openauth_core::api::{
     core_auth_async_endpoints, create_auth_endpoint, parse_request_body, ApiErrorCode,
     ApiErrorResponse, ApiRequest, ApiResponse, AsyncAuthEndpoint, AuthEndpoint,
@@ -19,7 +24,10 @@ pub use openauth_core::auth::email_password::{
 pub use openauth_core::auth::session::{
     GetSessionInput, GetSessionResult, SessionAuth, SignOutResult,
 };
-pub use openauth_core::context::{AuthContext, AuthEnvironment};
+pub use openauth_core::context::{
+    AuthContext, AuthEnvironment, ContextTelemetryEvent, ContextTelemetryFuture,
+    ContextTelemetryPublisher,
+};
 pub use openauth_core::cookies::{
     AuthCookie, AuthCookies, ChunkedCookieStore, Cookie, CookieCachePayload, CookieOptions,
     ParsedCookie, SessionCookieOptions,
@@ -90,8 +98,9 @@ pub use openauth_sqlx as sqlx;
 pub use openauth_sso as sso;
 #[cfg(feature = "stripe")]
 pub use openauth_stripe as stripe;
+#[cfg(feature = "telemetry")]
 pub use openauth_telemetry::{
-    create_telemetry, get_telemetry_auth_config, TelemetryContext, TelemetryEvent,
+    create_telemetry, get_telemetry_auth_config, CustomTrackFn, TelemetryContext, TelemetryEvent,
     TelemetryPublisher, TelemetryTestHooks,
 };
 #[cfg(feature = "tokio-postgres")]
