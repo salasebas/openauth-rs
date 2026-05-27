@@ -11,7 +11,10 @@ use openauth_core::api::{
 use openauth_core::context::{create_auth_context, create_auth_context_with_adapter, AuthContext};
 use openauth_core::db::{Create, DbField, DbFieldType, DbValue, MemoryAdapter};
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{OpenAuthOptions, RateLimitOptions, RateLimitPathRule, RateLimitRule};
+use openauth_core::options::{
+    OpenAuthOptions, RateLimitOptions, RateLimitPathRule, RateLimitRule, SessionAdditionalField,
+    UserAdditionalField,
+};
 use openauth_core::plugin::{
     AuthPlugin, PluginAfterHookAction, PluginBeforeHookAction, PluginDatabaseBeforeAction,
     PluginDatabaseBeforeInput, PluginDatabaseHook, PluginErrorCode, PluginInitOutput,
@@ -434,6 +437,45 @@ fn plugin_schema_contribution_adds_core_table_field() -> Result<(), Box<dyn std:
 
     let field = context.db_schema.field("user", "tenant_id")?;
     assert_eq!(field.name, "tenant_id");
+    Ok(())
+}
+
+#[test]
+fn plugin_additional_fields_update_runtime_options_and_schema(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let plugin = AuthPlugin::new("additional-fields").with_init(|_| {
+        Ok(PluginInitOutput::new()
+            .user_additional_field(
+                "role",
+                UserAdditionalField::new(DbFieldType::String)
+                    .db_name("user_role")
+                    .optional()
+                    .hidden(),
+            )
+            .session_additional_field(
+                "plan",
+                SessionAdditionalField::new(DbFieldType::String).generated(),
+            ))
+    });
+
+    let context = create_auth_context(OpenAuthOptions {
+        plugins: vec![plugin],
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+
+    assert!(context.options.user.additional_fields.contains_key("role"));
+    assert!(context
+        .options
+        .session
+        .additional_fields
+        .contains_key("plan"));
+    let role = context.db_schema.field("user", "role")?;
+    assert_eq!(role.name, "user_role");
+    assert!(!role.required);
+    assert!(!role.returned);
+    let plan = context.db_schema.field("session", "plan")?;
+    assert!(!plan.input);
     Ok(())
 }
 

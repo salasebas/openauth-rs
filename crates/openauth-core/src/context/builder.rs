@@ -8,12 +8,14 @@ use crate::cookies::get_cookies;
 use crate::crypto::password::{hash_password, verify_password};
 use crate::crypto::{build_secret_config, parse_secrets_env};
 use crate::db::RateLimitStorage as DbRateLimitStorage;
-use crate::db::{auth_schema, AuthSchemaOptions, DbAdapter, HookedAdapter};
+use crate::db::{auth_schema, AuthSchemaOptions, DbAdapter, DbField, HookedAdapter};
 use crate::env::is_production;
 use crate::env::logger::{create_logger, LoggerOptions};
 use crate::error::OpenAuthError;
 use crate::options::RateLimitStore;
-use crate::options::{OpenAuthOptions, RateLimitStorageOption};
+use crate::options::{
+    OpenAuthOptions, RateLimitStorageOption, SessionAdditionalField, UserAdditionalField,
+};
 use crate::rate_limit::{GovernorMemoryRateLimitStore, LegacyRateLimitStorageAdapter};
 
 use super::origins::resolve_trusted_origins;
@@ -209,7 +211,7 @@ fn validate_rate_limit_storage(options: &OpenAuthOptions) -> Result<(), OpenAuth
 }
 
 fn schema_options_from_auth_options(options: &OpenAuthOptions) -> AuthSchemaOptions {
-    AuthSchemaOptions {
+    let mut schema_options = AuthSchemaOptions {
         has_secondary_storage: options.secondary_storage.is_some(),
         store_session_in_database: options.session.store_session_in_database,
         rate_limit_storage: match options.rate_limit.storage {
@@ -218,5 +220,67 @@ fn schema_options_from_auth_options(options: &OpenAuthOptions) -> AuthSchemaOpti
             RateLimitStorageOption::SecondaryStorage => DbRateLimitStorage::SecondaryStorage,
         },
         ..AuthSchemaOptions::default()
+    };
+    for (name, field) in &options.user.additional_fields {
+        schema_options
+            .user
+            .additional_fields
+            .insert(name.clone(), user_additional_field_to_db_field(name, field));
     }
+    for (name, field) in &options.session.additional_fields {
+        schema_options.session.additional_fields.insert(
+            name.clone(),
+            session_additional_field_to_db_field(name, field),
+        );
+    }
+    schema_options
+}
+
+pub(super) fn user_additional_field_to_db_field(
+    logical_name: &str,
+    field: &UserAdditionalField,
+) -> DbField {
+    additional_field_to_db_field(
+        logical_name,
+        field.db_name.as_deref(),
+        field.field_type.clone(),
+        field.required,
+        field.input,
+        field.returned,
+    )
+}
+
+pub(super) fn session_additional_field_to_db_field(
+    logical_name: &str,
+    field: &SessionAdditionalField,
+) -> DbField {
+    additional_field_to_db_field(
+        logical_name,
+        field.db_name.as_deref(),
+        field.field_type.clone(),
+        field.required,
+        field.input,
+        field.returned,
+    )
+}
+
+fn additional_field_to_db_field(
+    logical_name: &str,
+    db_name: Option<&str>,
+    field_type: crate::db::DbFieldType,
+    required: bool,
+    input: bool,
+    returned: bool,
+) -> DbField {
+    let mut field = DbField::new(db_name.unwrap_or(logical_name), field_type);
+    if !required {
+        field = field.optional();
+    }
+    if !input {
+        field = field.generated();
+    }
+    if !returned {
+        field = field.hidden();
+    }
+    field
 }

@@ -3,6 +3,7 @@ use crate::plugin::PluginInitOutput;
 
 #[cfg(feature = "oauth")]
 use super::builder::insert_social_provider;
+use super::builder::{session_additional_field_to_db_field, user_additional_field_to_db_field};
 use super::origins::{push_trusted_origin, push_unique};
 use super::AuthContext;
 
@@ -93,22 +94,30 @@ pub(super) fn apply_plugin_output(
         insert_social_provider(&mut context.social_providers, provider)?;
     }
     for (name, field) in output.user_additional_fields {
+        let db_field = user_additional_field_to_db_field(&name, &field);
         insert_runtime_field(
             plugin_id,
             "user",
             &mut context.options.user.additional_fields,
-            name,
+            name.clone(),
             field,
         )?;
+        context
+            .db_schema
+            .insert_plugin_field("user", name, db_field)?;
     }
     for (name, field) in output.session_additional_fields {
+        let db_field = session_additional_field_to_db_field(&name, &field);
         insert_runtime_field(
             plugin_id,
             "session",
             &mut context.options.session.additional_fields,
-            name,
+            name.clone(),
             field,
         )?;
+        context
+            .db_schema
+            .insert_plugin_field("session", name, db_field)?;
     }
     Ok(())
 }
