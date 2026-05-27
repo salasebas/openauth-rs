@@ -16,29 +16,29 @@
 
 Source package reviewed:
 
-- `upstream/better-auth/1.6.9/repository/packages/redis-storage/src/redis-storage.ts`
-- `upstream/better-auth/1.6.9/repository/packages/redis-storage/src/index.ts`
-- `upstream/better-auth/1.6.9/repository/packages/redis-storage/package.json`
-- `upstream/better-auth/1.6.9/repository/packages/redis-storage/README.md`
-- `upstream/better-auth/1.6.9/repository/packages/redis-storage/CHANGELOG.md`
+- `reference/upstream-src/1.6.9/repository/packages/redis-storage/src/redis-storage.ts`
+- `reference/upstream-src/1.6.9/repository/packages/redis-storage/src/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/redis-storage/package.json`
+- `reference/upstream-src/1.6.9/repository/packages/redis-storage/README.md`
+- `reference/upstream-src/1.6.9/repository/packages/redis-storage/CHANGELOG.md`
 
 Relevant upstream contract and usage points:
 
-- `upstream/better-auth/1.6.9/repository/packages/core/src/db/type.ts`
-- `upstream/better-auth/1.6.9/repository/packages/better-auth/src/db/internal-adapter.ts`
-- `upstream/better-auth/1.6.9/repository/packages/better-auth/src/db/internal-adapter.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/better-auth/src/db/secondary-storage.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/better-auth/src/api/rate-limiter/index.ts`
-- `upstream/better-auth/1.6.9/repository/packages/better-auth/src/api/rate-limiter/rate-limiter.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/db/get-tables.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/db/test/get-tables.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/api-key/src/adapter.ts`
-- `upstream/better-auth/1.6.9/repository/packages/api-key/src/routes/*`
-- `upstream/better-auth/1.6.9/repository/packages/oauth-provider/src/oauth.ts`
-- `upstream/better-auth/1.6.9/repository/packages/sso/src/types.ts`
-- `upstream/better-auth/1.6.9/repository/packages/sso/src/domain-verification.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/sso/src/routes/*`
-- `upstream/better-auth/1.6.9/repository/packages/better-auth/src/plugins/device-authorization/routes.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/db/type.ts`
+- `reference/upstream-src/1.6.9/repository/packages/better-auth/src/db/internal-adapter.ts`
+- `reference/upstream-src/1.6.9/repository/packages/better-auth/src/db/internal-adapter.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/better-auth/src/db/secondary-storage.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/better-auth/src/api/rate-limiter/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/better-auth/src/api/rate-limiter/rate-limiter.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/db/get-tables.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/db/test/get-tables.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/api-key/src/adapter.ts`
+- `reference/upstream-src/1.6.9/repository/packages/api-key/src/routes/*`
+- `reference/upstream-src/1.6.9/repository/packages/oauth-provider/src/oauth.ts`
+- `reference/upstream-src/1.6.9/repository/packages/sso/src/types.ts`
+- `reference/upstream-src/1.6.9/repository/packages/sso/src/domain-verification.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/sso/src/routes/*`
+- `reference/upstream-src/1.6.9/repository/packages/better-auth/src/plugins/device-authorization/routes.ts`
 
 Out of scope for this package checklist:
 

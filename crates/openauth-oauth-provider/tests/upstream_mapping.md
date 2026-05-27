@@ -1,6 +1,6 @@
 # OAuth Provider Upstream Test Mapping
 
-Reference: `upstream/better-auth/1.6.9/repository/packages/oauth-provider`.
+Reference: `reference/upstream-src/1.6.9/repository/packages/oauth-provider`.
 
 | Upstream area | Rust coverage | Notes |
 | --- | --- | --- |

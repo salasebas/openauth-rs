@@ -2,7 +2,7 @@
 
 This file tracks material differences between the current
 `crates/openauth-sso` implementation and the upstream server-side Better Auth
-SSO package at `upstream/better-auth/1.6.9/repository/packages/sso`.
+SSO package at `reference/upstream-src/1.6.9/repository/packages/sso`.
 
 The goal is behavioral parity where it makes sense for OpenAuth. This remains
 an idiomatic Rust implementation, not a line-by-line TypeScript port.
@@ -144,7 +144,7 @@ Other intentional differences remain:
   boundary instead.
 
 Continue adding upstream parity cases when new Better Auth SSO behavior lands
-under `upstream/better-auth`.
+under `reference/upstream-src/1.6.9/repository/`.
 
 ## Recommended Review Order
 

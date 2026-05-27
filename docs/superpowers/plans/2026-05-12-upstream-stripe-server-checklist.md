@@ -6,7 +6,7 @@
 
 **Goal:** Build a reusable checklist for the server-side behavior in Better Auth's upstream Stripe package.
 
-**Architecture:** Treat `upstream/better-auth/1.6.9/repository/packages/stripe` as the behavioral source of truth. Port server behavior into idiomatic Rust around explicit types, storage contracts, validated endpoints, typed errors, webhook verification, and provider boundaries. Browser-only/client-only TypeScript details are listed only when they reveal server API surface.
+**Architecture:** Treat `reference/upstream-src/1.6.9/repository/packages/stripe` as the behavioral source of truth. Port server behavior into idiomatic Rust around explicit types, storage contracts, validated endpoints, typed errors, webhook verification, and provider boundaries. Browser-only/client-only TypeScript details are listed only when they reveal server API surface.
 
 **Tech Stack:** Rust workspace crates, Stripe API equivalent, OpenAuth plugin/router/storage abstractions, webhook signature verification, JSON validation, async HTTP, time/date handling.
 
@@ -16,18 +16,18 @@
 
 Upstream package inspected:
 
-- `upstream/better-auth/1.6.9/repository/packages/stripe/src/index.ts`
-- `upstream/better-auth/1.6.9/repository/packages/stripe/src/routes.ts`
-- `upstream/better-auth/1.6.9/repository/packages/stripe/src/hooks.ts`
-- `upstream/better-auth/1.6.9/repository/packages/stripe/src/middleware.ts`
-- `upstream/better-auth/1.6.9/repository/packages/stripe/src/schema.ts`
-- `upstream/better-auth/1.6.9/repository/packages/stripe/src/types.ts`
-- `upstream/better-auth/1.6.9/repository/packages/stripe/src/metadata.ts`
-- `upstream/better-auth/1.6.9/repository/packages/stripe/src/utils.ts`
-- `upstream/better-auth/1.6.9/repository/packages/stripe/src/error-codes.ts`
-- `upstream/better-auth/1.6.9/repository/packages/stripe/src/version.ts`
-- `upstream/better-auth/1.6.9/repository/packages/stripe/src/client.ts` only as client API surface reference.
-- `upstream/better-auth/1.6.9/repository/packages/stripe/test/*.ts`
+- `reference/upstream-src/1.6.9/repository/packages/stripe/src/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/stripe/src/routes.ts`
+- `reference/upstream-src/1.6.9/repository/packages/stripe/src/hooks.ts`
+- `reference/upstream-src/1.6.9/repository/packages/stripe/src/middleware.ts`
+- `reference/upstream-src/1.6.9/repository/packages/stripe/src/schema.ts`
+- `reference/upstream-src/1.6.9/repository/packages/stripe/src/types.ts`
+- `reference/upstream-src/1.6.9/repository/packages/stripe/src/metadata.ts`
+- `reference/upstream-src/1.6.9/repository/packages/stripe/src/utils.ts`
+- `reference/upstream-src/1.6.9/repository/packages/stripe/src/error-codes.ts`
+- `reference/upstream-src/1.6.9/repository/packages/stripe/src/version.ts`
+- `reference/upstream-src/1.6.9/repository/packages/stripe/src/client.ts` only as client API surface reference.
+- `reference/upstream-src/1.6.9/repository/packages/stripe/test/*.ts`
 
 Out of scope for Rust server core:
 

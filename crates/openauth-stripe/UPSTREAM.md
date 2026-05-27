@@ -1,6 +1,6 @@
 # Better Auth Stripe parity notes
 
-Reference: Better Auth `packages/stripe` at **1.6.9** (`upstream/better-auth/1.6.9/repository/packages/stripe/`).
+Reference: Better Auth `packages/stripe` at **1.6.9** (`reference/upstream-src/1.6.9/repository/packages/stripe/`).
 
 OpenAuth-stripe is an idiomatic Rust port, not a line-by-line copy. This document records intentional differences and upstream behavior we mirror.
 

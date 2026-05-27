@@ -1,7 +1,7 @@
 # Better Auth SCIM — design differences (OpenAuth)
 
 Reference upstream: Better Auth `@better-auth/scim` **v1.6.9**  
-`upstream/better-auth/1.6.9/repository/packages/scim/`
+`reference/upstream-src/1.6.9/repository/packages/scim/`
 
 OpenAuth crate: `crates/openauth-scim`
 

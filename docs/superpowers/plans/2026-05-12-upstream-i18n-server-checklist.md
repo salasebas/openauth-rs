@@ -18,21 +18,21 @@
 
 Upstream source inspected:
 
-- `upstream/better-auth/1.6.9/repository/packages/i18n/src/index.ts`
-- `upstream/better-auth/1.6.9/repository/packages/i18n/src/types.ts`
-- `upstream/better-auth/1.6.9/repository/packages/i18n/src/i18n.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/i18n/src/client.ts`
-- `upstream/better-auth/1.6.9/repository/packages/i18n/src/version.ts`
-- `upstream/better-auth/1.6.9/repository/packages/i18n/package.json`
-- `upstream/better-auth/1.6.9/repository/packages/i18n/README.md`
-- `upstream/better-auth/1.6.9/repository/packages/i18n/CHANGELOG.md`
-- `upstream/better-auth/1.6.9/repository/docs/content/docs/plugins/i18n.mdx`
-- `upstream/better-auth/1.6.9/repository/packages/cli/src/commands/init/configs/temp-plugins.config.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/api/index.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/error/index.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/types/plugin.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/utils/is-api-error.ts`
-- `upstream/better-auth/1.6.9/repository/packages/better-auth/src/cookies/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/i18n/src/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/i18n/src/types.ts`
+- `reference/upstream-src/1.6.9/repository/packages/i18n/src/i18n.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/i18n/src/client.ts`
+- `reference/upstream-src/1.6.9/repository/packages/i18n/src/version.ts`
+- `reference/upstream-src/1.6.9/repository/packages/i18n/package.json`
+- `reference/upstream-src/1.6.9/repository/packages/i18n/README.md`
+- `reference/upstream-src/1.6.9/repository/packages/i18n/CHANGELOG.md`
+- `reference/upstream-src/1.6.9/repository/docs/content/docs/plugins/i18n.mdx`
+- `reference/upstream-src/1.6.9/repository/packages/cli/src/commands/init/configs/temp-plugins.config.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/api/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/error/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/types/plugin.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/utils/is-api-error.ts`
+- `reference/upstream-src/1.6.9/repository/packages/better-auth/src/cookies/index.ts`
 
 This checklist intentionally does not inspect the current OpenAuth implementation. Mark items complete only after comparing against the target project during a later implementation/review phase.
 

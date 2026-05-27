@@ -1,32 +1,43 @@
 # Contributing
 
-This project is currently an independent, unofficial Python porting workspace
-inspired by Better Auth. It is not affiliated with, maintained by, endorsed by,
-or sponsored by the Better Auth project or its maintainers.
+OpenAuth is an independent, unofficial Rust authentication toolkit inspired by
+Better Auth. It is not affiliated with, maintained by, endorsed by, or sponsored
+by the Better Auth project or its maintainers.
 
 ## Setup
 
 ```bash
-python -m pip install -e packages/better-auth[dev]
+./scripts/fetch-upstream-better-auth.sh
+cargo install --locked cargo-nextest
+```
+
+Bring up optional integration services when needed:
+
+```bash
+./scripts/ensure-test-services.sh postgres mysql redis valkey
 ```
 
 ## Tests
 
 ```bash
-python -m pytest packages/*/tests
+cargo fmt --all --check
+cargo clippy -p <crate> --all-targets -- -D warnings
+cargo nextest run -p <crate>
 ```
 
-## Package Work
+## Porting Work
 
-Each package under `packages/` maps to an upstream Better Auth package when
-possible. Keep direct porting notes in `PORTING.md`.
+Each crate under `crates/` maps to an upstream Better Auth package when possible.
+Keep roadmap notes in `PORTING.md`.
 
 When porting behavior:
 
-1. Read the matching upstream package in `upstream/better-auth/packages`.
-2. Write a focused Python test.
-3. Implement a Python-native equivalent.
-4. Keep framework or database specific behavior in a dedicated package.
+1. Read the active pin in `reference/upstream-better-auth/VERSION.md`.
+2. Inspect the matching package under
+   `reference/upstream-src/<version>/repository/packages/`.
+3. Write a focused Rust test.
+4. Implement an idiomatic Rust equivalent with explicit errors.
+5. Keep framework- or database-specific behavior in a dedicated crate.
 
 ## Pull Requests
 

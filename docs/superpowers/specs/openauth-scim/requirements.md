@@ -7,7 +7,7 @@ behavioral and product reference, not a structure to copy mechanically.
 ## Coverage Source
 
 - `docs/superpowers/plans/2026-05-12-scim-upstream-parity.md`
-- `upstream/better-auth/1.6.9/repository/packages/scim`
+- `reference/upstream-src/1.6.9/repository/packages/scim`
 - Upstream source files inspected:
   - `src/index.ts`
   - `src/types.ts`

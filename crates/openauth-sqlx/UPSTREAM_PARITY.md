@@ -2,7 +2,7 @@
 
 This document tracks the server-side parity status of `openauth-sqlx` against
 the Better Auth SQL/Kysely adapter behavior inspected under
-`upstream/better-auth/1.6.9/repository/`.
+`reference/upstream-src/1.6.9/repository/`.
 
 The Rust adapter is not a line-by-line TypeScript port. Parity means matching
 observable server behavior where it matters while preserving OpenAuth's typed

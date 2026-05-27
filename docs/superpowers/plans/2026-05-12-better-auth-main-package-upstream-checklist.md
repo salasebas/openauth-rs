@@ -2,7 +2,7 @@
 
 Esta es una guia de planeacion reutilizable, no una auditoria de avance del proyecto actual. Cada checklist se marca como completado cuando OpenAuth implemente el comportamiento servidor equivalente de forma idiomatica en Rust; si se agrega un comportamiento mejor, mas seguro o mas completo que cubre la intencion upstream, tambien se marca como completado aunque la estructura no sea 1:1.
 
-Origen analizado: `upstream/better-auth/1.6.9/repository/packages/better-auth`.
+Origen analizado: `reference/upstream-src/1.6.9/repository/packages/better-auth`.
 
 Alcance: comportamiento de servidor necesario para usar la libreria principal de Better Auth/OpenAuth: inicializacion, runtime HTTP, contexto, endpoints, cookies, crypto, DB, OAuth/social, plugins, adapters, migraciones, test-utils servidor y contratos publicos. Se excluye browser-only/TypeScript-only como SDKs de cliente y bindings de frameworks, salvo como referencia de superficie HTTP esperada.
 

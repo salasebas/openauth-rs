@@ -1,10 +1,13 @@
 # OpenAuth Agent Guide
 
 OpenAuth is an unofficial Rust implementation inspired by Better Auth, not a
-line-by-line port. Use `upstream/better-auth/` as the behavioral reference for
-new features, behavior changes, tests, or public APIs, then translate the
-behavior into idiomatic Rust with explicit errors and secure server-side
-boundaries.
+line-by-line port. Use the upstream snapshot documented in
+`reference/upstream-better-auth/VERSION.md` as the behavioral reference for new
+features, behavior changes, tests, or public APIs. Source lives under
+`reference/upstream-src/<parity-version>/repository/` (gitignored). If missing,
+run `./scripts/fetch-upstream-better-auth.sh`. Do not commit upstream clones.
+Translate behavior into idiomatic Rust with explicit errors and secure
+server-side boundaries.
 
 Keep modules small and focused. Prefer discovering crate ownership from
 `Cargo.toml`, `crates/*/README.md`, and the existing source tree instead of

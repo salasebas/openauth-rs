@@ -16,25 +16,25 @@
 
 Reference package:
 
-- `upstream/better-auth/1.6.9/repository/packages/scim/package.json`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/index.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/types.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/middlewares.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/routes.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/mappings.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/patch-operations.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/scim-error.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/scim-filters.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/scim-metadata.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/scim-resources.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/scim-tokens.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/user-schemas.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/utils.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/version.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/scim.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/scim-users.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/scim-patch.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/scim/src/scim.management.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/package.json`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/types.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/middlewares.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/routes.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/mappings.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/patch-operations.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/scim-error.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/scim-filters.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/scim-metadata.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/scim-resources.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/scim-tokens.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/user-schemas.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/utils.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/version.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/scim.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/scim-users.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/scim-patch.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/scim/src/scim.management.test.ts`
 
 Excluded from server parity:
 

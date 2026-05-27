@@ -6,7 +6,7 @@
 
 **Architecture:** `openauth-core` owns runtime contracts, DB traits, endpoint pipeline, errors, crypto, cookies, context, and base models. `openauth` is the public facade. Feature crates such as `openauth-sso`, `openauth-scim`, `openauth-oauth`, `openauth-stripe`, `openauth-i18n`, and `openauth-telemetry` depend upward on core, not sideways on each other unless a dependency is part of the Better Auth contract.
 
-**Tech Stack:** Rust 2021 workspace, async traits for storage/runtime boundaries, typed errors, serde-compatible model contracts, Better Auth upstream snapshot at `upstream/better-auth/1.6.9`.
+**Tech Stack:** Rust 2021 workspace, async traits for storage/runtime boundaries, typed errors, serde-compatible model contracts, Better Auth upstream snapshot at `reference/upstream-src/1.6.9` (see `reference/upstream-better-auth/VERSION.md`).
 
 ---
 
@@ -14,8 +14,8 @@
 
 This roadmap is based on the local upstream snapshot:
 
-- Source package: `upstream/better-auth/1.6.9/repository`
-- NPM package: `upstream/better-auth/1.6.9/package`
+- Source tree: `reference/upstream-src/1.6.9/repository` (clone with `./scripts/fetch-upstream-better-auth.sh`)
+- Attribution: `reference/upstream-better-auth/`
 - Version: `better-auth@1.6.9`
 - Rust workspace: `Cargo.toml`
 - Current local state: all OpenAuth crates are scaffolds exposing only `VERSION`

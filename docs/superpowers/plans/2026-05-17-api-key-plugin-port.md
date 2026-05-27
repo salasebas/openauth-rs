@@ -594,14 +594,14 @@ Expected: no matches in production API-key/core changes.
 ### Task 10: Upstream Re-Analysis Gap Closure
 
 **Upstream sources re-read:**
-- `upstream/better-auth/1.6.9/repository/packages/api-key/src/index.ts`
-- `upstream/better-auth/1.6.9/repository/packages/api-key/src/types.ts`
-- `upstream/better-auth/1.6.9/repository/packages/api-key/src/routes/*.ts`
-- `upstream/better-auth/1.6.9/repository/packages/api-key/src/adapter.ts`
-- `upstream/better-auth/1.6.9/repository/packages/api-key/src/org-authorization.ts`
-- `upstream/better-auth/1.6.9/repository/packages/api-key/src/error-codes.ts`
-- `upstream/better-auth/1.6.9/repository/packages/api-key/src/api-key.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/api-key/src/org-api-key.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/api-key/src/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/api-key/src/types.ts`
+- `reference/upstream-src/1.6.9/repository/packages/api-key/src/routes/*.ts`
+- `reference/upstream-src/1.6.9/repository/packages/api-key/src/adapter.ts`
+- `reference/upstream-src/1.6.9/repository/packages/api-key/src/org-authorization.ts`
+- `reference/upstream-src/1.6.9/repository/packages/api-key/src/error-codes.ts`
+- `reference/upstream-src/1.6.9/repository/packages/api-key/src/api-key.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/api-key/src/org-api-key.test.ts`
 
 - [x] Default key generation should use letters only (`a-z`, `A-Z`) after the optional prefix; current Rust generator delegates to the core random helper.
 - [x] `ApiKeyConfiguration` is missing Rust equivalents for upstream `customKeyGenerator`, `customAPIKeyGetter`, and `customAPIKeyValidator`.

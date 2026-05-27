@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close the remaining server-side OAuth 2.1/OIDC provider parity gaps against `upstream/better-auth/1.6.9/repository/packages/oauth-provider` while keeping the Rust crate idiomatic, modular, and secure.
+**Goal:** Close the remaining server-side OAuth 2.1/OIDC provider parity gaps against `reference/upstream-src/1.6.9/repository/packages/oauth-provider` while keeping the Rust crate idiomatic, modular, and secure.
 
 **Architecture:** Keep `crates/openauth-oauth-provider` split by behavior: options/schema/models are passive data, client/token/consent/authorize modules own domain behavior, and endpoints only adapt HTTP requests to those functions. Database table names stay plural snake_case physically, while public OAuth JSON remains OAuth/OIDC compatible.
 

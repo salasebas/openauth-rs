@@ -14,7 +14,7 @@
 
 ## Upstream Scope
 
-Source package inspected: `upstream/better-auth/1.6.9/repository/packages/api-key`.
+Source package inspected: `reference/upstream-src/1.6.9/repository/packages/api-key`.
 
 Server-relevant upstream files:
 

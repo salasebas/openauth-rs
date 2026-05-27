@@ -26,7 +26,7 @@ shape to copy mechanically.
 ## Coverage Source
 
 - `docs/superpowers/plans/2026-05-12-upstream-sso-server-checklist.md`
-- `upstream/better-auth/1.6.9/repository/packages/sso`
+- `reference/upstream-src/1.6.9/repository/packages/sso`
 
 ## Current Parity Baseline
 

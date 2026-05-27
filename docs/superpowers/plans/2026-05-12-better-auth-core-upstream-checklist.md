@@ -6,7 +6,7 @@
 
 **Goal:** Crear un checklist reutilizable del paquete upstream `@better-auth/core` para portar solo comportamiento server-side a una implementación Rust.
 
-**Architecture:** Usar `upstream/better-auth/1.6.9/repository/packages/core` como referencia de producto y comportamiento, no como estructura a copiar literalmente. Separar contratos, errores, DB, OAuth/OIDC, providers, contexto, API, utilidades e instrumentación en módulos Rust pequeños con errores tipados y validación explícita.
+**Architecture:** Usar `reference/upstream-src/1.6.9/repository/packages/core` como referencia de producto y comportamiento, no como estructura a copiar literalmente. Separar contratos, errores, DB, OAuth/OIDC, providers, contexto, API, utilidades e instrumentación en módulos Rust pequeños con errores tipados y validación explícita.
 
 **Tech Stack:** Rust, Cargo tests, HTTP server abstractions del proyecto destino, serialización tipada, JOSE/JWT/JWKS, almacenamiento primario/secundario, OpenTelemetry opcional.
 
@@ -14,7 +14,7 @@
 
 ## Scope
 
-Referencia analizada: `upstream/better-auth/1.6.9/repository/packages/core`.
+Referencia analizada: `reference/upstream-src/1.6.9/repository/packages/core`.
 
 Este checklist ahora empieza a reflejar el estado actual de OpenAuth. Un ítem marcado significa que existe implementación local y cobertura de pruebas observable; la cobertura puede ser idiomática Rust y no una copia exacta de la estructura upstream.
 

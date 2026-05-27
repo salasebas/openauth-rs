@@ -18,7 +18,7 @@ The current rate limiter works for one process, but `Database` and `SecondarySto
 
 Upstream Better Auth defaults to memory, switches to secondary storage when `secondaryStorage` exists, supports database storage, and supports custom storage, but still uses `get`/`set`. OpenAuth should intentionally improve on that by using an atomic `check_and_increment`/`consume` operation.
 
-References: [Governor docs](https://docs.rs/governor/latest/governor/), upstream Better Auth rate limiter at `upstream/better-auth/1.6.9/repository/packages/better-auth/src/api/rate-limiter/index.ts`, upstream Redis storage at `upstream/better-auth/1.6.9/repository/packages/redis-storage/src/redis-storage.ts`.
+References: [Governor docs](https://docs.rs/governor/latest/governor/), upstream Better Auth rate limiter at `reference/upstream-src/1.6.9/repository/packages/better-auth/src/api/rate-limiter/index.ts`, upstream Redis storage at `reference/upstream-src/1.6.9/repository/packages/redis-storage/src/redis-storage.ts`.
 
 ## Key Changes
 

@@ -6,7 +6,7 @@
 
 **Goal:** Build a reusable server-side checklist for implementing Better Auth telemetry behavior in an idiomatic Rust OpenAuth package.
 
-**Architecture:** Treat `upstream/better-auth/1.6.9/repository/packages/telemetry` as the behavioral reference, but translate the package into Rust server concerns instead of copying TypeScript runtime details. The Rust package should expose typed telemetry events, sanitized auth configuration snapshots, environment-controlled publishing, host/system detectors, and focused tests for privacy and transport behavior.
+**Architecture:** Treat `reference/upstream-src/1.6.9/repository/packages/telemetry` as the behavioral reference, but translate the package into Rust server concerns instead of copying TypeScript runtime details. The Rust package should expose typed telemetry events, sanitized auth configuration snapshots, environment-controlled publishing, host/system detectors, and focused tests for privacy and transport behavior.
 
 **Tech Stack:** Rust workspace crate, serde-compatible telemetry payloads, async transport abstraction, typed auth option snapshots, deterministic tests with mocked environment and transport.
 
@@ -18,30 +18,30 @@
 
 Upstream package reviewed:
 
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/index.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/node.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/types.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/project-id.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/detectors/detect-auth-config.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/detectors/detect-database.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/detectors/detect-framework.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/detectors/detect-project-info.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/detectors/detect-runtime.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/detectors/detect-system-info.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/utils/hash.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/utils/id.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/utils/package-json.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/src/telemetry.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/package.json`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/README.md`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/tsdown.config.ts`
-- `upstream/better-auth/1.6.9/repository/packages/telemetry/tsconfig.json`
-- `upstream/better-auth/1.6.9/repository/docs/content/docs/reference/telemetry.mdx`
-- `upstream/better-auth/1.6.9/repository/docs/content/docs/reference/options.mdx`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/env/env-impl.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/types/init-options.ts`
-- `upstream/better-auth/1.6.9/repository/packages/cli/src/commands/generate.ts`
-- `upstream/better-auth/1.6.9/repository/packages/cli/src/commands/migrate.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/node.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/types.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/project-id.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/detectors/detect-auth-config.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/detectors/detect-database.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/detectors/detect-framework.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/detectors/detect-project-info.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/detectors/detect-runtime.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/detectors/detect-system-info.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/utils/hash.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/utils/id.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/utils/package-json.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/src/telemetry.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/package.json`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/README.md`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/tsdown.config.ts`
+- `reference/upstream-src/1.6.9/repository/packages/telemetry/tsconfig.json`
+- `reference/upstream-src/1.6.9/repository/docs/content/docs/reference/telemetry.mdx`
+- `reference/upstream-src/1.6.9/repository/docs/content/docs/reference/options.mdx`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/env/env-impl.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/types/init-options.ts`
+- `reference/upstream-src/1.6.9/repository/packages/cli/src/commands/generate.ts`
+- `reference/upstream-src/1.6.9/repository/packages/cli/src/commands/migrate.ts`
 
 This checklist intentionally does not compare against any current OpenAuth implementation. Use it later as a parity matrix and mark items as completed only after inspecting the target project.
 

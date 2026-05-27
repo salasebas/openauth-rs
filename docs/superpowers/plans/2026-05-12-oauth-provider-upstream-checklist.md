@@ -16,7 +16,7 @@ This document is a behavioral guide, not a demand to copy Better Auth's TypeScri
 
 ## Scope
 
-Upstream source inspected: `upstream/better-auth/1.6.9/repository/packages/oauth-provider`.
+Upstream source inspected: `reference/upstream-src/1.6.9/repository/packages/oauth-provider`.
 
 This checklist includes only server-side behavior and reusable server/resource-server helpers. Browser-only client injection from `src/client.ts` is intentionally excluded except where tests depend on its server-visible `oauth_query` shape.
 

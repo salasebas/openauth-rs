@@ -14,7 +14,7 @@
 
 ## Scope
 
-Upstream package analyzed: `upstream/better-auth/1.6.9/repository/packages/sso`.
+Upstream package analyzed: `reference/upstream-src/1.6.9/repository/packages/sso`.
 
 Server-side source included:
 

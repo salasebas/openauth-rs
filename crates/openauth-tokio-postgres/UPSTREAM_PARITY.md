@@ -2,7 +2,7 @@
 
 This crate is compared against Better Auth's server-side SQL adapter behavior,
 primarily the core adapter factory, Kysely adapter, shared adapter test suites,
-and PostgreSQL e2e coverage under `upstream/better-auth/`.
+and PostgreSQL e2e coverage under `reference/upstream-src/1.6.9/repository/`.
 
 OpenAuth is not a line-by-line TypeScript port. The target contract is the
 observable server-side behavior that matters for applications using the adapter.

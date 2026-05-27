@@ -16,33 +16,33 @@
 
 Source package analyzed only from upstream:
 
-- `upstream/better-auth/1.6.9/repository/packages/mongo-adapter/src/index.ts`
-- `upstream/better-auth/1.6.9/repository/packages/mongo-adapter/src/mongodb-adapter.ts`
-- `upstream/better-auth/1.6.9/repository/packages/mongo-adapter/src/query-builders.ts`
-- `upstream/better-auth/1.6.9/repository/packages/mongo-adapter/src/mongodb-adapter.test.ts`
-- `upstream/better-auth/1.6.9/repository/packages/mongo-adapter/README.md`
-- `upstream/better-auth/1.6.9/repository/packages/mongo-adapter/package.json`
-- `upstream/better-auth/1.6.9/repository/packages/mongo-adapter/vitest.config.ts`
-- `upstream/better-auth/1.6.9/repository/packages/mongo-adapter/tsdown.config.ts`
-- `upstream/better-auth/1.6.9/repository/packages/mongo-adapter/tsconfig.json`
-- `upstream/better-auth/1.6.9/repository/packages/mongo-adapter/CHANGELOG.md`
+- `reference/upstream-src/1.6.9/repository/packages/mongo-adapter/src/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/mongo-adapter/src/mongodb-adapter.ts`
+- `reference/upstream-src/1.6.9/repository/packages/mongo-adapter/src/query-builders.ts`
+- `reference/upstream-src/1.6.9/repository/packages/mongo-adapter/src/mongodb-adapter.test.ts`
+- `reference/upstream-src/1.6.9/repository/packages/mongo-adapter/README.md`
+- `reference/upstream-src/1.6.9/repository/packages/mongo-adapter/package.json`
+- `reference/upstream-src/1.6.9/repository/packages/mongo-adapter/vitest.config.ts`
+- `reference/upstream-src/1.6.9/repository/packages/mongo-adapter/tsdown.config.ts`
+- `reference/upstream-src/1.6.9/repository/packages/mongo-adapter/tsconfig.json`
+- `reference/upstream-src/1.6.9/repository/packages/mongo-adapter/CHANGELOG.md`
 
 Functional upstream dependencies reviewed because `mongo-adapter` delegates behavior to them:
 
-- `upstream/better-auth/1.6.9/repository/packages/core/src/db/adapter/index.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/db/adapter/factory.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/db/adapter/get-model-name.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/db/adapter/get-default-model-name.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/db/adapter/get-field-name.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/db/adapter/get-default-field-name.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/db/adapter/get-field-attributes.ts`
-- `upstream/better-auth/1.6.9/repository/packages/core/src/db/adapter/get-id-field.ts`
-- `upstream/better-auth/1.6.9/repository/packages/test-utils/src/adapter/suites/basic.ts`
-- `upstream/better-auth/1.6.9/repository/packages/test-utils/src/adapter/suites/case-insensitive.ts`
-- `upstream/better-auth/1.6.9/repository/packages/test-utils/src/adapter/suites/joins.ts`
-- `upstream/better-auth/1.6.9/repository/packages/test-utils/src/adapter/suites/transactions.ts`
-- `upstream/better-auth/1.6.9/repository/packages/test-utils/src/adapter/suites/uuid.ts`
-- `upstream/better-auth/1.6.9/repository/packages/test-utils/src/adapter/suites/number-id.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/db/adapter/index.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/db/adapter/factory.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/db/adapter/get-model-name.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/db/adapter/get-default-model-name.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/db/adapter/get-field-name.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/db/adapter/get-default-field-name.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/db/adapter/get-field-attributes.ts`
+- `reference/upstream-src/1.6.9/repository/packages/core/src/db/adapter/get-id-field.ts`
+- `reference/upstream-src/1.6.9/repository/packages/test-utils/src/adapter/suites/basic.ts`
+- `reference/upstream-src/1.6.9/repository/packages/test-utils/src/adapter/suites/case-insensitive.ts`
+- `reference/upstream-src/1.6.9/repository/packages/test-utils/src/adapter/suites/joins.ts`
+- `reference/upstream-src/1.6.9/repository/packages/test-utils/src/adapter/suites/transactions.ts`
+- `reference/upstream-src/1.6.9/repository/packages/test-utils/src/adapter/suites/uuid.ts`
+- `reference/upstream-src/1.6.9/repository/packages/test-utils/src/adapter/suites/number-id.ts`
 
 Excluded from the Rust server checklist:
 
