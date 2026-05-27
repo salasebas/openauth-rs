@@ -7,6 +7,9 @@ use super::support::{
     redirect_with_error, IdTokenBody, LinkStatusBody, SocialSessionBody,
 };
 use crate::api::{parse_request_body, request_base_url, ApiRequest, ApiResponse};
+use crate::auth::oauth::account_linking::{
+    ACCOUNT_ALREADY_LINKED_TO_DIFFERENT_USER, EMAIL_DOES_NOT_MATCH_LINKED_USER,
+};
 use crate::auth::oauth::{
     handle_oauth_user_info, HandleOAuthUserInfoInput, OAuthAccountInput, OAuthStateLink,
     OAuthUserInfo,
@@ -470,10 +473,10 @@ fn callback_link_error_response(
             redirect_with_error(error_url, "unable_to_link_account")
         }
         LinkOAuthAccountError::DifferentEmails => {
-            redirect_with_error(error_url, "email_doesn't_match")
+            redirect_with_error(error_url, EMAIL_DOES_NOT_MATCH_LINKED_USER)
         }
         LinkOAuthAccountError::AccountLinkedToDifferentUser => {
-            redirect_with_error(error_url, "account_already_linked_to_different_user")
+            redirect_with_error(error_url, ACCOUNT_ALREADY_LINKED_TO_DIFFERENT_USER)
         }
         LinkOAuthAccountError::Source(error) => Err(error),
     }

@@ -159,12 +159,12 @@ pub(super) async fn subscription_records_for_reference(
     adapter: &dyn openauth_core::db::DbAdapter,
     reference_id: &str,
 ) -> Result<Vec<DbRecord>, OpenAuthError> {
-    Ok(adapter
+    adapter
         .find_many(FindMany::new("subscription").where_clause(Where::new(
             "reference_id",
             DbValue::String(reference_id.to_owned()),
         )))
-        .await?)
+        .await
 }
 
 pub(super) fn find_incomplete_subscription_record(records: &[DbRecord]) -> Option<&DbRecord> {
@@ -197,6 +197,7 @@ pub(super) async fn link_stripe_subscription_id(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn reuse_or_create_incomplete_subscription(
     adapter: &dyn openauth_core::db::DbAdapter,
     plan: &str,

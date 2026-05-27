@@ -325,16 +325,13 @@ async fn link_social_callback_rejects_account_owned_by_different_user(
     adapter
         .insert_session(session(now, now + Duration::hours(1)))
         .await;
-    adapter
-        .insert_account(oauth_account_record(
-            "account_2",
-            "user_2",
-            "github",
-            "github_ada",
-            "old-access",
-            now,
-        ))
-        .await?;
+    let mut account =
+        linked_account_record("account_2", "github", "github_ada", "user_2", None, now);
+    account.insert(
+        "access_token".to_owned(),
+        DbValue::String("old-access".to_owned()),
+    );
+    adapter.insert_account(account).await?;
     let router = router_with_options(
         adapter.clone(),
         OpenAuthOptions {
