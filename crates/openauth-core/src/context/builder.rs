@@ -124,6 +124,7 @@ pub fn create_auth_context_with_environment_and_adapter(
         memory_store: Arc::new(GovernorMemoryRateLimitStore::with_cleanup_interval(
             options.rate_limit.memory_cleanup_interval,
         )),
+        missing_ip_policy: options.rate_limit.missing_ip_policy,
     };
 
     let schema_options = schema_options_from_auth_options(&options);

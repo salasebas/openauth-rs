@@ -14,7 +14,8 @@ use crate::env::logger::Logger;
 use crate::error::OpenAuthError;
 use crate::options::{
     BackgroundTaskFuture, BackgroundTaskRunner, DynamicRateLimitPathRule, HybridRateLimitOptions,
-    OpenAuthOptions, RateLimitPathRule, RateLimitStorageOption, RateLimitStore, SecondaryStorage,
+    MissingIpPolicy, OpenAuthOptions, RateLimitPathRule, RateLimitStorageOption, RateLimitStore,
+    SecondaryStorage,
 };
 use crate::plugin::{AuthPlugin, PluginErrorCode};
 use crate::rate_limit::GovernorMemoryRateLimitStore;
@@ -145,6 +146,7 @@ pub struct RateLimitContext {
     pub hybrid: HybridRateLimitOptions,
     pub memory_cleanup_interval: Option<Duration>,
     pub memory_store: Arc<GovernorMemoryRateLimitStore>,
+    pub missing_ip_policy: MissingIpPolicy,
 }
 
 impl AuthContext {

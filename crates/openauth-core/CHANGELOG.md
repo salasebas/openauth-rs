@@ -4,8 +4,19 @@ All notable changes to `openauth-core` are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Added `RateLimitOptions::missing_ip_policy` (`MissingIpPolicy`) to control
+  behavior when rate limiting is enabled but no client IP can be resolved.
+
 ### Fixed
 
+- Fixed a rate limit bypass where enabled rate limiting was silently skipped in
+  production when no client IP could be resolved (missing `RequestClientIp`
+  extension or trusted IP header). Such requests now fail closed by default
+  (`MissingIpPolicy::Deny`); `SharedBucket` and `Allow` policies are available
+  for deployments that need a shared anonymous bucket or the legacy behavior.
+  Requests with `advanced.ip_address.disable_ip_tracking` remain unaffected.
 - Fixed session cookie cache authentication so cached session data is only
   returned after the backing session token still exists and is unexpired.
 

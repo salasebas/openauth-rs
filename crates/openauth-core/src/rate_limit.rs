@@ -4,8 +4,8 @@ use crate::context::AuthContext;
 use crate::env::is_production;
 use crate::error::OpenAuthError;
 use crate::options::{
-    RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitRecord, RateLimitRule,
-    RateLimitStorage, RateLimitStorageOption, RateLimitStore,
+    MissingIpPolicy, RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitRecord,
+    RateLimitRule, RateLimitStorage, RateLimitStorageOption, RateLimitStore,
 };
 use crate::utils::ip::{
     create_rate_limit_key, is_valid_ip, normalize_ip_with_options, NormalizeIpOptions,
@@ -231,8 +231,12 @@ pub async fn consume_rate_limit(
     if !context.rate_limit.enabled {
         return Ok(None);
     }
-    let Some(config) = resolve_config(context, request)? else {
-        return Ok(None);
+    let config = match resolve_config(context, request)? {
+        RateLimitPlan::Skip => return Ok(None),
+        RateLimitPlan::Deny { retry_after } => {
+            return Ok(Some(RateLimitRejection { retry_after }));
+        }
+        RateLimitPlan::Consume(config) => config,
     };
     let store = store(context)?;
     let decision = store
@@ -257,12 +261,13 @@ pub fn on_request_rate_limit(
     if !context.rate_limit.enabled {
         return Ok(None);
     }
-    if resolve_config(context, request)?.is_none() {
-        return Ok(None);
+    match resolve_config(context, request)? {
+        RateLimitPlan::Skip => Ok(None),
+        RateLimitPlan::Deny { retry_after } => Ok(Some(RateLimitRejection { retry_after })),
+        RateLimitPlan::Consume(_) => Err(OpenAuthError::Api(
+            "async rate limit storage requires AuthRouter::handle_async".to_owned(),
+        )),
     }
-    Err(OpenAuthError::Api(
-        "async rate limit storage requires AuthRouter::handle_async".to_owned(),
-    ))
 }
 
 pub fn on_response_rate_limit(
@@ -278,21 +283,57 @@ struct ResolvedRateLimit {
     rule: RateLimitRule,
 }
 
+/// Outcome of resolving how a request should be rate limited.
+enum RateLimitPlan {
+    /// No applicable rule, or IP tracking is intentionally disabled.
+    Skip,
+    /// Rate limiting is enabled with a rule but no client IP could be resolved.
+    Deny { retry_after: u64 },
+    /// Consume the resolved rule against the resolved bucket key.
+    Consume(ResolvedRateLimit),
+}
+
+/// Shared bucket key segment used when no client IP can be resolved and the
+/// configured policy is [`MissingIpPolicy::SharedBucket`]. It is not a valid IP,
+/// so it never collides with a real per-IP bucket.
+const ANONYMOUS_IP_BUCKET: &str = "missing-ip";
+
 fn resolve_config(
     context: &AuthContext,
     request: &Request<Body>,
-) -> Result<Option<ResolvedRateLimit>, OpenAuthError> {
+) -> Result<RateLimitPlan, OpenAuthError> {
     let path = normalize_pathname(&request.uri().to_string(), &context.base_path);
-    let Some(ip) = request_ip(context, request) else {
-        return Ok(None);
-    };
     let Some(rule) = resolve_rule(context, request, &path)? else {
-        return Ok(None);
+        return Ok(RateLimitPlan::Skip);
     };
-    Ok(Some(ResolvedRateLimit {
-        key: create_rate_limit_key(&ip, &path),
-        rule,
-    }))
+    if let Some(ip) = request_ip(context, request) {
+        return Ok(RateLimitPlan::Consume(ResolvedRateLimit {
+            key: create_rate_limit_key(&ip, &path),
+            rule,
+        }));
+    }
+    // No client IP could be resolved. When IP tracking is intentionally
+    // disabled, per-IP limiting cannot apply, so skip. Otherwise apply the
+    // configured fail-closed policy instead of silently bypassing the limit.
+    if context.options.advanced.ip_address.disable_ip_tracking {
+        return Ok(RateLimitPlan::Skip);
+    }
+    match context.rate_limit.missing_ip_policy {
+        MissingIpPolicy::Allow => Ok(RateLimitPlan::Skip),
+        MissingIpPolicy::SharedBucket => Ok(RateLimitPlan::Consume(ResolvedRateLimit {
+            key: create_rate_limit_key(ANONYMOUS_IP_BUCKET, &path),
+            rule,
+        })),
+        MissingIpPolicy::Deny => {
+            context.logger.warn(
+                "Rate limiting denied a request because no client IP could be resolved; inject RequestClientIp or set advanced.ip_address.headers",
+                &[&path],
+            );
+            Ok(RateLimitPlan::Deny {
+                retry_after: rule.window,
+            })
+        }
+    }
 }
 
 fn resolve_rule(

@@ -4,9 +4,9 @@ use openauth_core::context::create_auth_context;
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     AdvancedOptions, DynamicRateLimitPathRule, HybridRateLimitOptions, IpAddressOptions,
-    OpenAuthOptions, RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitOptions,
-    RateLimitPathRule, RateLimitRecord, RateLimitRule, RateLimitStorage, RateLimitStorageOption,
-    RateLimitStore,
+    MissingIpPolicy, OpenAuthOptions, RateLimitConsumeInput, RateLimitDecision, RateLimitFuture,
+    RateLimitOptions, RateLimitPathRule, RateLimitRecord, RateLimitRule, RateLimitStorage,
+    RateLimitStorageOption, RateLimitStore,
 };
 use openauth_core::rate_limit::{
     consume_rate_limit, GovernorMemoryRateLimitStore, RequestClientIp,
@@ -564,7 +564,8 @@ fn disabled_paths_do_not_touch_rate_limit_storage() -> Result<(), Box<dyn std::e
 }
 
 #[test]
-fn production_requests_without_ip_are_not_rate_limited() -> Result<(), Box<dyn std::error::Error>> {
+fn production_requests_without_ip_are_denied_by_default() -> Result<(), Box<dyn std::error::Error>>
+{
     let context = create_auth_context(OpenAuthOptions {
         production: true,
         rate_limit: RateLimitOptions {
@@ -578,6 +579,141 @@ fn production_requests_without_ip_are_not_rate_limited() -> Result<(), Box<dyn s
     })?;
     let router = AuthRouter::new(context, vec![endpoint("/ok", Method::GET)]);
 
+    // Fail closed: an enabled rate limit with an unresolvable client IP must
+    // reject from the very first request, even on the sync handler path.
+    for _ in 0..3 {
+        let response = router.handle(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/ok")
+                .body(Vec::new())?,
+        )?;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn production_sign_in_without_ip_cannot_bypass_special_limit(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(OpenAuthOptions {
+        production: true,
+        rate_limit: RateLimitOptions {
+            enabled: Some(true),
+            window: 10,
+            max: 100,
+            ..RateLimitOptions::default()
+        },
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::new(context, vec![endpoint("/sign-in/email", Method::POST)]);
+
+    // Without RequestClientIp in production the default policy denies every
+    // attempt, so the special /sign-in limit can never be bypassed.
+    for _ in 0..5 {
+        let response = router
+            .handle_async(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("http://localhost:3000/api/auth/sign-in/email")
+                    .body(Vec::new())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn production_requests_without_ip_allow_policy_skips_rate_limit(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(OpenAuthOptions {
+        production: true,
+        rate_limit: RateLimitOptions {
+            enabled: Some(true),
+            window: 10,
+            max: 1,
+            missing_ip_policy: MissingIpPolicy::Allow,
+            ..RateLimitOptions::default()
+        },
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::new(context, vec![endpoint("/ok", Method::GET)]);
+
+    for _ in 0..3 {
+        let response = router.handle(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/ok")
+                .body(Vec::new())?,
+        )?;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn production_sign_in_without_ip_shared_bucket_enforces_limit(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(OpenAuthOptions {
+        production: true,
+        rate_limit: RateLimitOptions {
+            enabled: Some(true),
+            window: 10,
+            max: 100,
+            missing_ip_policy: MissingIpPolicy::SharedBucket,
+            ..RateLimitOptions::default()
+        },
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::new(context, vec![endpoint("/sign-in/email", Method::POST)]);
+
+    // IP-less requests share one bucket and still honor the special /sign-in
+    // limit (max 3) instead of bypassing it.
+    for attempt in 0..4 {
+        let response = router
+            .handle_async(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("http://localhost:3000/api/auth/sign-in/email")
+                    .body(Vec::new())?,
+            )
+            .await?;
+        if attempt < 3 {
+            assert_eq!(response.status(), StatusCode::OK);
+        } else {
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn production_disabled_ip_tracking_skips_rate_limit() -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(OpenAuthOptions {
+        production: true,
+        advanced: AdvancedOptions::new()
+            .ip_address(IpAddressOptions::new().disable_ip_tracking(true)),
+        rate_limit: RateLimitOptions {
+            enabled: Some(true),
+            window: 10,
+            max: 1,
+            ..RateLimitOptions::default()
+        },
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::new(context, vec![endpoint("/ok", Method::GET)]);
+
+    // Disabling IP tracking is an explicit opt-out: the fail-closed policy must
+    // not turn it into a hard denial.
     for _ in 0..3 {
         let response = router.handle(
             Request::builder()

@@ -21,6 +21,7 @@ pub struct RateLimitOptions {
     pub custom_storage: Option<Arc<dyn RateLimitStorage>>,
     pub hybrid: HybridRateLimitOptions,
     pub memory_cleanup_interval: Option<Duration>,
+    pub missing_ip_policy: MissingIpPolicy,
 }
 
 impl Default for RateLimitOptions {
@@ -36,6 +37,7 @@ impl Default for RateLimitOptions {
             custom_storage: None,
             hybrid: HybridRateLimitOptions::default(),
             memory_cleanup_interval: Some(Duration::from_secs(60 * 60)),
+            missing_ip_policy: MissingIpPolicy::default(),
         }
     }
 }
@@ -170,6 +172,12 @@ impl RateLimitOptions {
         self.memory_cleanup_interval = interval;
         self
     }
+
+    #[must_use]
+    pub fn missing_ip_policy(mut self, policy: MissingIpPolicy) -> Self {
+        self.missing_ip_policy = policy;
+        self
+    }
 }
 
 impl fmt::Debug for RateLimitOptions {
@@ -192,6 +200,7 @@ impl fmt::Debug for RateLimitOptions {
             )
             .field("hybrid", &self.hybrid)
             .field("memory_cleanup_interval", &self.memory_cleanup_interval)
+            .field("missing_ip_policy", &self.missing_ip_policy)
             .finish()
     }
 }
@@ -371,4 +380,25 @@ pub enum RateLimitStorageOption {
     Memory,
     Database,
     SecondaryStorage,
+}
+
+/// Policy applied when rate limiting is enabled but no client IP can be
+/// resolved for a request.
+///
+/// This guards against a production deployment that enables rate limiting but
+/// fails to inject [`RequestClientIp`](crate::rate_limit::RequestClientIp) or
+/// configure a trusted IP header, which would otherwise silently disable
+/// rate limiting on auth endpoints. The policy is only applied when IP
+/// tracking is enabled; if `advanced.ip_address.disable_ip_tracking` is set,
+/// per-IP limiting is intentionally skipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MissingIpPolicy {
+    /// Reject the request (fail closed). Secure default.
+    #[default]
+    Deny,
+    /// Rate limit every IP-less request together under a shared anonymous
+    /// bucket instead of a per-IP bucket.
+    SharedBucket,
+    /// Skip rate limiting when no client IP can be resolved (legacy fail-open).
+    Allow,
 }
