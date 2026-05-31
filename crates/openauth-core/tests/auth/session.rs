@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use openauth_core::auth::session::{GetSessionInput, SessionAuth};
 use openauth_core::context::{create_auth_context, AuthContext};
@@ -22,6 +23,7 @@ struct SessionAuthAdapter {
     sessions: Mutex<HashMap<String, DbRecord>>,
     updates: Mutex<Vec<Update>>,
     deletes: Mutex<Vec<Delete>>,
+    fail_delete: AtomicBool,
 }
 
 impl SessionAuthAdapter {
@@ -100,6 +102,9 @@ impl DbAdapter for SessionAuthAdapter {
 
     fn delete<'a>(&'a self, query: Delete) -> AdapterFuture<'a, ()> {
         Box::pin(async move {
+            if self.fail_delete.load(Ordering::SeqCst) {
+                return Err(OpenAuthError::Adapter("delete failed".to_owned()));
+            }
             self.deletes.lock().await.push(query.clone());
             let token = string_filter(&query.where_clauses, "token")?;
             self.sessions.lock().await.remove(token);
@@ -310,6 +315,27 @@ async fn sign_out_ignores_forged_session_cookie_but_still_expires_cookies(
     assert!(result.cookies.iter().any(|cookie| cookie.name
         == context.auth_cookies.session_token.name
         && cookie.attributes.max_age == Some(0)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn sign_out_propagates_delete_failure_and_retains_session(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = SessionAuthAdapter::default();
+    adapter.fail_delete.store(true, Ordering::SeqCst);
+    let context = context()?;
+    let now = OffsetDateTime::now_utc();
+    adapter
+        .insert_session(session(now, now + Duration::hours(1)))
+        .await;
+    let cookie_header = session_cookie_header(&context, "token_1", false)?;
+
+    let result = SessionAuth::new(&adapter, &context)
+        .sign_out(cookie_header)
+        .await;
+
+    assert!(result.is_err());
+    assert_eq!(adapter.sessions.lock().await.len(), 1);
     Ok(())
 }
 
