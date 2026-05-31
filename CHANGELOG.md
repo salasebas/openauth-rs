@@ -13,6 +13,8 @@ Versioning while the API is still pre-1.0.
   returned after the backing session token still exists and is unexpired.
 - Fixed Axum request base URL inference so request-derived `Host` values are
   not trusted origins, and disabled that inference by default.
+- Fixed organization plugin `organization.create` so unauthenticated requests
+  cannot supply a `userId` to create organizations on behalf of another user.
 - Fixed `openauth-tokio-postgres` and `openauth-deadpool-postgres` leaving
   connections in open transactions when `transaction()` or rate-limit `consume()`
   is cancelled or panics mid-callback, which could let a later `COMMIT` persist

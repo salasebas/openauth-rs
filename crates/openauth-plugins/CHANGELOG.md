@@ -2,6 +2,13 @@
 
 All notable changes to `openauth-plugins` are documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- Fixed `organization.create` so unauthenticated requests cannot supply a
+  `userId` to create organizations on behalf of another user.
+
 ## [0.0.6] - 2026-05-24
 
 ### Added
