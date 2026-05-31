@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +13,9 @@ use openauth_core::db::{
     Update, UpdateMany,
 };
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
+use openauth_core::options::{
+    AdvancedOptions, OpenAuthOptions, SecondaryStorage, SecondaryStorageFuture, SessionOptions,
+};
 use openauth_core::verification::{CreateVerificationInput, DbVerificationStore};
 use openauth_passkey::{
     passkey, PasskeyAuthenticationStart, PasskeyOptions, PasskeyRegistrationStart,
@@ -33,6 +36,93 @@ pub async fn seeded_router(
         OpenAuthOptions {
             base_url: Some("http://localhost:3000".to_owned()),
             secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            advanced: AdvancedOptions {
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            plugins: vec![passkey(options.backend(backend.clone()))],
+            ..OpenAuthOptions::default()
+        },
+        adapter.clone(),
+    )?;
+    let router = AuthRouter::with_async_endpoints(
+        context,
+        Vec::new(),
+        core_auth_async_endpoints(adapter.clone()),
+    )?;
+    Ok((adapter, router, backend))
+}
+
+/// In-memory `SecondaryStorage` test double that records keys for assertions.
+#[derive(Default)]
+pub struct InMemorySecondaryStorage {
+    entries: Mutex<HashMap<String, String>>,
+}
+
+impl InMemorySecondaryStorage {
+    pub fn keys_with_prefix(&self, prefix: &str) -> Vec<String> {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect()
+    }
+}
+
+impl SecondaryStorage for InMemorySecondaryStorage {
+    fn get<'a>(&'a self, key: &'a str) -> SecondaryStorageFuture<'a, Option<String>> {
+        Box::pin(async move {
+            let entries = self.entries.lock().map_err(|_| {
+                OpenAuthError::Adapter("secondary storage mutex poisoned".to_owned())
+            })?;
+            Ok(entries.get(key).cloned())
+        })
+    }
+
+    fn set<'a>(
+        &'a self,
+        key: &'a str,
+        value: String,
+        _ttl_seconds: Option<u64>,
+    ) -> SecondaryStorageFuture<'a, ()> {
+        Box::pin(async move {
+            self.entries
+                .lock()
+                .map_err(|_| OpenAuthError::Adapter("secondary storage mutex poisoned".to_owned()))?
+                .insert(key.to_owned(), value);
+            Ok(())
+        })
+    }
+
+    fn delete<'a>(&'a self, key: &'a str) -> SecondaryStorageFuture<'a, ()> {
+        Box::pin(async move {
+            self.entries
+                .lock()
+                .map_err(|_| OpenAuthError::Adapter("secondary storage mutex poisoned".to_owned()))?
+                .remove(key);
+            Ok(())
+        })
+    }
+}
+
+/// Build a seeded router that resolves sessions/challenges from secondary storage only.
+pub async fn seeded_router_with_secondary_storage(
+    options: PasskeyOptions,
+    storage: Arc<InMemorySecondaryStorage>,
+) -> Result<(Arc<MemoryAdapter>, AuthRouter, Arc<FakeWebAuthnBackend>), Box<dyn std::error::Error>>
+{
+    let adapter = Arc::new(MemoryAdapter::new());
+    seed_user(adapter.as_ref()).await?;
+    let backend = Arc::new(FakeWebAuthnBackend::default());
+    let context = create_auth_context_with_adapter(
+        OpenAuthOptions {
+            base_url: Some("http://localhost:3000".to_owned()),
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            secondary_storage: Some(storage),
+            session: SessionOptions::new().store_session_in_database(false),
             advanced: AdvancedOptions {
                 disable_csrf_check: true,
                 disable_origin_check: true,
