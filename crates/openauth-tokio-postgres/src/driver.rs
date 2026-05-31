@@ -1,9 +1,10 @@
 //! Shared tokio-postgres driver helpers for Postgres-based OpenAuth adapters.
 
 use openauth_core::db::{
-    consume_sql_rate_limit_record, rate_limit_consume_statements, AdapterFuture, Count, Create,
-    DbField, DbRecord, DbSchema, DbValue, Delete, DeleteMany, FindMany, FindOne, SqlAdapterRunner,
-    SqlDialect, SqlExecutor, SqlRateLimitPlan, SqlRowReader, SqlStatement, Update, UpdateMany,
+    consume_sql_rate_limit_record, rate_limit_consume_statements, rate_limit_count_from_i64,
+    rate_limit_count_to_i64, AdapterFuture, Count, Create, DbField, DbRecord, DbSchema, DbValue,
+    Delete, DeleteMany, FindMany, FindOne, SqlAdapterRunner, SqlDialect, SqlExecutor,
+    SqlRateLimitPlan, SqlRowReader, SqlStatement, Update, UpdateMany,
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{RateLimitConsumeInput, RateLimitDecision, RateLimitRecord};
@@ -154,9 +155,9 @@ pub async fn consume_postgres_rate_limit_in_tx(
         .map_err(postgres_error)?
         .ok_or_else(|| OpenAuthError::Adapter("missing rate limit row".to_owned()))?;
     let (decision, record, update) =
-        consume_sql_rate_limit_record(input, Some(postgres_rate_limit_record(row)));
+        consume_sql_rate_limit_record(input, Some(postgres_rate_limit_record(row)?));
     if decision.permitted && update {
-        let count = record.count as i64;
+        let count = rate_limit_count_to_i64(record.count)?;
         client
             .execute(
                 &plan.update.sql,
@@ -169,12 +170,15 @@ pub async fn consume_postgres_rate_limit_in_tx(
 }
 
 /// Decodes the canonical OpenAuth rate-limit fields from a Postgres row.
-pub fn postgres_rate_limit_record(row: Row) -> RateLimitRecord {
-    RateLimitRecord {
+///
+/// Rejects corrupt negative persisted counts instead of wrapping them into a
+/// huge `u64`, matching the SQLx adapters.
+pub fn postgres_rate_limit_record(row: Row) -> Result<RateLimitRecord, OpenAuthError> {
+    Ok(RateLimitRecord {
         key: String::new(),
-        count: row.get::<_, i64>("count") as u64,
+        count: rate_limit_count_from_i64(row.get::<_, i64>("count"))?,
         last_request: row.get("last_request"),
-    }
+    })
 }
 
 /// Plans migrations for the current connection and target schema.

@@ -1,5 +1,19 @@
 use super::*;
 
+/// Decodes a persisted rate-limit count, rejecting corrupt negative values
+/// instead of wrapping them into a huge `u64`.
+pub fn rate_limit_count_from_i64(count: i64) -> Result<u64, OpenAuthError> {
+    u64::try_from(count).map_err(|_| {
+        OpenAuthError::Adapter("negative rate limit count persisted in database".to_owned())
+    })
+}
+
+/// Encodes an in-memory rate-limit count for SQL `BIGINT` storage.
+pub fn rate_limit_count_to_i64(count: u64) -> Result<i64, OpenAuthError> {
+    i64::try_from(count)
+        .map_err(|_| OpenAuthError::Adapter("rate limit count exceeds SQL BIGINT range".to_owned()))
+}
+
 /// Builds the dialect-specific statement trio used by SQL-backed rate-limit stores.
 pub fn rate_limit_consume_statements(
     dialect: SqlDialect,
