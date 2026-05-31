@@ -1,10 +1,22 @@
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "provider tests intentionally fail fast with contextual setup errors"
+)]
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use josekit::jwk::Jwk;
+use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::Rs256;
+use josekit::jws::JwsHeader;
+use josekit::jwt::{self, JwtPayload};
 use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, ProviderOptions};
 use openauth_social_providers::facebook::{
     FacebookOptions, FacebookPicture, FacebookPictureData, FacebookProfile, FacebookProvider,
+    FACEBOOK_LIMITED_LOGIN_ISSUER,
 };
 use serde_json::json;
+use time::OffsetDateTime;
 
 #[test]
 fn facebook_authorization_url_uses_upstream_defaults() -> Result<(), Box<dyn std::error::Error>> {
@@ -198,4 +210,114 @@ fn unsigned_jwt(payload: serde_json::Value) -> Result<String, Box<dyn std::error
     let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({ "alg": "none" }))?);
     let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload)?);
     Ok(format!("{header}.{payload}."))
+}
+
+#[tokio::test]
+async fn facebook_verify_id_token_accepts_complete_signed_token() {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let (token, jwk) = signed_token(json!({
+        "sub": "limited-user",
+        "aud": "fb-web",
+        "iss": FACEBOOK_LIMITED_LOGIN_ISSUER,
+        "nonce": "nonce-1",
+        "exp": now + 3600,
+        "iat": now
+    }));
+    let server = JsonServer::spawn(json!({ "keys": [jwk] }));
+    let provider = test_provider(&server.url());
+
+    assert!(provider.verify_id_token(&token, Some("nonce-1")).await);
+}
+
+#[tokio::test]
+async fn facebook_verify_id_token_rejects_signed_tokens_missing_standard_claims() {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let base = json!({
+        "sub": "limited-user",
+        "aud": "fb-web",
+        "iss": FACEBOOK_LIMITED_LOGIN_ISSUER,
+        "exp": now + 3600,
+        "iat": now
+    });
+
+    for missing in ["sub", "aud", "iss", "exp"] {
+        let mut claims = base.clone();
+        claims
+            .as_object_mut()
+            .expect("claims object")
+            .remove(missing);
+        let (token, jwk) = signed_token(claims);
+        let server = JsonServer::spawn(json!({ "keys": [jwk] }));
+        let provider = test_provider(&server.url());
+
+        assert!(
+            !provider.verify_id_token(&token, None).await,
+            "token missing `{missing}` must be rejected"
+        );
+    }
+}
+
+fn test_provider(jwks_endpoint: &str) -> FacebookProvider {
+    FacebookProvider::new(FacebookOptions {
+        oauth: provider_options(),
+        limited_login_jwks_endpoint: jwks_endpoint.to_owned(),
+        ..FacebookOptions::default()
+    })
+}
+
+fn signed_token(claims: serde_json::Value) -> (String, Jwk) {
+    let kid = "facebook-test-key";
+    let mut jwk = Jwk::generate_rsa_key(2048).expect("rsa key should generate");
+    jwk.set_key_id(kid);
+    jwk.set_algorithm("RS256");
+    jwk.set_key_use("sig");
+    let signer = Rs256
+        .signer_from_jwk(&jwk)
+        .expect("rsa signer should build");
+    let mut payload = JwtPayload::new();
+    for (key, value) in claims.as_object().expect("claims should be an object") {
+        payload
+            .set_claim(key, Some(value.clone()))
+            .expect("claim should set");
+    }
+    let mut header = JwsHeader::new();
+    header.set_algorithm("RS256");
+    header.set_key_id(kid);
+    let token = jwt::encode_with_signer(&payload, &header, &signer).expect("token should encode");
+    let mut public_jwk = jwk.to_public_key().expect("public jwk should export");
+    public_jwk.set_key_id(kid);
+    public_jwk.set_algorithm("RS256");
+    public_jwk.set_key_use("sig");
+    (token, public_jwk)
+}
+
+struct JsonServer {
+    url: String,
+}
+
+impl JsonServer {
+    fn spawn(body: serde_json::Value) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("server should bind");
+        let addr = listener.local_addr().expect("server address");
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buffer = [0; 1024];
+                let _ = std::io::Read::read(&mut stream, &mut buffer);
+                let body = body.to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+            }
+        });
+        Self {
+            url: format!("http://{addr}/jwks"),
+        }
+    }
+
+    fn url(&self) -> String {
+        self.url.clone()
+    }
 }
