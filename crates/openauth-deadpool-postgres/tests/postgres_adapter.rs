@@ -1136,6 +1136,36 @@ async fn deadpool_postgres_rate_limit_store_denies_without_incrementing_denied_r
 }
 
 #[tokio::test]
+async fn deadpool_postgres_rate_limit_store_rejects_negative_persisted_counts(
+) -> Result<(), OpenAuthError> {
+    let adapter = adapter().await?;
+    let store = DeadpoolPostgresRateLimitStore::from(&adapter);
+    let key = "ip:/corrupt-negative-count".to_owned();
+    adapter
+        .create(
+            Create::new("rate_limit")
+                .data("key", DbValue::String(key.clone()))
+                .data("count", DbValue::Number(-1))
+                .data("last_request", DbValue::Number(1_700_000_000_000)),
+        )
+        .await?;
+
+    let result = store
+        .consume(RateLimitConsumeInput {
+            key,
+            rule: RateLimitRule { window: 60, max: 5 },
+            now_ms: 1_700_000_000_001,
+        })
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(OpenAuthError::Adapter(message)) if message.contains("negative rate limit count")
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn deadpool_postgres_rate_limit_store_accepts_standalone_physical_names(
 ) -> Result<(), OpenAuthError> {
     let prefix = unique_prefix();

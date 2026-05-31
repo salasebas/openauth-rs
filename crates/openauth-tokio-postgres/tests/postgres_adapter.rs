@@ -5,9 +5,9 @@ use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context;
 use openauth_core::crypto::password::verify_password;
 use openauth_core::db::{
-    auth_schema, AuthSchemaOptions, Count, DbAdapter, DbField, DbFieldType, DbRecord, DbSchema,
-    DbValue, FindMany, FindOne, IdGeneration, IdPolicy, JoinOption, RateLimitStorage, TableOptions,
-    Update, UpdateMany, Where, WhereOperator,
+    auth_schema, AuthSchemaOptions, Count, Create, DbAdapter, DbField, DbFieldType, DbRecord,
+    DbSchema, DbValue, FindMany, FindOne, IdGeneration, IdPolicy, JoinOption, RateLimitStorage,
+    TableOptions, Update, UpdateMany, Where, WhereOperator,
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
@@ -779,6 +779,36 @@ async fn tokio_postgres_rate_limit_store_denies_without_incrementing_denied_requ
         .await?
         .ok_or_else(|| OpenAuthError::Adapter("missing rate limit row".to_owned()))?;
     assert_eq!(record.get("count"), Some(&DbValue::Number(1)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn tokio_postgres_rate_limit_store_rejects_negative_persisted_counts(
+) -> Result<(), OpenAuthError> {
+    let adapter = adapter().await?;
+    let store = TokioPostgresRateLimitStore::from(&adapter);
+    let key = "ip:/corrupt-negative-count".to_owned();
+    adapter
+        .create(
+            Create::new("rate_limit")
+                .data("key", DbValue::String(key.clone()))
+                .data("count", DbValue::Number(-1))
+                .data("last_request", DbValue::Number(1_700_000_000_000)),
+        )
+        .await?;
+
+    let result = store
+        .consume(RateLimitConsumeInput {
+            key,
+            rule: RateLimitRule { window: 60, max: 5 },
+            now_ms: 1_700_000_000_001,
+        })
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(OpenAuthError::Adapter(message)) if message.contains("negative rate limit count")
+    ));
     Ok(())
 }
 

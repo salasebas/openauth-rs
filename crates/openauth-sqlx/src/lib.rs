@@ -2,8 +2,6 @@
 
 pub mod migration;
 
-mod rate_limit;
-
 #[cfg(feature = "sqlite")]
 mod sqlite;
 
@@ -32,6 +30,6 @@ pub use postgres::PostgresRateLimitStore;
 pub use sqlite::SqliteRateLimitStore;
 
 pub(crate) use openauth_core::db::{
-    consume_sql_rate_limit_record as consume_record, SqlRateLimitNames as RateLimitSqlNames,
+    consume_sql_rate_limit_record as consume_record, rate_limit_count_from_i64 as count_from_i64,
+    rate_limit_count_to_i64 as count_to_i64, SqlRateLimitNames as RateLimitSqlNames,
 };
-pub(crate) use rate_limit::{count_from_i64, count_to_i64};
