@@ -260,6 +260,17 @@ impl CognitoProvider {
         token: &str,
         nonce: Option<&str>,
     ) -> Result<bool, OAuthError> {
+        let jwks_endpoint = self.jwks_endpoint();
+        self.verify_id_token_with_jwks_url(token, nonce, &jwks_endpoint)
+            .await
+    }
+
+    pub async fn verify_id_token_with_jwks_url(
+        &self,
+        token: &str,
+        nonce: Option<&str>,
+        jwks_url: &str,
+    ) -> Result<bool, OAuthError> {
         if self.options.disable_id_token_sign_in {
             return Ok(false);
         }
@@ -267,11 +278,11 @@ impl CognitoProvider {
         let audience = client_id_audiences(&self.options.client_id);
         let result = validate_token(
             token,
-            &self.jwks_endpoint(),
+            jwks_url,
             TokenValidationOptions {
                 audience,
                 issuer: vec![self.expected_issuer()],
-                ..TokenValidationOptions::default()
+                ..TokenValidationOptions::default().require_standard_claims()
             },
         )
         .await?;
