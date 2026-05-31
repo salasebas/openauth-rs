@@ -198,17 +198,17 @@ async fn axum_connect_info_ip_can_be_disabled() -> Result<(), Box<dyn std::error
         OpenAuthAxumOptions::new().use_connect_info_for_ip(false),
     )?;
 
-    for _ in 0..2 {
-        let response = app
-            .clone()
-            .oneshot(request_with_connect_info(
-                Method::GET,
-                "/api/auth/ok",
-                "192.0.2.80",
-            )?)
-            .await?;
-        assert_eq!(response.status(), StatusCode::OK);
-    }
+    // ConnectInfo is present but ignored; without a trusted IP header production
+    // rate limiting fails closed instead of silently bypassing the limit.
+    let response = app
+        .clone()
+        .oneshot(request_with_connect_info(
+            Method::GET,
+            "/api/auth/ok",
+            "192.0.2.80",
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 
     Ok(())
 }
