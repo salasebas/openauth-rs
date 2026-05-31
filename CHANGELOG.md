@@ -9,6 +9,28 @@ Versioning while the API is still pre-1.0.
 
 ### Fixed
 
+- Fixed OAuth HTTP and social-provider networking so outbound requests block
+  literal private/loopback IPs by default, social userinfo calls use the
+  guarded client, and ID token verification rejects opaque tokens and tokens
+  missing standard JWT claims where providers verify locally.
+- Fixed OAuth authorization and token request builders so generic
+  `additional_params` cannot override `state`, PKCE fields, or other standard
+  OAuth parameters, and HTTP Basic client credentials are form-encoded per RFC
+  6749 §2.3.1 before Base64 encoding.
+- Fixed core auth flows so sign-out surfaces session deletion failures,
+  password-reset callbacks reject untrusted redirect URLs, email/password
+  session IP metadata uses the configured `advanced.ip_address` resolver
+  instead of raw forwarding headers, and `encrypt_oauth_tokens` encrypts
+  access, refresh, and ID tokens once at the storage boundary without leaving
+  ID tokens plaintext or double-encrypting tokens.
+- Fixed passkey WebAuthn verification to honor the configured
+  `user_verification` policy instead of always requiring user verification at
+  the webauthn-rs layer.
+- Fixed Postgres and SQLx rate-limit persistence so negative stored counts
+  fail closed instead of wrapping to huge values when decoded.
+- Fixed Stripe checkout success fallback to reconcile trialing subscriptions
+  missed by the primary webhook path and organization seat sync to clamp
+  subscription quantities to at least one seat.
 - Fixed trusted server-side dispatch so `AuthRouter::handle_async_server` can
   reach plugin `server_only` endpoints (such as the JWT plugin's `/sign-jwt`
   and `/verify-jwt`), while public `handle_async` still returns `404` for them.

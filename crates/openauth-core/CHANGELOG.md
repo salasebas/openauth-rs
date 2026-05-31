@@ -11,6 +11,19 @@ All notable changes to `openauth-core` are documented in this file.
 
 ### Fixed
 
+- Fixed sign-out so `SessionStore::delete_session` failures propagate to
+  callers instead of always returning success while cookies are cleared.
+- Fixed OAuth token encryption so `encrypt_oauth_tokens` encrypts access,
+  refresh, and ID tokens exactly once at the storage boundary (no plaintext
+  ID tokens or double-encrypted social sign-in tokens).
+- Fixed password-reset callback handling so untrusted redirect URLs are
+  rejected before issuing reset flows.
+- Fixed email/password sign-up and sign-in session IP metadata to use the
+  configured `advanced.ip_address` resolver (header allow-listing,
+  `RequestClientIp`, validation) instead of trusting raw `X-Forwarded-For` or
+  `X-Real-IP` values.
+- Fixed shared SQL/Postgres rate-limit count decoding so negative persisted
+  values return an adapter error instead of wrapping to huge `u64` counts.
 - Fixed a rate limit bypass where enabled rate limiting was silently skipped in
   production when no client IP could be resolved (missing `RequestClientIp`
   extension or trusted IP header). Such requests now fail closed by default

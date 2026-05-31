@@ -6,6 +6,9 @@ All notable changes to `openauth-passkey` are documented in this file.
 
 ### Fixed
 
+- Fixed WebAuthn verification to honor the configured `user_verification` policy
+  end-to-end instead of always verifying with `UserVerificationPolicy::Required`
+  while advertising preferred/discouraged settings.
 - Route passkey WebAuthn challenges and login sessions through the core
   storage-aware stores so deployments using `secondary_storage` (e.g. Redis)
   with `store_session_in_database(false)` can complete passwordless sign-in and

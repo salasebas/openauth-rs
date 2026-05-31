@@ -15,6 +15,10 @@ All notable changes to `openauth-stripe` are documented in this file.
 
 ### Fixed
 
+- Fixed checkout success fallback to reconcile trialing subscriptions that were
+  not activated by the primary webhook delivery path.
+- Fixed organization seat synchronization to clamp Stripe subscription
+  quantities to at least one seat when syncing member counts.
 - Webhook signature verification now uses the endpoint signing secret verbatim
   (including the `whsec_` prefix) as the HMAC key, matching Stripe's official
   libraries. Previously the `whsec_` prefix was stripped and the suffix

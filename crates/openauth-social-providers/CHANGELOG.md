@@ -2,6 +2,18 @@
 
 All notable changes to `openauth-social-providers` are documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- Fixed social provider profile and userinfo HTTP calls to use the SSRF-safe
+  provider HTTP client so requests cannot target literal private IPs by default.
+- Fixed Facebook limited-login `verify_id_token` to reject opaque (non-JWT)
+  tokens instead of treating them as locally verifiable ID tokens.
+- Fixed Apple, Cognito, Facebook, Microsoft Entra ID, and Twitch ID token
+  verification to require standard JWT claims (`sub`, `aud`, `iss`, `exp`)
+  before accepting a token.
+
 ## [0.0.6] - 2026-05-24
 
 ### Fixed

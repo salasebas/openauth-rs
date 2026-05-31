@@ -6,6 +6,8 @@ All notable changes to `openauth-deadpool-postgres` are documented in this file.
 
 ### Fixed
 
+- Fixed rate-limit persistence so negative stored counts are rejected instead
+  of wrapping to huge values when decoded as `u64`.
 - Roll back in-flight transactions when `transaction()` or rate-limit `consume()`
   is dropped before explicit `COMMIT`/`ROLLBACK`, keeping the checked-out pool
   connection until cleanup completes so recycled connections cannot commit

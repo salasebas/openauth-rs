@@ -2,6 +2,19 @@
 
 All notable changes to `openauth-oauth` are documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- Fixed the default OAuth HTTP client to block GET/POST requests whose URLs
+  use literal private, loopback, or link-local IP addresses (SSRF hardening).
+- Fixed HTTP Basic client authentication to form-encode `client_id` and
+  `client_secret` per RFC 6749 §2.3.1 before Base64 encoding (reserved and
+  non-ASCII credentials no longer break token exchange).
+- Fixed authorization URL and authorization-code/refresh token request builders
+  so `additional_params` cannot override `state`, PKCE (`code_challenge`,
+  `code_verifier`, `code_challenge_method`), or other standard OAuth fields.
+
 ## [0.0.6] - 2026-05-24
 
 ### Added

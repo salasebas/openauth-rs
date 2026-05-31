@@ -6,6 +6,8 @@ All notable changes to `openauth-tokio-postgres` are documented in this file.
 
 ### Fixed
 
+- Fixed rate-limit persistence so negative stored counts are rejected instead
+  of wrapping to huge values when decoded as `u64`.
 - Roll back in-flight transactions when `transaction()` or rate-limit `consume()`
   is dropped before explicit `COMMIT`/`ROLLBACK` (cancellation, task abort, or
   panic), holding the shared connection gate until cleanup completes so later

@@ -2,6 +2,13 @@
 
 All notable changes to `openauth-sqlx` are documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- Fixed rate-limit persistence so negative stored counts are rejected instead
+  of wrapping to huge values when decoded as `u64`.
+
 ## [0.0.6] - 2026-05-24
 
 ### Added
