@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use time::{Duration, OffsetDateTime};
 
 mod access_control;
+mod body_validation;
 mod openapi;
 mod parity;
 mod permissions;

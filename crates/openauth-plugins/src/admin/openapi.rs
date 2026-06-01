@@ -1,5 +1,5 @@
 use http::Method;
-use openauth_core::api::OpenApiOperation;
+use openauth_core::api::{BodyField, BodySchema, JsonSchemaType, OpenApiOperation};
 use serde_json::{json, Value};
 
 pub struct EndpointDoc {
@@ -32,6 +32,46 @@ impl EndpointDoc {
             }));
         }
         operation
+    }
+
+    /// Derive a `BodySchema` from the published OpenAPI request schema so the
+    /// core pre-handler validator returns structured 400/415 responses instead
+    /// of letting malformed input surface as handler errors. Returns `None` for
+    /// endpoints without a request body (e.g. GET routes). Properties without a
+    /// concrete scalar `type` (such as `oneOf` role inputs) are left to the
+    /// handler to validate.
+    pub fn body_schema(&self) -> Option<BodySchema> {
+        let schema = self.request_schema.as_ref()?;
+        let required: Vec<&str> = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .map(|values| values.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let fields = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, property)| {
+                let schema_type = json_schema_type(property.get("type").and_then(Value::as_str)?)?;
+                Some(if required.contains(&name.as_str()) {
+                    BodyField::new(name.clone(), schema_type)
+                } else {
+                    BodyField::optional(name.clone(), schema_type)
+                })
+            });
+        Some(BodySchema::object(fields))
+    }
+}
+
+fn json_schema_type(value: &str) -> Option<JsonSchemaType> {
+    match value {
+        "string" => Some(JsonSchemaType::String),
+        "number" => Some(JsonSchemaType::Number),
+        "boolean" => Some(JsonSchemaType::Boolean),
+        "array" => Some(JsonSchemaType::Array),
+        "object" => Some(JsonSchemaType::Object),
+        _ => None,
     }
 }
 
