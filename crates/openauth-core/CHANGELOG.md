@@ -15,6 +15,13 @@ All notable changes to `openauth-core` are documented in this file.
 
 ### Fixed
 
+- Fixed secure-cookie session resolution so `get_session_cookie` only accepts
+  the `__Secure-` prefixed name (and its legacy alias) when secure cookies are
+  configured, instead of preferring the unprefixed `open-auth.session_token`
+  first. This prevents a sibling app or subdomain that can write parent-domain
+  cookies from shadowing the victim's secure session, and `delete_session_cookie`
+  now also expires the unprefixed fallback so a planted shadow cannot keep
+  forcing anonymous responses.
 - Fixed sign-out so `SessionStore::delete_session` failures propagate to
   callers instead of always returning success while cookies are cleared.
 - Fixed OAuth token encryption so `encrypt_oauth_tokens` encrypts access,
