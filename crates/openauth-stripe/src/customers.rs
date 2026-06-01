@@ -373,7 +373,7 @@ async fn stored_user_customer_id(
 async fn find_existing_user_customer(
     stripe_client: &StripeClient,
     logger: &openauth_core::env::logger::Logger,
-    _user_id: &str,
+    user_id: &str,
     email: &str,
 ) -> Result<Option<Value>, CustomerEnsureError> {
     let escaped_email = escape_stripe_search_value(email);
@@ -381,7 +381,7 @@ async fn find_existing_user_customer(
         format!("email:\"{escaped_email}\" AND -metadata[\"customerType\"]:\"organization\"");
     match stripe_client.search_customers(&query).await {
         Ok(search_result) => {
-            if let Some(customer) = find_user_customer(&search_result) {
+            if let Some(customer) = find_user_customer(&search_result, user_id) {
                 return Ok(Some(customer));
             }
         }
@@ -397,7 +397,7 @@ async fn find_existing_user_customer(
                 }))
                 .await
                 .map_err(CustomerEnsureError::Stripe)?;
-            if let Some(customer) = find_user_customer(&list_result) {
+            if let Some(customer) = find_user_customer(&list_result, user_id) {
                 return Ok(Some(customer));
             }
         }
@@ -405,18 +405,31 @@ async fn find_existing_user_customer(
     Ok(None)
 }
 
-fn find_user_customer(customers: &Value) -> Option<Value> {
+/// Selects a Stripe customer that is safe to link to `user_id`.
+///
+/// Skips organization customers and refuses any customer whose
+/// `metadata.userId` identifies a different OpenAuth user, only allowing reuse
+/// of the user's own customer or a metadata-less dashboard customer.
+fn find_user_customer(customers: &Value, user_id: &str) -> Option<Value> {
     customers
         .get("data")?
         .as_array()?
         .iter()
         .find_map(|customer| {
-            let is_organization = customer
-                .get("metadata")
+            let metadata = customer.get("metadata");
+            let customer_type = metadata
                 .and_then(|metadata| metadata.get("customerType"))
+                .and_then(Value::as_str);
+            if customer_type == Some("organization") {
+                return None;
+            }
+            match metadata
+                .and_then(|metadata| metadata.get("userId"))
                 .and_then(Value::as_str)
-                == Some("organization");
-            (!is_organization).then(|| customer.clone())
+            {
+                Some(existing) if existing != user_id => None,
+                _ => Some(customer.clone()),
+            }
         })
 }
 

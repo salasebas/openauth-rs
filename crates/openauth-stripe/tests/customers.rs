@@ -48,6 +48,8 @@ enum CustomerTransportMode {
     CreateCustomer,
     SearchFindsUserCustomer,
     SearchFindsDashboardCustomer,
+    SearchFindsForeignUserCustomer,
+    SearchFindsForeignThenDashboardCustomer,
     SearchFailsListFindsUserCustomer,
     ExistingCustomerEmailDiffers,
     CreateCustomerFails,
@@ -87,6 +89,44 @@ impl StripeTransport for CustomerTransport {
                     }),
                 }
             }
+            (CustomerTransportMode::SearchFindsForeignUserCustomer, "/v1/customers/search", _) => {
+                StripeResponse {
+                    status: 200,
+                    body: json!({
+                        "object": "search_result",
+                        "data": [{
+                            "id": "cus_foreign_user",
+                            "object": "customer",
+                            "email": "ada@example.com",
+                            "metadata": { "userId": "user_2", "customerType": "user" }
+                        }]
+                    }),
+                }
+            }
+            (
+                CustomerTransportMode::SearchFindsForeignThenDashboardCustomer,
+                "/v1/customers/search",
+                _,
+            ) => StripeResponse {
+                status: 200,
+                body: json!({
+                    "object": "search_result",
+                    "data": [
+                        {
+                            "id": "cus_foreign_user",
+                            "object": "customer",
+                            "email": "ada@example.com",
+                            "metadata": { "userId": "user_2", "customerType": "user" }
+                        },
+                        {
+                            "id": "cus_dashboard",
+                            "object": "customer",
+                            "email": "ada@example.com",
+                            "metadata": {}
+                        }
+                    ]
+                }),
+            },
             (
                 CustomerTransportMode::SearchFailsListFindsUserCustomer,
                 "/v1/customers/search",
@@ -369,6 +409,50 @@ async fn upgrade_reuses_dashboard_customer_found_by_email_search(
     assert!(requests.iter().any(|request| {
         request.path == "/v1/checkout/sessions" && request.body.contains("customer=cus_dashboard")
     }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn upgrade_refuses_foreign_user_customer_and_creates_new(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CustomerTransport::new(
+        CustomerTransportMode::SearchFindsForeignUserCustomer,
+    ));
+    let (response, adapter, requests) = upgrade_with_transport(Arc::clone(&transport)).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(requests
+        .iter()
+        .any(|request| request.method == "POST" && request.path == "/v1/customers"));
+    let checkout = requests
+        .iter()
+        .find(|request| request.path == "/v1/checkout/sessions")
+        .ok_or("checkout request")?;
+    assert!(checkout.body.contains("customer=cus_created"));
+    assert!(!checkout.body.contains("cus_foreign_user"));
+    assert_user_customer(&adapter, "cus_created").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn upgrade_skips_foreign_user_customer_and_reuses_dashboard(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CustomerTransport::new(
+        CustomerTransportMode::SearchFindsForeignThenDashboardCustomer,
+    ));
+    let (response, adapter, requests) = upgrade_with_transport(Arc::clone(&transport)).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!requests
+        .iter()
+        .any(|request| request.method == "POST" && request.path == "/v1/customers"));
+    let checkout = requests
+        .iter()
+        .find(|request| request.path == "/v1/checkout/sessions")
+        .ok_or("checkout request")?;
+    assert!(checkout.body.contains("customer=cus_dashboard"));
+    assert!(!checkout.body.contains("cus_foreign_user"));
+    assert_user_customer(&adapter, "cus_dashboard").await?;
     Ok(())
 }
 
