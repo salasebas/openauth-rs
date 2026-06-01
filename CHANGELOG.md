@@ -9,6 +9,10 @@ Versioning while the API is still pre-1.0.
 
 ### Fixed
 
+- Fixed `openauth-redis` documenting `rediss://`/`valkeys://` TLS URLs without
+  compiling a redis-rs TLS backend, which made `connect()` fail with an
+  `InvalidClientConfig` error. TLS is now opt-in through the new `rustls` and
+  `native-tls` crate features, and the README documents how to enable them.
 - Fixed the OIDC SSO callback so it validates the ID token before trusting a
   UserInfo response. Providers with a `userInfoEndpoint` configured previously
   skipped ID token validation, allowing login and implicit account linking from
