@@ -9,6 +9,10 @@ Versioning while the API is still pre-1.0.
 
 ### Fixed
 
+- Fixed `openauth-redis` documenting `rediss://`/`valkeys://` TLS URLs without
+  compiling a redis-rs TLS backend, which made `connect()` fail with an
+  `InvalidClientConfig` error. TLS is now opt-in through the new `rustls` and
+  `native-tls` crate features, and the README documents how to enable them.
 - Fixed social OAuth `form_post` callbacks (such as Apple's
   `response_mode=form_post`) being rejected with
   `CROSS_SITE_NAVIGATION_LOGIN_BLOCKED`. Only the POST `/callback/:id` endpoint
