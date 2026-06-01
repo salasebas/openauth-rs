@@ -319,8 +319,8 @@ pub fn has_permission_endpoint(options: AdminOptions) -> AsyncAuthEndpoint {
                 (
                     "permissions",
                     "object",
-                    true,
-                    "Permissions grouped by resource.",
+                    false,
+                    "Permissions grouped by resource. Also accepts the `permission` alias; the endpoint rejects an empty set.",
                 ),
             ])),
             vec![],
@@ -350,14 +350,17 @@ where
         + 'static,
 {
     let operation = doc.operation();
-    create_auth_endpoint(
-        doc.path,
-        doc.method,
-        AuthEndpointOptions::new()
-            .operation_id(doc.operation_id)
-            .openapi(operation),
-        move |context, request| Box::pin(handler(context, request)),
-    )
+    let mut options = AuthEndpointOptions::new()
+        .operation_id(doc.operation_id)
+        .openapi(operation);
+    if let Some(body_schema) = doc.body_schema() {
+        options = options
+            .allowed_media_types(["application/json", "application/x-www-form-urlencoded"])
+            .body_schema(body_schema);
+    }
+    create_auth_endpoint(doc.path, doc.method, options, move |context, request| {
+        Box::pin(handler(context, request))
+    })
 }
 
 fn doc(
