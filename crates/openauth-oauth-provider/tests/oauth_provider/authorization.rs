@@ -1171,3 +1171,149 @@ async fn authorize_post_login_redirect_callback_can_choose_custom_page(
     assert!(redirect_query_value(&redirect, "request_id").is_some());
     Ok(())
 }
+
+#[tokio::test]
+async fn authorize_prompt_none_returns_account_selection_required_when_needed(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            allow_dynamic_client_registration: true,
+            select_account_should_redirect: Some(PromptShouldRedirectResolver::new(
+                |_| async move { Ok(true) },
+            )),
+            ..default_options()
+        })?,
+        adapter,
+    )?;
+    let client = register_client(
+        &router,
+        r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid","skip_consent":true}"#,
+        Some(&cookie),
+    )
+    .await?;
+    let client_id = client["client_id"].as_str().ok_or("missing client_id")?;
+    let challenge = pkce_challenge("correct-horse-battery-staple");
+    let path = format!(
+        "/api/auth/oauth2/authorize?response_type=code&client_id={client_id}&redirect_uri=https%3A%2F%2Frp.example%2Fcallback&scope=openid&state=acct-state&prompt=none&code_challenge={challenge}&code_challenge_method=S256"
+    );
+    let response = router
+        .handle_async(request(Method::GET, &path, "", Some(&cookie))?)
+        .await?;
+    let redirect = redirect_url(&response)?;
+    assert_eq!(
+        redirect_query_value(&redirect, "error").as_deref(),
+        Some("account_selection_required")
+    );
+    assert_eq!(
+        redirect_query_value(&redirect, "state").as_deref(),
+        Some("acct-state")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn authorize_success_redirect_includes_iss_parameter(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(default_provider()?, adapter)?;
+    let client = register_client(
+        &router,
+        r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid","skip_consent":true}"#,
+        Some(&cookie),
+    )
+    .await?;
+    let client_id = client["client_id"].as_str().ok_or("missing client_id")?;
+    let challenge = pkce_challenge("correct-horse-battery-staple");
+    let path = format!(
+        "/api/auth/oauth2/authorize?response_type=code&client_id={client_id}&redirect_uri=https%3A%2F%2Frp.example%2Fcallback&scope=openid&code_challenge={challenge}&code_challenge_method=S256"
+    );
+    let response = router
+        .handle_async(request(Method::GET, &path, "", Some(&cookie))?)
+        .await?;
+    let redirect = redirect_url(&response)?;
+    assert_eq!(
+        redirect_query_value(&redirect, "iss").as_deref(),
+        Some(BASE_URL)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn authorize_prompt_none_returns_interaction_required_for_post_login(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            allow_dynamic_client_registration: true,
+            post_login_should_redirect: Some(PromptShouldRedirectResolver::new(|_| async move {
+                Ok(true)
+            })),
+            ..default_options()
+        })?,
+        adapter,
+    )?;
+    let client = register_client(
+        &router,
+        r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid","skip_consent":true}"#,
+        Some(&cookie),
+    )
+    .await?;
+    let client_id = client["client_id"].as_str().ok_or("missing client_id")?;
+    let challenge = pkce_challenge("correct-horse-battery-staple");
+    let path = format!(
+        "/api/auth/oauth2/authorize?response_type=code&client_id={client_id}&redirect_uri=https%3A%2F%2Frp.example%2Fcallback&scope=openid&state=post-state&prompt=none&code_challenge={challenge}&code_challenge_method=S256"
+    );
+    let response = router
+        .handle_async(request(Method::GET, &path, "", Some(&cookie))?)
+        .await?;
+    let redirect = redirect_url(&response)?;
+    assert_eq!(
+        redirect_query_value(&redirect, "error").as_deref(),
+        Some("interaction_required")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn authorize_json_accept_returns_redirect_payload_instead_of_302(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(default_provider()?, adapter)?;
+    let client = register_client(
+        &router,
+        r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid","skip_consent":true}"#,
+        Some(&cookie),
+    )
+    .await?;
+    let client_id = client["client_id"].as_str().ok_or("missing client_id")?;
+    let challenge = pkce_challenge("correct-horse-battery-staple");
+    let path = format!(
+        "/api/auth/oauth2/authorize?response_type=code&client_id={client_id}&redirect_uri=https%3A%2F%2Frp.example%2Fcallback&scope=openid&code_challenge={challenge}&code_challenge_method=S256"
+    );
+    let response = router
+        .handle_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("{BASE_URL}{path}"))
+                .header(header::ACCEPT, "application/json")
+                .header(header::COOKIE, cookie)
+                .body(Vec::new())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response)?;
+    assert_eq!(body["redirect"], true);
+    assert!(body["url"]
+        .as_str()
+        .is_some_and(|url| url.contains("code=")));
+    Ok(())
+}

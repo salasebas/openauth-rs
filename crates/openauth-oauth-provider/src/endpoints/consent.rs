@@ -55,6 +55,7 @@ pub(super) fn consent_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> As
                                 )
                             })?;
                     return authorization_error_redirect(
+                        &request,
                         redirect_uri,
                         "access_denied",
                         "End-User denied the authorization request",
@@ -85,6 +86,7 @@ pub(super) fn consent_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> As
                     context,
                     adapter.as_ref(),
                     &options,
+                    &request,
                     pending.authorization,
                     pending.state.as_deref(),
                 )
@@ -157,8 +159,15 @@ pub(super) fn continue_endpoint(
                     ));
                 }
                 delete_pending_authorization(adapter.as_ref(), &options, request_id).await?;
-                resume_pending_authorization(context, adapter.as_ref(), &options, pending, &user)
-                    .await
+                resume_pending_authorization(
+                    context,
+                    adapter.as_ref(),
+                    &options,
+                    &request,
+                    pending,
+                    &user,
+                )
+                .await
             })
         },
     )
@@ -220,6 +229,7 @@ async fn resume_pending_authorization(
     context: &AuthContext,
     adapter: &dyn DbAdapter,
     options: &ResolvedOAuthProviderOptions,
+    request: &ApiRequest,
     pending: PendingAuthorizationValue,
     user: &User,
 ) -> Result<ApiResponse, OpenAuthError> {
@@ -235,6 +245,7 @@ async fn resume_pending_authorization(
         Some(user.id.as_str()),
         &pending.authorization.scopes,
         prompt.as_deref(),
+        pending.authorization.reference_id.as_deref(),
     )
     .await?
     {
@@ -243,6 +254,7 @@ async fn resume_pending_authorization(
                 context,
                 adapter,
                 options,
+                request,
                 pending.authorization,
                 pending.state.as_deref(),
             )
@@ -258,13 +270,18 @@ async fn resume_pending_authorization(
                 },
             )
             .await?;
-            redirect_response(&page_redirect_with_request_id(
-                &options.consent_page,
-                &request_id,
-                &context.base_url,
-            )?)
+            redirect_or_json_response(
+                request,
+                &page_redirect_with_request_id(
+                    &options.consent_page,
+                    &request_id,
+                    &context.base_url,
+                )?,
+            )
         }
-        AuthorizeDecision::RedirectToLogin => redirect_response(&options.login_page),
+        AuthorizeDecision::RedirectToLogin => {
+            redirect_or_json_response(request, &options.login_page)
+        }
         AuthorizeDecision::RedirectError { error, description } => {
             let redirect_uri = pending
                 .authorization
@@ -274,6 +291,7 @@ async fn resume_pending_authorization(
                     OpenAuthError::Api("authorization redirect_uri is required".to_owned())
                 })?;
             authorization_error_redirect(
+                request,
                 redirect_uri,
                 error,
                 description,

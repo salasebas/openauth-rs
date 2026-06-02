@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use http::{header, Method, Response, StatusCode};
+use http::{Method, StatusCode};
 use openauth_core::api::{
     create_auth_endpoint, ApiRequest, ApiResponse, AsyncAuthEndpoint, AuthEndpointOptions,
 };
@@ -20,7 +20,7 @@ use crate::client::{
 };
 use crate::consent::{consent_from_record, upsert_consent, ConsentGrantInput};
 use crate::error::OAuthProviderError;
-use crate::metadata::{auth_server_metadata, oidc_server_metadata};
+use crate::metadata::{auth_server_metadata, oidc_server_metadata, well_known_metadata_response};
 use crate::options::{
     ClientPrivilegeAction, ClientPrivilegesInput, ClientReferenceInput, CustomUserInfoClaimsInput,
     GrantType, PromptRedirectInput, RequestUriResolverInput, ResolvedOAuthProviderOptions,
@@ -33,9 +33,10 @@ use crate::token::{
     RefreshTokenGrantInput, TokenRequest,
 };
 use crate::utils::{
-    basic_credentials, bearer_token, current_session, error_response, find_by_string,
-    find_many_by_string, hmac_sha256_base64, is_loopback_redirect_match, json_response, no_content,
-    parse_body, parse_query, query_param, redirect_response, split_scope, update_by_string,
+    basic_credentials, bearer_token, current_session, empty_success_response, error_response,
+    find_by_string, find_many_by_string, hmac_sha256_base64, is_loopback_redirect_match,
+    json_response, no_content, no_store_json_response, parse_body, parse_query, query_param,
+    redirect_or_json_response, redirect_response, split_scope, update_by_string,
 };
 
 mod authorization;
@@ -63,12 +64,12 @@ pub(crate) fn oauth_provider_endpoints(
         metadata_endpoint(
             "/.well-known/oauth-authorization-server",
             Arc::clone(&options),
-            false,
+            MetadataEndpointMode::OAuthAuthorizationServer,
         ),
         metadata_endpoint(
             "/.well-known/openid-configuration",
             Arc::clone(&options),
-            true,
+            MetadataEndpointMode::OpenIdConfiguration,
         ),
         authorize_endpoint(Arc::clone(&options)),
         consent_endpoint(Arc::clone(&options)),

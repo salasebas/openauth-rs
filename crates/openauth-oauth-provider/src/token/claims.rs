@@ -70,7 +70,7 @@ pub(super) async fn create_id_token(
         .map(Some)
 }
 
-fn user_normal_claims(user: &User, scopes: &[String]) -> Map<String, Value> {
+pub(crate) fn user_normal_claims(user: &User, scopes: &[String]) -> Map<String, Value> {
     let mut claims = Map::new();
     if scopes.iter().any(|scope| scope == "profile") {
         claims.insert("name".to_owned(), Value::String(user.name.clone()));

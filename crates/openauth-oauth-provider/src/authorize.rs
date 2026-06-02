@@ -21,6 +21,7 @@ pub async fn decide_authorize(
     session_user_id: Option<&str>,
     requested_scopes: &[String],
     prompt: Option<&str>,
+    consent_reference_id: Option<&str>,
 ) -> Result<AuthorizeDecision, OpenAuthError> {
     let prompt = PromptSet::parse(prompt);
     if prompt.has_none_with_supported_prompt() {
@@ -57,13 +58,9 @@ pub async fn decide_authorize(
     }
 
     let user_id = session_user_id.unwrap_or_default();
-    let consent = find_consent_for_reference(
-        adapter,
-        user_id,
-        &client.client_id,
-        client.reference_id.as_deref(),
-    )
-    .await?;
+    let consent =
+        find_consent_for_reference(adapter, user_id, &client.client_id, consent_reference_id)
+            .await?;
     if consent
         .as_ref()
         .is_some_and(|consent| has_granted_scopes(consent, requested_scopes))

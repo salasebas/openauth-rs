@@ -185,6 +185,7 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                 let prompt = query_param(&request, "prompt");
                 if let Some((error, description)) = prompt_validation_error(prompt.as_deref()) {
                     return authorization_error_redirect(
+                        &request,
                         &redirect_uri,
                         error,
                         description,
@@ -193,6 +194,12 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                     );
                 }
                 let current_session = current_session(context, adapter.as_ref(), &request).await?;
+                let consent_reference_id = match current_session.as_ref() {
+                    Some((session, user, _)) => {
+                        resolve_consent_reference_id(&options, user, session).await?
+                    }
+                    None => None,
+                };
                 if prompt_contains(&request, "create") {
                     let mut signup_page = options.signup_page.clone();
                     if let Some((session, user, _)) = current_session.as_ref() {
@@ -220,6 +227,7 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                                     nonce: nonce.clone(),
                                     code_challenge: code_challenge.clone(),
                                     code_challenge_method: code_challenge_method.clone(),
+                                    consent_reference_id: consent_reference_id.clone(),
                                 }),
                                 state.clone(),
                                 PendingAuthorizationStep::Create,
@@ -227,18 +235,24 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                             ),
                         )
                         .await?;
-                        return redirect_response(&page_redirect_with_request_id(
-                            &signup_page,
-                            &request_id,
-                            &context.base_url,
-                        )?);
+                        return redirect_or_json_response(
+                            &request,
+                            &page_redirect_with_request_id(
+                                &signup_page,
+                                &request_id,
+                                &context.base_url,
+                            )?,
+                        );
                     }
                     let signup_page = signup_page.unwrap_or_else(|| options.login_page.clone());
-                    return redirect_response(&page_redirect_with_authorize_query(
-                        &signup_page,
+                    return redirect_or_json_response(
                         &request,
-                        &context.base_url,
-                    )?);
+                        &page_redirect_with_authorize_query(
+                            &signup_page,
+                            &request,
+                            &context.base_url,
+                        )?,
+                    );
                 }
                 if prompt_contains(&request, "select_account") {
                     let mut select_account_page = options.select_account_page.clone();
@@ -268,6 +282,7 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                                     nonce: nonce.clone(),
                                     code_challenge: code_challenge.clone(),
                                     code_challenge_method: code_challenge_method.clone(),
+                                    consent_reference_id: consent_reference_id.clone(),
                                 }),
                                 state.clone(),
                                 PendingAuthorizationStep::SelectAccount,
@@ -275,19 +290,47 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                             ),
                         )
                         .await?;
-                        return redirect_response(&page_redirect_with_request_id(
-                            &select_account_page,
-                            &request_id,
-                            &context.base_url,
-                        )?);
+                        return redirect_or_json_response(
+                            &request,
+                            &page_redirect_with_request_id(
+                                &select_account_page,
+                                &request_id,
+                                &context.base_url,
+                            )?,
+                        );
                     }
                     let select_account_page =
                         select_account_page.unwrap_or_else(|| options.login_page.clone());
-                    return redirect_response(&page_redirect_with_authorize_query(
-                        &select_account_page,
+                    return redirect_or_json_response(
                         &request,
-                        &context.base_url,
-                    )?);
+                        &page_redirect_with_authorize_query(
+                            &select_account_page,
+                            &request,
+                            &context.base_url,
+                        )?,
+                    );
+                }
+                if let Some((session, user, _)) = current_session.as_ref() {
+                    if let Some(response) = handle_should_redirect_steps(&PendingAuthorizeContext {
+                        context,
+                        adapter: adapter.as_ref(),
+                        options: &options,
+                        request: &request,
+                        client: &client,
+                        redirect_uri: &redirect_uri,
+                        scopes: &scopes,
+                        user,
+                        session,
+                        state: state.clone(),
+                        nonce: nonce.clone(),
+                        code_challenge: code_challenge.clone(),
+                        code_challenge_method: code_challenge_method.clone(),
+                        consent_reference_id: consent_reference_id.clone(),
+                    })
+                    .await?
+                    {
+                        return Ok(response);
+                    }
                 }
                 if let Some((session, user, _)) = current_session.as_ref() {
                     let post_login_page = match &options.post_login_redirect {
@@ -312,6 +355,7 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                         ) {
                             if prompt_contains(&request, "none") {
                                 return authorization_error_redirect(
+                                    &request,
                                     &redirect_uri,
                                     "login_required",
                                     "authentication required",
@@ -319,7 +363,7 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                                     &context.base_url,
                                 );
                             }
-                            return redirect_response(&options.login_page);
+                            return redirect_or_json_response(&request, &options.login_page);
                         }
                         match decide_authorize(
                             adapter.as_ref(),
@@ -327,12 +371,13 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                             session_user_id,
                             &scopes,
                             prompt.as_deref(),
+                            consent_reference_id.as_deref(),
                         )
                         .await?
                         {
                             AuthorizeDecision::IssueCode => {}
                             AuthorizeDecision::RedirectToLogin => {
-                                return redirect_response(&options.login_page);
+                                return redirect_or_json_response(&request, &options.login_page);
                             }
                             AuthorizeDecision::RedirectToConsent => {
                                 let request_id = store_pending_authorization(
@@ -348,6 +393,7 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                                             nonce: nonce.clone(),
                                             code_challenge: code_challenge.clone(),
                                             code_challenge_method: code_challenge_method.clone(),
+                                            consent_reference_id: consent_reference_id.clone(),
                                         }),
                                         state.clone(),
                                         PendingAuthorizationStep::Consent,
@@ -355,14 +401,18 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                                     ),
                                 )
                                 .await?;
-                                return redirect_response(&page_redirect_with_request_id(
-                                    &options.consent_page,
-                                    &request_id,
-                                    &context.base_url,
-                                )?);
+                                return redirect_or_json_response(
+                                    &request,
+                                    &page_redirect_with_request_id(
+                                        &options.consent_page,
+                                        &request_id,
+                                        &context.base_url,
+                                    )?,
+                                );
                             }
                             AuthorizeDecision::RedirectError { error, description } => {
                                 return authorization_error_redirect(
+                                    &request,
                                     &redirect_uri,
                                     error,
                                     description,
@@ -380,11 +430,13 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                             nonce,
                             code_challenge,
                             code_challenge_method,
+                            consent_reference_id: consent_reference_id.clone(),
                         });
                         return issue_authorization_code_redirect(
                             context,
                             adapter.as_ref(),
                             &options,
+                            &request,
                             value,
                             state.as_deref(),
                         )
@@ -403,6 +455,7 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                                 nonce: nonce.clone(),
                                 code_challenge: code_challenge.clone(),
                                 code_challenge_method: code_challenge_method.clone(),
+                                consent_reference_id: consent_reference_id.clone(),
                             }),
                             state.clone(),
                             PendingAuthorizationStep::PostLogin,
@@ -410,11 +463,14 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                         ),
                     )
                     .await?;
-                    return redirect_response(&page_redirect_with_request_id(
-                        &post_login_page,
-                        &request_id,
-                        &context.base_url,
-                    )?);
+                    return redirect_or_json_response(
+                        &request,
+                        &page_redirect_with_request_id(
+                            &post_login_page,
+                            &request_id,
+                            &context.base_url,
+                        )?,
+                    );
                 }
                 let session_user_id = current_session
                     .as_ref()
@@ -427,6 +483,7 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                         prompt.split_whitespace().any(|value| value == "none")
                     }) {
                         return authorization_error_redirect(
+                            &request,
                             &redirect_uri,
                             "login_required",
                             "authentication required",
@@ -434,7 +491,7 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                             &context.base_url,
                         );
                     }
-                    return redirect_response(&options.login_page);
+                    return redirect_or_json_response(&request, &options.login_page);
                 }
                 match decide_authorize(
                     adapter.as_ref(),
@@ -442,16 +499,17 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                     session_user_id,
                     &scopes,
                     prompt.as_deref(),
+                    consent_reference_id.as_deref(),
                 )
                 .await?
                 {
                     AuthorizeDecision::IssueCode => {}
                     AuthorizeDecision::RedirectToLogin => {
-                        return redirect_response(&options.login_page);
+                        return redirect_or_json_response(&request, &options.login_page);
                     }
                     AuthorizeDecision::RedirectToConsent => {
                         let Some((session, user, _)) = current_session.as_ref() else {
-                            return redirect_response(&options.login_page);
+                            return redirect_or_json_response(&request, &options.login_page);
                         };
                         let request_id = store_pending_authorization(
                             adapter.as_ref(),
@@ -466,6 +524,7 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                                     nonce: nonce.clone(),
                                     code_challenge: code_challenge.clone(),
                                     code_challenge_method: code_challenge_method.clone(),
+                                    consent_reference_id: consent_reference_id.clone(),
                                 }),
                                 state.clone(),
                                 PendingAuthorizationStep::Consent,
@@ -473,14 +532,18 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                             ),
                         )
                         .await?;
-                        return redirect_response(&page_redirect_with_request_id(
-                            &options.consent_page,
-                            &request_id,
-                            &context.base_url,
-                        )?);
+                        return redirect_or_json_response(
+                            &request,
+                            &page_redirect_with_request_id(
+                                &options.consent_page,
+                                &request_id,
+                                &context.base_url,
+                            )?,
+                        );
                     }
                     AuthorizeDecision::RedirectError { error, description } => {
                         return authorization_error_redirect(
+                            &request,
                             &redirect_uri,
                             error,
                             description,
@@ -490,7 +553,7 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                     }
                 };
                 let Some((session, user, _)) = current_session else {
-                    return redirect_response(&options.login_page);
+                    return redirect_or_json_response(&request, &options.login_page);
                 };
                 let value = authorization_value(AuthorizationValueInput {
                     client: &client,
@@ -501,11 +564,13 @@ pub(super) fn authorize_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> 
                     nonce,
                     code_challenge,
                     code_challenge_method,
+                    consent_reference_id: consent_reference_id.clone(),
                 });
                 issue_authorization_code_redirect(
                     context,
                     adapter.as_ref(),
                     &options,
+                    &request,
                     value,
                     state.as_deref(),
                 )
@@ -563,6 +628,7 @@ pub(super) struct AuthorizationValueInput<'a> {
     nonce: Option<String>,
     code_challenge: Option<String>,
     code_challenge_method: Option<String>,
+    consent_reference_id: Option<String>,
 }
 
 pub(super) fn authorization_value(input: AuthorizationValueInput<'_>) -> AuthorizationCodeValue {
@@ -572,7 +638,9 @@ pub(super) fn authorization_value(input: AuthorizationValueInput<'_>) -> Authori
         scopes: input.scopes.to_vec(),
         user_id: input.user.id.clone(),
         session_id: input.session.id.clone(),
-        reference_id: input.client.reference_id.clone(),
+        reference_id: input
+            .consent_reference_id
+            .or_else(|| input.client.reference_id.clone()),
         nonce: input.nonce,
         code_challenge: input.code_challenge,
         code_challenge_method: input.code_challenge_method,
@@ -632,6 +700,7 @@ pub(super) async fn issue_authorization_code_redirect(
     context: &AuthContext,
     adapter: &dyn DbAdapter,
     options: &ResolvedOAuthProviderOptions,
+    request: &ApiRequest,
     value: AuthorizationCodeValue,
     state: Option<&str>,
 ) -> Result<ApiResponse, OpenAuthError> {
@@ -656,7 +725,7 @@ pub(super) async fn issue_authorization_code_redirect(
     redirect
         .query_pairs_mut()
         .append_pair("iss", &context.base_url);
-    redirect_response(redirect.as_str())
+    redirect_or_json_response(request, redirect.as_str())
 }
 
 pub(super) fn page_redirect_with_request_id(
@@ -731,6 +800,7 @@ pub(super) fn prompt_contains(request: &ApiRequest, expected: &str) -> bool {
 }
 
 pub(super) fn authorization_error_redirect(
+    request: &ApiRequest,
     redirect_uri: &str,
     error: &str,
     description: &str,
@@ -747,7 +817,199 @@ pub(super) fn authorization_error_redirect(
         redirect.query_pairs_mut().append_pair("state", state);
     }
     redirect.query_pairs_mut().append_pair("iss", issuer);
-    redirect_response(redirect.as_str())
+    redirect_or_json_response(request, redirect.as_str())
+}
+
+pub(super) async fn resolve_consent_reference_id(
+    options: &ResolvedOAuthProviderOptions,
+    user: &User,
+    session: &Session,
+) -> Result<Option<String>, OpenAuthError> {
+    match &options.consent_reference_id {
+        Some(resolver) => {
+            resolver
+                .resolve(ClientReferenceInput {
+                    user: Some(user.clone()),
+                    session: Some(session.clone()),
+                })
+                .await
+        }
+        None => Ok(None),
+    }
+}
+
+fn prompt_none_active(request: &ApiRequest) -> bool {
+    prompt_contains(request, "none")
+}
+
+struct PendingAuthorizeContext<'a> {
+    context: &'a AuthContext,
+    adapter: &'a dyn DbAdapter,
+    options: &'a ResolvedOAuthProviderOptions,
+    request: &'a ApiRequest,
+    client: &'a crate::models::SchemaClient,
+    redirect_uri: &'a str,
+    scopes: &'a [String],
+    user: &'a User,
+    session: &'a Session,
+    state: Option<String>,
+    nonce: Option<String>,
+    code_challenge: Option<String>,
+    code_challenge_method: Option<String>,
+    consent_reference_id: Option<String>,
+}
+
+impl PendingAuthorizeContext<'_> {
+    fn prompt_input(&self) -> PromptRedirectInput {
+        PromptRedirectInput {
+            user: self.user.clone(),
+            session: self.session.clone(),
+            scopes: self.scopes.to_vec(),
+        }
+    }
+
+    fn authorization_input(&self) -> AuthorizationValueInput<'_> {
+        AuthorizationValueInput {
+            client: self.client,
+            redirect_uri: self.redirect_uri,
+            scopes: self.scopes,
+            user: self.user,
+            session: self.session,
+            nonce: self.nonce.clone(),
+            code_challenge: self.code_challenge.clone(),
+            code_challenge_method: self.code_challenge_method.clone(),
+            consent_reference_id: self.consent_reference_id.clone(),
+        }
+    }
+}
+
+async fn redirect_for_select_account(
+    ctx: &PendingAuthorizeContext<'_>,
+) -> Result<ApiResponse, OpenAuthError> {
+    let mut select_account_page = ctx.options.select_account_page.clone();
+    if let Some(resolver) = &ctx.options.select_account_redirect {
+        select_account_page = resolver
+            .resolve(ctx.prompt_input())
+            .await?
+            .or(select_account_page);
+    }
+    let select_account_page = select_account_page.unwrap_or_else(|| ctx.options.login_page.clone());
+    let request_id = store_pending_authorization(
+        ctx.adapter,
+        ctx.options,
+        pending_authorization_value(
+            authorization_value(ctx.authorization_input()),
+            ctx.state.clone(),
+            PendingAuthorizationStep::SelectAccount,
+            ctx.request,
+        ),
+    )
+    .await?;
+    redirect_or_json_response(
+        ctx.request,
+        &page_redirect_with_request_id(&select_account_page, &request_id, &ctx.context.base_url)?,
+    )
+}
+
+async fn handle_should_redirect_steps(
+    ctx: &PendingAuthorizeContext<'_>,
+) -> Result<Option<ApiResponse>, OpenAuthError> {
+    let prompt_none = prompt_none_active(ctx.request);
+    if !prompt_contains(ctx.request, "select_account") {
+        if let Some(resolver) = &ctx.options.select_account_should_redirect {
+            if resolver.resolve(ctx.prompt_input()).await? {
+                if prompt_none {
+                    return Ok(Some(authorization_error_redirect(
+                        ctx.request,
+                        ctx.redirect_uri,
+                        "account_selection_required",
+                        "End-User account selection is required",
+                        ctx.state.as_deref(),
+                        &ctx.context.base_url,
+                    )?));
+                }
+                return Ok(Some(redirect_for_select_account(ctx).await?));
+            }
+        }
+    }
+    if let Some(resolver) = &ctx.options.signup_should_redirect {
+        if resolver.resolve(ctx.prompt_input()).await? {
+            if prompt_none {
+                return Ok(Some(authorization_error_redirect(
+                    ctx.request,
+                    ctx.redirect_uri,
+                    "interaction_required",
+                    "End-User interaction is required",
+                    ctx.state.as_deref(),
+                    &ctx.context.base_url,
+                )?));
+            }
+            let mut signup_page = ctx.options.signup_page.clone();
+            if let Some(page_resolver) = &ctx.options.signup_redirect {
+                signup_page = page_resolver
+                    .resolve(ctx.prompt_input())
+                    .await?
+                    .or(signup_page);
+            }
+            let signup_page = signup_page.unwrap_or_else(|| ctx.options.login_page.clone());
+            let request_id = store_pending_authorization(
+                ctx.adapter,
+                ctx.options,
+                pending_authorization_value(
+                    authorization_value(ctx.authorization_input()),
+                    ctx.state.clone(),
+                    PendingAuthorizationStep::Create,
+                    ctx.request,
+                ),
+            )
+            .await?;
+            return Ok(Some(redirect_or_json_response(
+                ctx.request,
+                &page_redirect_with_request_id(&signup_page, &request_id, &ctx.context.base_url)?,
+            )?));
+        }
+    }
+    if let Some(resolver) = &ctx.options.post_login_should_redirect {
+        if resolver.resolve(ctx.prompt_input()).await? {
+            if prompt_none {
+                return Ok(Some(authorization_error_redirect(
+                    ctx.request,
+                    ctx.redirect_uri,
+                    "interaction_required",
+                    "End-User interaction is required",
+                    ctx.state.as_deref(),
+                    &ctx.context.base_url,
+                )?));
+            }
+            let post_login_page = match &ctx.options.post_login_redirect {
+                Some(page_resolver) => page_resolver.resolve(ctx.prompt_input()).await?,
+                None => ctx.options.post_login_page.clone(),
+            };
+            let Some(post_login_page) = post_login_page else {
+                return Ok(None);
+            };
+            let request_id = store_pending_authorization(
+                ctx.adapter,
+                ctx.options,
+                pending_authorization_value(
+                    authorization_value(ctx.authorization_input()),
+                    ctx.state.clone(),
+                    PendingAuthorizationStep::PostLogin,
+                    ctx.request,
+                ),
+            )
+            .await?;
+            return Ok(Some(redirect_or_json_response(
+                ctx.request,
+                &page_redirect_with_request_id(
+                    &post_login_page,
+                    &request_id,
+                    &ctx.context.base_url,
+                )?,
+            )?));
+        }
+    }
+    Ok(None)
 }
 
 fn session_exceeds_max_age(request: &ApiRequest, session: Option<&Session>) -> bool {

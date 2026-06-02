@@ -68,7 +68,7 @@ pub(super) fn token_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> Asyn
                             Ok(response) => response,
                             Err(error) => return token_grant_error_response(error),
                         };
-                        json_response(StatusCode::OK, &response)
+                        no_store_json_response(StatusCode::OK, &response)
                     }
                     Some("authorization_code") => {
                         if !options.grant_types.contains(&GrantType::AuthorizationCode) {
@@ -149,7 +149,7 @@ pub(super) fn token_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> Asyn
                             Ok(response) => response,
                             Err(error) => return token_grant_error_response(error),
                         };
-                        json_response(StatusCode::OK, &response)
+                        no_store_json_response(StatusCode::OK, &response)
                     }
                     Some("refresh_token") => {
                         if !options.grant_types.contains(&GrantType::RefreshToken) {
@@ -196,7 +196,7 @@ pub(super) fn token_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> Asyn
                             Ok(response) => response,
                             Err(error) => return token_grant_error_response(error),
                         };
-                        json_response(StatusCode::OK, &response)
+                        no_store_json_response(StatusCode::OK, &response)
                     }
                     Some(grant_type) => error_response(OAuthProviderError::new(
                         StatusCode::BAD_REQUEST,

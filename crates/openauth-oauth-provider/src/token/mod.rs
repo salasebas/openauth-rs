@@ -29,6 +29,7 @@ mod claims;
 mod introspection;
 mod types;
 
+pub(crate) use claims::user_normal_claims;
 use claims::{create_id_token, find_user};
 pub(crate) use claims::{resolve_subject_identifier, validate_id_token_hint};
 pub(crate) use introspection::validate_access_token;

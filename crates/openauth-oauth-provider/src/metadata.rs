@@ -1,4 +1,7 @@
+use http::{header, Response, StatusCode};
+use openauth_core::api::ApiResponse;
 use openauth_core::context::AuthContext;
+use openauth_core::error::OpenAuthError;
 use serde::Serialize;
 
 use crate::options::{GrantType, ResolvedOAuthProviderOptions, TokenEndpointAuthMethod};
@@ -52,7 +55,7 @@ pub fn auth_server_metadata(
         issuer,
         authorization_endpoint: format!("{}/oauth2/authorize", context.base_url),
         token_endpoint: format!("{}/oauth2/token", context.base_url),
-        jwks_uri: (!options.disable_jwt_plugin).then(|| format!("{}/jwks", context.base_url)),
+        jwks_uri: jwks_uri(context, options),
         registration_endpoint: format!("{}/oauth2/register", context.base_url),
         scopes_supported,
         introspection_endpoint: format!("{}/oauth2/introspect", context.base_url),
@@ -78,6 +81,33 @@ pub fn auth_server_metadata(
     }
 }
 
+/// Cache-Control for well-known metadata responses (15s TTL + stale windows).
+pub const WELL_KNOWN_METADATA_CACHE_CONTROL: &str =
+    "public, max-age=15, stale-while-revalidate=15, stale-if-error=86400";
+
+/// Metadata for `/.well-known/oauth-authorization-server` (OIDC document when `openid` is enabled).
+pub fn oauth_authorization_server_metadata(
+    context: &AuthContext,
+    options: &ResolvedOAuthProviderOptions,
+) -> Result<serde_json::Value, OpenAuthError> {
+    let metadata = if options.scopes.iter().any(|scope| scope == "openid") {
+        serde_json::to_value(oidc_server_metadata(context, options))
+    } else {
+        serde_json::to_value(auth_server_metadata(context, options))
+    };
+    metadata.map_err(|error| OpenAuthError::Api(error.to_string()))
+}
+
+pub fn well_known_metadata_response<T: Serialize>(body: &T) -> Result<ApiResponse, OpenAuthError> {
+    let body = serde_json::to_vec(body).map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CACHE_CONTROL, WELL_KNOWN_METADATA_CACHE_CONTROL)
+        .body(body)
+        .map_err(|error| OpenAuthError::Api(error.to_string()))
+}
+
 pub fn oidc_server_metadata(
     context: &AuthContext,
     options: &ResolvedOAuthProviderOptions,
@@ -95,11 +125,7 @@ pub fn oidc_server_metadata(
         } else {
             vec!["public".to_owned()]
         },
-        id_token_signing_alg_values_supported: if options.disable_jwt_plugin {
-            vec!["HS256".to_owned()]
-        } else {
-            vec!["EdDSA".to_owned()]
-        },
+        id_token_signing_alg_values_supported: id_token_signing_algorithms(options),
         end_session_endpoint: format!("{}/oauth2/end-session", context.base_url),
         acr_values_supported: vec!["urn:mace:incommon:iap:bronze".to_owned()],
         prompt_values_supported: vec![
@@ -128,6 +154,36 @@ pub fn validate_issuer_url(issuer: &str) -> String {
 
 fn is_loopback_host(host: Option<&str>) -> bool {
     matches!(host, Some("localhost" | "127.0.0.1" | "::1"))
+}
+
+fn jwks_uri(context: &AuthContext, options: &ResolvedOAuthProviderOptions) -> Option<String> {
+    if options.disable_jwt_plugin {
+        return None;
+    }
+    if let Some(uri) = &options.advertised_jwks_uri {
+        return Some(uri.clone());
+    }
+    let path = if options.jwks_path.starts_with('/') {
+        options.jwks_path.clone()
+    } else {
+        format!("/{}", options.jwks_path)
+    };
+    Some(format!(
+        "{}{}",
+        context.base_url.trim_end_matches('/'),
+        path
+    ))
+}
+
+fn id_token_signing_algorithms(options: &ResolvedOAuthProviderOptions) -> Vec<String> {
+    if !options.advertised_id_token_signing_algorithms.is_empty() {
+        return options.advertised_id_token_signing_algorithms.clone();
+    }
+    if options.disable_jwt_plugin {
+        vec!["HS256".to_owned()]
+    } else {
+        vec!["EdDSA".to_owned()]
+    }
 }
 
 fn token_auth_methods(public_client_supported: bool) -> Vec<String> {

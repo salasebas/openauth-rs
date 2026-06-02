@@ -26,7 +26,10 @@ pub use consent::{
     delete_consent, find_consent, has_granted_scopes, upsert_consent, ConsentGrantInput,
 };
 pub use error::OAuthProviderError;
-pub use metadata::{auth_server_metadata, oidc_server_metadata};
+pub use metadata::{
+    auth_server_metadata, oauth_authorization_server_metadata, oidc_server_metadata,
+    well_known_metadata_response, WELL_KNOWN_METADATA_CACHE_CONTROL,
+};
 pub use models::{OAuthAccessToken, OAuthConsent, OAuthRefreshToken, SchemaClient};
 pub use options::{
     ClientPrivilegeAction, ClientPrivilegesInput, ClientPrivilegesResolver, ClientReferenceInput,
@@ -36,10 +39,11 @@ pub use options::{
     CustomTokenResponseFieldsInput, CustomTokenResponseFieldsResolver, CustomUserInfoClaimsInput,
     CustomUserInfoClaimsResolver, GrantType, OAuthProviderConfigError, OAuthProviderOptions,
     OAuthProviderPlugin, OAuthProviderRateLimit, OAuthProviderRateLimits, OAuthTokenPrefixes,
-    PromptRedirectInput, PromptRedirectResolver, RefreshTokenFormatDecodeOutput,
-    RefreshTokenFormatEncodeInput, RefreshTokenFormatter, RequestUriResolver,
-    RequestUriResolverInput, ResolvedOAuthProviderOptions, SecretStorage, StringGeneratorResolver,
-    TokenEndpointAuthMethod, TokenHashInput, TokenHashResolver, TrustedClientCache,
+    PromptRedirectInput, PromptRedirectResolver, PromptShouldRedirectResolver,
+    RefreshTokenFormatDecodeOutput, RefreshTokenFormatEncodeInput, RefreshTokenFormatter,
+    RequestUriResolver, RequestUriResolverInput, ResolvedOAuthProviderOptions, SecretStorage,
+    StringGeneratorResolver, TokenEndpointAuthMethod, TokenHashInput, TokenHashResolver,
+    TrustedClientCache,
 };
 pub use schema::{
     oauth_provider_schema, OAUTH_ACCESS_TOKEN_MODEL, OAUTH_CLIENT_MODEL, OAUTH_CONSENT_MODEL,
@@ -59,16 +63,36 @@ use openauth_core::plugin::{AuthPlugin, PluginRateLimitRule};
 /// Current crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Build the OAuth provider extension.
+/// Build the OAuth provider extension with default JWT plugin options.
 pub fn oauth_provider(
     options: OAuthProviderOptions,
 ) -> Result<OAuthProviderPlugin, OAuthProviderConfigError> {
-    let resolved = resolve_options(options)?;
-    let shared = Arc::new(resolved.clone());
+    build_oauth_provider(options, None)
+}
+
+/// Build the OAuth provider extension and merge the given JWT plugin configuration.
+///
+/// When [`advertised_jwks_uri`](OAuthProviderOptions::advertised_jwks_uri) and
+/// [`advertised_id_token_signing_algorithms`](OAuthProviderOptions::advertised_id_token_signing_algorithms)
+/// are unset, they are derived from `jwt_options`.
+pub fn oauth_provider_with_jwt(
+    options: OAuthProviderOptions,
+    jwt_options: openauth_plugins::jwt::JwtOptions,
+) -> Result<OAuthProviderPlugin, OAuthProviderConfigError> {
+    build_oauth_provider(options, Some(jwt_options))
+}
+
+fn build_oauth_provider(
+    options: OAuthProviderOptions,
+    jwt_plugin_options: Option<openauth_plugins::jwt::JwtOptions>,
+) -> Result<OAuthProviderPlugin, OAuthProviderConfigError> {
+    let mut resolved = resolve_options(options)?;
     let mut auth_plugin = AuthPlugin::new("oauth-provider").with_version(VERSION);
 
     if !resolved.disable_jwt_plugin {
-        let jwt_plugin = openauth_plugins::jwt::jwt()
+        let jwt_options = jwt_plugin_options.unwrap_or_default();
+        apply_jwt_metadata_defaults(&mut resolved, &jwt_options);
+        let jwt_plugin = openauth_plugins::jwt::jwt_with_options(jwt_options)
             .map_err(|error| OAuthProviderConfigError::JwtPlugin(error.to_string()))?;
         auth_plugin.schema.extend(jwt_plugin.schema);
         auth_plugin.endpoints.extend(jwt_plugin.endpoints);
@@ -76,22 +100,45 @@ pub fn oauth_provider(
         auth_plugin.database_hooks.extend(jwt_plugin.database_hooks);
     }
 
+    let shared = Arc::new(resolved);
+
     for contribution in oauth_provider_schema() {
         auth_plugin = auth_plugin.with_schema(contribution);
     }
     for endpoint in endpoints::oauth_provider_endpoints(Arc::clone(&shared)) {
         auth_plugin = auth_plugin.with_endpoint(endpoint);
     }
-    for rule in rate_limit_rules(&resolved.rate_limits) {
+    for rule in rate_limit_rules(&shared.rate_limits) {
         auth_plugin = auth_plugin.with_rate_limit(rule);
     }
 
     Ok(OAuthProviderPlugin {
         id: "oauth-provider".to_owned(),
         version: VERSION.to_owned(),
-        options: resolved,
+        options: (*shared).clone(),
         auth_plugin,
     })
+}
+
+fn apply_jwt_metadata_defaults(
+    resolved: &mut ResolvedOAuthProviderOptions,
+    jwt: &openauth_plugins::jwt::JwtOptions,
+) {
+    if resolved.advertised_jwks_uri.is_none() {
+        resolved.advertised_jwks_uri = jwt.jwks.remote_url.clone();
+    }
+    if resolved.advertised_id_token_signing_algorithms.is_empty() {
+        resolved.advertised_id_token_signing_algorithms.push(
+            jwt.jwks
+                .key_pair_algorithm
+                .unwrap_or(openauth_plugins::jwt::JwkAlgorithm::EdDsa)
+                .as_str()
+                .to_owned(),
+        );
+    }
+    if resolved.jwks_path == "/jwks" && jwt.jwks.jwks_path != "/jwks" {
+        resolved.jwks_path = jwt.jwks.jwks_path.clone();
+    }
 }
 
 fn resolve_options(
@@ -174,6 +221,10 @@ fn resolve_options(
         signup_redirect: options.signup_redirect,
         select_account_redirect: options.select_account_redirect,
         post_login_redirect: options.post_login_redirect,
+        signup_should_redirect: options.signup_should_redirect,
+        select_account_should_redirect: options.select_account_should_redirect,
+        post_login_should_redirect: options.post_login_should_redirect,
+        consent_reference_id: options.consent_reference_id,
         code_expires_in: options.code_expires_in,
         access_token_expires_in: options.access_token_expires_in,
         m2m_access_token_expires_in: options.m2m_access_token_expires_in,
@@ -212,6 +263,9 @@ fn resolve_options(
         pairwise_secret: options.pairwise_secret,
         advertised_scopes_supported: options.advertised_scopes_supported,
         advertised_claims_supported: options.advertised_claims_supported,
+        advertised_jwks_uri: options.advertised_jwks_uri,
+        advertised_id_token_signing_algorithms: options.advertised_id_token_signing_algorithms,
+        jwks_path: options.jwks_path,
         valid_audiences: options.valid_audiences,
         rate_limits: options.rate_limits,
     })

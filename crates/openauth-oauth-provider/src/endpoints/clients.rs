@@ -33,7 +33,7 @@ pub(super) fn register_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> A
                     Ok(client) => client,
                     Err(error) => return oauth_validation_error_response(error),
                 };
-                json_response(StatusCode::CREATED, &client)
+                no_store_json_response(StatusCode::CREATED, &client)
             })
         },
     )

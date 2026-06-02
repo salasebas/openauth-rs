@@ -946,6 +946,8 @@ async fn userinfo_returns_claims_by_explicit_openid_profile_and_email_scopes(
         .await?;
     let body = json_body(response)?;
     assert_eq!(body["name"], "Ada Lovelace");
+    assert_eq!(body["given_name"], "Ada");
+    assert_eq!(body["family_name"], "Lovelace");
     assert!(body.get("email").is_none());
 
     let email = exchange_authorization_code_with_scope(
@@ -969,6 +971,137 @@ async fn userinfo_returns_claims_by_explicit_openid_profile_and_email_scopes(
     assert_eq!(body["email"], "ada@example.com");
     assert_eq!(body["email_verified"], true);
     assert!(body.get("name").is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn refresh_token_grant_rejects_scope_not_in_original_grant(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            allow_dynamic_client_registration: true,
+            ..default_options()
+        })?,
+        adapter,
+    )?;
+    let client = register_client(
+        &router,
+        r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid offline_access","skip_consent":true}"#,
+        Some(&cookie),
+    )
+    .await?;
+    let client_id = client["client_id"].as_str().ok_or("missing client_id")?;
+    let client_secret = client["client_secret"]
+        .as_str()
+        .ok_or("missing client_secret")?;
+    let tokens = exchange_authorization_code(&router, &cookie, client_id, client_secret).await?;
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/token",
+            &format!(
+                "grant_type=refresh_token&client_id={client_id}&client_secret={client_secret}&refresh_token={}&scope=openid%20profile",
+                tokens["refresh_token"].as_str().ok_or("missing refresh_token")?
+            ),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response)?["error"], "invalid_scope");
+    Ok(())
+}
+
+#[tokio::test]
+async fn revoke_endpoint_returns_empty_body_on_success() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            allow_dynamic_client_registration: true,
+            ..default_options()
+        })?,
+        adapter,
+    )?;
+    let client = register_client(
+        &router,
+        r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid","skip_consent":true}"#,
+        Some(&cookie),
+    )
+    .await?;
+    let client_id = client["client_id"].as_str().ok_or("missing client_id")?;
+    let client_secret = client["client_secret"]
+        .as_str()
+        .ok_or("missing client_secret")?;
+    let tokens = exchange_authorization_code_with_scope(
+        &router,
+        &cookie,
+        client_id,
+        client_secret,
+        "openid",
+    )
+    .await?;
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/revoke",
+            &format!(
+                "token={}&client_id={client_id}&client_secret={client_secret}",
+                tokens["access_token"]
+                    .as_str()
+                    .ok_or("missing access_token")?
+            ),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.body().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn token_endpoint_sets_no_store_cache_headers() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            allow_dynamic_client_registration: true,
+            ..default_options()
+        })?,
+        adapter,
+    )?;
+    let client = register_client(
+        &router,
+        r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid offline_access","skip_consent":true}"#,
+        Some(&cookie),
+    )
+    .await?;
+    let client_id = client["client_id"].as_str().ok_or("missing client_id")?;
+    let client_secret = client["client_secret"]
+        .as_str()
+        .ok_or("missing client_secret")?;
+    let tokens = exchange_authorization_code(&router, &cookie, client_id, client_secret).await?;
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/token",
+            &format!(
+                "grant_type=refresh_token&client_id={client_id}&client_secret={client_secret}&refresh_token={}",
+                tokens["refresh_token"].as_str().ok_or("missing refresh_token")?
+            ),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&header::HeaderValue::from_static("no-store"))
+    );
+    assert_eq!(
+        response.headers().get(header::PRAGMA),
+        Some(&header::HeaderValue::from_static("no-cache"))
+    );
     Ok(())
 }
 

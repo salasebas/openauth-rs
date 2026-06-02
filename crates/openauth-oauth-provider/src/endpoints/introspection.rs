@@ -86,7 +86,7 @@ pub(super) fn revoke_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> Asy
                 match revoke_token_with_hint(adapter.as_ref(), &options, token, token_type_hint)
                     .await
                 {
-                    Ok(()) => no_content(),
+                    Ok(()) => empty_success_response(),
                     Err(error) => {
                         client_auth_failure_response(error).or_else(oauth_runtime_error_response)
                     }

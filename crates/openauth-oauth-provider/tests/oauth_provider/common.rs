@@ -19,14 +19,14 @@ pub use openauth_oauth_provider::mcp::{
     www_authenticate_for_resources,
 };
 pub use openauth_oauth_provider::{
-    delete_consent, find_consent, has_granted_scopes, oauth_provider, upsert_consent,
-    ClientPrivilegeAction, ClientPrivilegesResolver, ClientReferenceResolver,
+    delete_consent, find_consent, has_granted_scopes, oauth_provider, oauth_provider_with_jwt,
+    upsert_consent, ClientPrivilegeAction, ClientPrivilegesResolver, ClientReferenceResolver,
     ClientSecretHashResolver, ConsentGrantInput, CustomAccessTokenClaimsResolver,
     CustomIdTokenClaimsResolver, CustomTokenResponseFieldsResolver, CustomUserInfoClaimsResolver,
     GrantType, OAuthProviderConfigError, OAuthProviderOptions, OAuthProviderRateLimit,
     OAuthProviderRateLimits, OAuthTokenPrefixes, PromptRedirectResolver,
-    RefreshTokenFormatDecodeOutput, RefreshTokenFormatter, RequestUriResolver, SecretStorage,
-    StringGeneratorResolver, TokenHashResolver,
+    PromptShouldRedirectResolver, RefreshTokenFormatDecodeOutput, RefreshTokenFormatter,
+    RequestUriResolver, SecretStorage, StringGeneratorResolver, TokenHashResolver,
 };
 pub use serde_json::{json, Value};
 pub use sha2::{Digest, Sha256};

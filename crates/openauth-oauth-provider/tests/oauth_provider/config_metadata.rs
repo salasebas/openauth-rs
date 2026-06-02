@@ -249,6 +249,64 @@ async fn metadata_endpoint_advertises_custom_claims_supported(
     Ok(())
 }
 
+#[tokio::test]
+async fn oauth_authorization_server_returns_oidc_metadata_when_openid_enabled(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let router = router(default_provider()?, adapter())?;
+    let oauth = router
+        .handle_async(request(
+            Method::GET,
+            "/api/auth/.well-known/oauth-authorization-server",
+            "",
+            None,
+        )?)
+        .await?;
+    let openid = router
+        .handle_async(request(
+            Method::GET,
+            "/api/auth/.well-known/openid-configuration",
+            "",
+            None,
+        )?)
+        .await?;
+    assert_eq!(json_body(oauth)?, json_body(openid)?);
+    Ok(())
+}
+
+#[test]
+fn oauth_provider_jwt_plugin_options_fill_advertised_metadata_defaults(
+) -> Result<(), OAuthProviderConfigError> {
+    use openauth_plugins::jwt::{JwkAlgorithm, JwtJwksOptions, JwtOptions};
+
+    let plugin = oauth_provider_with_jwt(
+        OAuthProviderOptions {
+            login_page: "/login".into(),
+            consent_page: "/consent".into(),
+            ..OAuthProviderOptions::default()
+        },
+        JwtOptions {
+            jwks: JwtJwksOptions {
+                remote_url: Some("https://issuer.example/.well-known/jwks.json".into()),
+                key_pair_algorithm: Some(JwkAlgorithm::Es256),
+                jwks_path: "/custom-jwks".into(),
+                ..JwtJwksOptions::default()
+            },
+            ..JwtOptions::default()
+        },
+    )?;
+
+    assert_eq!(
+        plugin.options.advertised_jwks_uri.as_deref(),
+        Some("https://issuer.example/.well-known/jwks.json")
+    );
+    assert_eq!(
+        plugin.options.advertised_id_token_signing_algorithms,
+        ["ES256"]
+    );
+    assert_eq!(plugin.options.jwks_path, "/custom-jwks");
+    Ok(())
+}
+
 #[test]
 fn oauth_provider_rejects_client_registration_scopes_not_in_server_scopes() {
     let result = oauth_provider(OAuthProviderOptions {

@@ -36,11 +36,70 @@ pub(crate) fn json_response<T: Serialize>(
         .map_err(|error| OpenAuthError::Api(error.to_string()))
 }
 
+pub(crate) fn no_store_json_response<T: Serialize>(
+    status: StatusCode,
+    body: &T,
+) -> Result<ApiResponse, OpenAuthError> {
+    let body = serde_json::to_vec(body).map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::PRAGMA, "no-cache")
+        .body(body)
+        .map_err(|error| OpenAuthError::Api(error.to_string()))
+}
+
+pub(crate) fn wants_json_redirect(request: &ApiRequest) -> bool {
+    if request
+        .headers()
+        .get("sec-fetch-mode")
+        .and_then(|value| value.to_str().ok())
+        == Some("cors")
+    {
+        return true;
+    }
+    request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("application/json"))
+}
+
+#[derive(Serialize)]
+struct JsonRedirectBody<'a> {
+    redirect: bool,
+    url: &'a str,
+}
+
+pub(crate) fn redirect_or_json_response(
+    request: &ApiRequest,
+    uri: &str,
+) -> Result<ApiResponse, OpenAuthError> {
+    if wants_json_redirect(request) {
+        return json_response(
+            StatusCode::OK,
+            &JsonRedirectBody {
+                redirect: true,
+                url: uri,
+            },
+        );
+    }
+    redirect_response(uri)
+}
+
 pub(crate) fn no_content() -> Result<ApiResponse, OpenAuthError> {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
         .body(b"null".to_vec())
+        .map_err(|error| OpenAuthError::Api(error.to_string()))
+}
+
+pub(crate) fn empty_success_response() -> Result<ApiResponse, OpenAuthError> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .body(Vec::new())
         .map_err(|error| OpenAuthError::Api(error.to_string()))
 }
 

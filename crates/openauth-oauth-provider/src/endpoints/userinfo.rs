@@ -62,30 +62,8 @@ pub(super) fn userinfo_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> A
                 } else {
                     user.id.clone()
                 };
-                let mut claims = serde_json::Map::new();
+                let mut claims = crate::token::user_normal_claims(&user, &validated.scopes);
                 claims.insert("sub".to_owned(), serde_json::Value::String(sub));
-                if validated.scopes.iter().any(|scope| scope == "profile") {
-                    claims.insert(
-                        "name".to_owned(),
-                        serde_json::Value::String(user.name.clone()),
-                    );
-                    if let Some(image) = &user.image {
-                        claims.insert(
-                            "picture".to_owned(),
-                            serde_json::Value::String(image.clone()),
-                        );
-                    }
-                }
-                if validated.scopes.iter().any(|scope| scope == "email") {
-                    claims.insert(
-                        "email".to_owned(),
-                        serde_json::Value::String(user.email.clone()),
-                    );
-                    claims.insert(
-                        "email_verified".to_owned(),
-                        serde_json::Value::Bool(user.email_verified),
-                    );
-                }
                 if let Some(resolver) = &options.custom_userinfo_claims {
                     claims.extend(
                         resolver

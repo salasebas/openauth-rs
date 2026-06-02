@@ -342,6 +342,42 @@ impl PartialEq for PromptRedirectResolver {
 
 impl Eq for PromptRedirectResolver {}
 
+/// Async callback that decides whether an advanced prompt step should run.
+#[derive(Clone)]
+pub struct PromptShouldRedirectResolver {
+    resolver: Arc<dyn Fn(PromptRedirectInput) -> BoolResolverFuture + Send + Sync>,
+}
+
+impl PromptShouldRedirectResolver {
+    pub fn new<F, Fut>(resolver: F) -> Self
+    where
+        F: Fn(PromptRedirectInput) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<bool, OpenAuthError>> + Send + 'static,
+    {
+        Self {
+            resolver: Arc::new(move |input| Box::pin(resolver(input))),
+        }
+    }
+
+    pub async fn resolve(&self, input: PromptRedirectInput) -> Result<bool, OpenAuthError> {
+        (self.resolver)(input).await
+    }
+}
+
+impl std::fmt::Debug for PromptShouldRedirectResolver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PromptShouldRedirectResolver(..)")
+    }
+}
+
+impl PartialEq for PromptShouldRedirectResolver {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for PromptShouldRedirectResolver {}
+
 /// Input passed to custom ID token claim callbacks.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CustomIdTokenClaimsInput {
@@ -787,6 +823,10 @@ pub struct OAuthProviderOptions {
     pub signup_redirect: Option<PromptRedirectResolver>,
     pub select_account_redirect: Option<PromptRedirectResolver>,
     pub post_login_redirect: Option<PromptRedirectResolver>,
+    pub signup_should_redirect: Option<PromptShouldRedirectResolver>,
+    pub select_account_should_redirect: Option<PromptShouldRedirectResolver>,
+    pub post_login_should_redirect: Option<PromptShouldRedirectResolver>,
+    pub consent_reference_id: Option<ClientReferenceResolver>,
     pub code_expires_in: u64,
     pub access_token_expires_in: u64,
     pub m2m_access_token_expires_in: u64,
@@ -821,6 +861,9 @@ pub struct OAuthProviderOptions {
     pub pairwise_secret: Option<String>,
     pub advertised_scopes_supported: Vec<String>,
     pub advertised_claims_supported: Vec<String>,
+    pub advertised_jwks_uri: Option<String>,
+    pub advertised_id_token_signing_algorithms: Vec<String>,
+    pub jwks_path: String,
     pub valid_audiences: Vec<String>,
     pub rate_limits: OAuthProviderRateLimits,
 }
@@ -840,6 +883,10 @@ impl Default for OAuthProviderOptions {
             signup_redirect: None,
             select_account_redirect: None,
             post_login_redirect: None,
+            signup_should_redirect: None,
+            select_account_should_redirect: None,
+            post_login_should_redirect: None,
+            consent_reference_id: None,
             code_expires_in: 600,
             access_token_expires_in: 3600,
             m2m_access_token_expires_in: 3600,
@@ -874,6 +921,9 @@ impl Default for OAuthProviderOptions {
             pairwise_secret: None,
             advertised_scopes_supported: Vec::new(),
             advertised_claims_supported: Vec::new(),
+            advertised_jwks_uri: None,
+            advertised_id_token_signing_algorithms: Vec::new(),
+            jwks_path: "/jwks".to_owned(),
             valid_audiences: Vec::new(),
             rate_limits: OAuthProviderRateLimits::default(),
         }
@@ -895,6 +945,10 @@ pub struct ResolvedOAuthProviderOptions {
     pub signup_redirect: Option<PromptRedirectResolver>,
     pub select_account_redirect: Option<PromptRedirectResolver>,
     pub post_login_redirect: Option<PromptRedirectResolver>,
+    pub signup_should_redirect: Option<PromptShouldRedirectResolver>,
+    pub select_account_should_redirect: Option<PromptShouldRedirectResolver>,
+    pub post_login_should_redirect: Option<PromptShouldRedirectResolver>,
+    pub consent_reference_id: Option<ClientReferenceResolver>,
     pub code_expires_in: u64,
     pub access_token_expires_in: u64,
     pub m2m_access_token_expires_in: u64,
@@ -931,6 +985,9 @@ pub struct ResolvedOAuthProviderOptions {
     pub pairwise_secret: Option<String>,
     pub advertised_scopes_supported: Vec<String>,
     pub advertised_claims_supported: Vec<String>,
+    pub advertised_jwks_uri: Option<String>,
+    pub advertised_id_token_signing_algorithms: Vec<String>,
+    pub jwks_path: String,
     pub valid_audiences: Vec<String>,
     pub rate_limits: OAuthProviderRateLimits,
 }
