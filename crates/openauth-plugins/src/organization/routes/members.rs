@@ -115,7 +115,13 @@ fn add_member(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         "USER_IS_ALREADY_A_MEMBER_OF_THIS_ORGANIZATION",
                     );
                 }
-                if store.count_members(&organization_id).await? as usize >= options.membership_limit
+                if crate::organization::limits::membership_limit_reached(
+                    &options,
+                    &store,
+                    &organization_id,
+                    &user,
+                )
+                .await?
                 {
                     return http::organization_error(
                         StatusCode::FORBIDDEN,

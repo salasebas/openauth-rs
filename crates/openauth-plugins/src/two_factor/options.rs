@@ -83,12 +83,7 @@ impl Default for OtpOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OtpStorage {
-    Plain,
-    Encrypted,
-    Hashed,
-}
+pub use super::otp_storage::{OtpDecryptFn, OtpEncryptFn, OtpHashFn, OtpStorage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupCodeOptions {

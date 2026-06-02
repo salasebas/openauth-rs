@@ -332,7 +332,7 @@ async fn api_key_session_hook_rejects_out_of_range_session_expiry(
         .header("x-api-key", key)
         .body(Vec::new())?;
     let error = router
-        .handle_async(request)
+        .handle_async_server(request)
         .await
         .err()
         .ok_or("expected session expiry range error")?;

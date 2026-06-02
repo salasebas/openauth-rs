@@ -16,6 +16,7 @@ async fn team_routes_cover_default_team_members_and_active_team(
             maximum_teams: Some(3),
             maximum_members_per_team: Some(3),
             allow_removing_all_teams: false,
+            ..Default::default()
         })
         .build();
     let auth = super::test_router(adapter, options)?;
@@ -109,6 +110,7 @@ async fn accepting_invitation_to_full_team_does_not_create_partial_membership(
             maximum_teams: None,
             maximum_members_per_team: Some(2),
             allow_removing_all_teams: true,
+            ..Default::default()
         })
         .build();
     let auth = super::test_router(adapter, options)?;

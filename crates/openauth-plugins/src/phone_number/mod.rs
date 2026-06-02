@@ -19,11 +19,13 @@ pub use options::{
     PhoneNumberCallback, PhoneNumberOptions, PhoneNumberSender, PhoneNumberValidator,
     PhoneNumberVerifier, SignUpOnVerification,
 };
+pub use schema::PhoneNumberSchemaOptions;
 
 pub const UPSTREAM_PLUGIN_ID: &str = "phone-number";
 
 pub fn phone_number(adapter: Arc<dyn DbAdapter>, options: PhoneNumberOptions) -> AuthPlugin {
     let options = Arc::new(options.with_defaults());
+    let schema = options.schema.clone();
     AuthPlugin::new(UPSTREAM_PLUGIN_ID)
         .with_version(crate::VERSION)
         .with_endpoint(endpoints::sign_in::endpoint(
@@ -43,8 +45,8 @@ pub fn phone_number(adapter: Arc<dyn DbAdapter>, options: PhoneNumberOptions) ->
             Arc::clone(&options),
         ))
         .with_endpoint(endpoints::password_reset::reset_endpoint(adapter, options))
-        .with_schema(schema::phone_number_field())
-        .with_schema(schema::phone_number_verified_field())
+        .with_schema(schema::phone_number_field(&schema))
+        .with_schema(schema::phone_number_verified_field(&schema))
         .with_rate_limit(PluginRateLimitRule::new(
             "/phone-number/*",
             RateLimitRule {

@@ -173,6 +173,12 @@ pub fn create_endpoint(
                     .config_id
                     .clone()
                     .unwrap_or_else(|| "default".to_owned());
+                let default_permissions =
+                    if let Some(resolver) = &options.default_permissions_resolver {
+                        resolver(context, &reference_id).await?
+                    } else {
+                        options.default_permissions.clone()
+                    };
                 let record = ApiKeyRecord {
                     id: generate_random_string(32),
                     config_id,
@@ -205,10 +211,7 @@ pub fn create_endpoint(
                     created_at: now,
                     updated_at: now,
                     metadata: input.metadata.clone(),
-                    permissions: input
-                        .permissions
-                        .clone()
-                        .or_else(|| options.default_permissions.clone()),
+                    permissions: input.permissions.clone().or(default_permissions),
                 };
                 let created = ApiKeyStore::new(context, &options).create(record).await?;
                 json(

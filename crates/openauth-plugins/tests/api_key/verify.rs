@@ -381,6 +381,65 @@ async fn verification_enforces_permissions() -> Result<(), Box<dyn std::error::E
 }
 
 #[tokio::test]
+async fn default_permissions_resolver_is_applied_on_create(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use openauth_core::context::AuthContext;
+    use openauth_plugins::api_key::{
+        ApiKeyConfiguration, ApiKeyOptions, DefaultPermissionsResolver,
+    };
+    use std::collections::BTreeMap;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    };
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_resolver = Arc::clone(&calls);
+    let user_id = Arc::new(Mutex::new(String::new()));
+    let user_id_for_resolver = Arc::clone(&user_id);
+    let resolver: DefaultPermissionsResolver =
+        Arc::new(move |_context: &AuthContext, reference_id: &str| {
+            let calls = Arc::clone(&calls_for_resolver);
+            let expected = user_id_for_resolver.lock().unwrap().clone();
+            let reference_id = reference_id.to_owned();
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(reference_id, expected);
+                Ok(Some(BTreeMap::from([(
+                    "post".to_owned(),
+                    vec!["write".to_owned()],
+                )])))
+            })
+        });
+
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = super::helpers::test_router(
+        adapter,
+        api_key_with_options(ApiKeyOptions {
+            configuration: ApiKeyConfiguration {
+                default_permissions_resolver: Some(resolver),
+                ..ApiKeyConfiguration::default()
+            },
+        }),
+    )?;
+    let user = sign_up(&router, "Resolver", "resolver-api@example.com").await?;
+    *user_id.lock().unwrap() = user.user_id.clone();
+    let created = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/create",
+        json!({"name":"resolver-scope"}),
+        Some(&user.cookie),
+        None,
+    )
+    .await?;
+    assert_eq!(created.status, StatusCode::OK);
+    assert_eq!(created.body["permissions"]["post"][0], "write");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn default_permissions_are_applied_on_create() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(MemoryAdapter::new());
     let router = super::helpers::test_router(

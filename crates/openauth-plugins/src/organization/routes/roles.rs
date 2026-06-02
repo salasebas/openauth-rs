@@ -6,7 +6,9 @@ use serde::Deserialize;
 use crate::organization::additional_fields;
 use crate::organization::http;
 use crate::organization::options::OrganizationOptions;
-use crate::organization::permissions::{has_permission, OrganizationPermission};
+use crate::organization::permissions::{
+    has_permission, validate_permission_with_access_control, OrganizationPermission,
+};
 use crate::organization::store::OrganizationStore;
 use crate::organization::OrganizationRoleRecord;
 
@@ -82,7 +84,7 @@ fn create_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         "ROLE_NAME_IS_ALREADY_TAKEN",
                     );
                 }
-                if !valid_permission(&input.permission) {
+                if !valid_permission(&input.permission, &options) {
                     return http::organization_error(StatusCode::BAD_REQUEST, "INVALID_RESOURCE");
                 }
                 if store
@@ -336,7 +338,7 @@ fn update_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                     return http::organization_error(StatusCode::BAD_REQUEST, "ROLE_NOT_FOUND");
                 };
                 if let Some(permission) = &input.permission {
-                    if !valid_permission(permission) {
+                    if !valid_permission(permission, &options) {
                         return http::organization_error(
                             StatusCode::BAD_REQUEST,
                             "INVALID_RESOURCE",
@@ -422,7 +424,18 @@ fn is_predefined_role(role: &str, options: &OrganizationOptions) -> bool {
     role == options.creator_role || matches!(role, "owner" | "admin" | "member")
 }
 
-fn valid_permission(permission: &serde_json::Value) -> bool {
+fn valid_permission(permission: &serde_json::Value, options: &OrganizationOptions) -> bool {
+    if !permission_shape_is_valid(permission) {
+        return false;
+    }
+    if options.dynamic_access_control.enabled && options.access_control.is_some() {
+        validate_permission_with_access_control(permission, options).is_ok()
+    } else {
+        true
+    }
+}
+
+fn permission_shape_is_valid(permission: &serde_json::Value) -> bool {
     let Some(object) = permission.as_object() else {
         return false;
     };

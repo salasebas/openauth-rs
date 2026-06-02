@@ -59,6 +59,7 @@ fn endpoints(options: Arc<TwoFactorOptions>) -> Vec<openauth_core::api::AsyncAut
         enable::enable_endpoint(Arc::clone(&options)),
         disable::disable_endpoint(Arc::clone(&options)),
         enable::get_totp_uri_endpoint(Arc::clone(&options)),
+        totp::generate_totp_endpoint(Arc::clone(&options)),
         totp::verify_totp_endpoint(Arc::clone(&options)),
         super::otp_routes::send_otp_endpoint(Arc::clone(&options)),
         super::otp_routes::verify_otp_endpoint(Arc::clone(&options)),

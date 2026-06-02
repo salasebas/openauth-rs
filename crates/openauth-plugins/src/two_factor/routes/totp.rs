@@ -1,16 +1,68 @@
 use std::sync::Arc;
 
 use http::{Method, StatusCode};
-use openauth_core::api::{create_auth_endpoint, parse_request_body};
+use openauth_core::api::{
+    create_auth_endpoint, parse_request_body, BodyField, BodySchema, JsonSchemaType,
+};
 use openauth_core::crypto::symmetric_decrypt;
+use serde::{Deserialize, Serialize};
 
 use super::flow_error_response;
+use super::json_response;
 use crate::two_factor::errors::{error_message, error_response};
 use crate::two_factor::flow::verify_context;
 use crate::two_factor::options::TwoFactorOptions;
 use crate::two_factor::payloads::{body_options, code_schema, CodeBody};
 use crate::two_factor::store::{update_user_two_factor_enabled, TwoFactorStore};
 use crate::two_factor::totp::verify_totp_code;
+
+use crate::two_factor::totp::totp_code;
+
+#[derive(Deserialize)]
+struct GenerateTotpBody {
+    secret: String,
+}
+
+#[derive(Serialize)]
+struct GenerateTotpResponse {
+    code: String,
+}
+
+pub(super) fn generate_totp_endpoint(
+    options: Arc<TwoFactorOptions>,
+) -> openauth_core::api::AsyncAuthEndpoint {
+    create_auth_endpoint(
+        "/two-factor/generate-totp",
+        Method::POST,
+        body_options(
+            "generateTotp",
+            BodySchema::object([BodyField::new("secret", JsonSchemaType::String)]),
+        ),
+        move |_context, request| {
+            let options = Arc::clone(&options);
+            Box::pin(async move {
+                if options.totp.disabled {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "TOTP_NOT_CONFIGURED",
+                        error_message("TOTP_NOT_CONFIGURED"),
+                    );
+                }
+                let body: GenerateTotpBody = parse_request_body(&request)?;
+                if body.secret.is_empty() {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "INVALID_BODY",
+                        error_message("INVALID_BODY"),
+                    );
+                }
+                let now = time::OffsetDateTime::now_utc().unix_timestamp();
+                let code = totp_code(&body.secret, options.totp.digits, options.totp.period, now);
+                json_response(StatusCode::OK, &GenerateTotpResponse { code }, Vec::new())
+            })
+        },
+    )
+}
 
 pub(super) fn verify_totp_endpoint(
     options: Arc<TwoFactorOptions>,

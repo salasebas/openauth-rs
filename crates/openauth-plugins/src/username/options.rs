@@ -12,6 +12,7 @@ pub struct UsernameOptions {
     pub username_normalization: Option<UsernameNormalizer>,
     pub display_username_normalization: Option<UsernameNormalizer>,
     pub validation_order: ValidationOrder,
+    pub schema: super::schema::UsernameSchemaOptions,
 }
 
 impl Default for UsernameOptions {
@@ -24,6 +25,7 @@ impl Default for UsernameOptions {
             username_normalization: Some(Arc::new(|username| username.to_lowercase())),
             display_username_normalization: None,
             validation_order: ValidationOrder::default(),
+            schema: super::schema::UsernameSchemaOptions::default(),
         }
     }
 }

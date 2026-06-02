@@ -17,6 +17,7 @@ pub use options::{
     JwtGetSubjectHandler, JwtJwksOptions, JwtOptions, JwtSessionContext, JwtSignHandler,
     JwtSigningOptions,
 };
+pub use schema::JwtSchemaOptions;
 pub use sign::sign_jwt;
 pub use verify::{verify_jwt, verify_jwt_with_options};
 
@@ -38,7 +39,7 @@ pub fn jwt_with_options(options: JwtOptions) -> Result<AuthPlugin, OpenAuthError
     let options = Arc::new(options);
     let mut plugin = AuthPlugin::new(UPSTREAM_PLUGIN_ID)
         .with_version(crate::VERSION)
-        .with_schema(schema::jwks_schema())
+        .with_schema(schema::jwks_schema(&options.schema))
         .with_endpoint(endpoints::jwks_endpoint(Arc::clone(&options)))
         .with_endpoint(endpoints::token_endpoint(Arc::clone(&options)))
         .with_endpoint(endpoints::sign_jwt_endpoint(Arc::clone(&options)))

@@ -70,6 +70,46 @@ async fn get_full_organization_accepts_id_slug_and_returns_null_without_active(
 }
 
 #[tokio::test]
+async fn check_slug_reports_available_and_taken_slugs() -> Result<(), Box<dyn std::error::Error>> {
+    let auth = super::test_router(
+        Arc::new(MemoryAdapter::new()),
+        OrganizationOptions::default(),
+    )?;
+    let available = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/check-slug",
+        json!({"slug":"fresh-slug"}),
+        None,
+    )
+    .await?;
+    assert_eq!(available.status, StatusCode::OK);
+    assert_eq!(available.body["status"], true);
+
+    let ada = super::sign_up(&auth, "Ada", "ada-check-slug@example.com").await?;
+    let _created = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Taken Slug Org","slug":"taken-slug"}),
+        Some(&ada.cookie),
+    )
+    .await?;
+
+    let taken = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/check-slug",
+        json!({"slug":"taken-slug"}),
+        None,
+    )
+    .await?;
+    assert_eq!(taken.status, StatusCode::BAD_REQUEST);
+    assert_eq!(taken.body["code"], "ORGANIZATION_SLUG_ALREADY_TAKEN");
+    Ok(())
+}
+
+#[tokio::test]
 async fn get_full_organization_rejects_non_member() -> Result<(), Box<dyn std::error::Error>> {
     let auth = super::test_router(
         Arc::new(MemoryAdapter::new()),

@@ -63,8 +63,13 @@ pub(super) fn accept_invitation(options: OrganizationOptions) -> AsyncAuthEndpoi
                         "EMAIL_VERIFICATION_REQUIRED_BEFORE_ACCEPTING_OR_REJECTING_INVITATION",
                     );
                 }
-                if store.count_members(&invitation.organization_id).await? as usize
-                    >= options.membership_limit
+                if crate::organization::limits::membership_limit_reached(
+                    &options,
+                    &store,
+                    &invitation.organization_id,
+                    &session.user,
+                )
+                .await?
                 {
                     return http::organization_error(
                         StatusCode::FORBIDDEN,

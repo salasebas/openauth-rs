@@ -1,19 +1,38 @@
 use openauth_core::db::TableOptions;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use crate::access::{AccessControl, Role};
 
 use super::hooks::OrganizationHooks;
+use super::limits::{MembershipLimit, OrganizationLimit};
 use super::{Invitation, Member, Organization};
-use std::sync::Arc;
 
 pub type SendInvitationEmailHook =
     Arc<dyn Fn(&InvitationEmail) -> Result<(), openauth_core::error::OpenAuthError> + Send + Sync>;
 
+pub type CustomCreateDefaultTeamFuture = std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<DefaultTeamSpec, openauth_core::error::OpenAuthError>,
+            > + Send,
+    >,
+>;
+pub type CustomCreateDefaultTeamHook =
+    Arc<dyn Fn(Organization) -> CustomCreateDefaultTeamFuture + Send + Sync>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultTeamSpec {
+    pub name: String,
+}
+
 #[derive(Clone)]
 pub struct OrganizationOptions {
     pub allow_user_to_create_organization: bool,
-    pub organization_limit: Option<usize>,
+    pub organization_limit: Option<OrganizationLimit>,
     pub creator_role: String,
-    pub membership_limit: usize,
+    pub membership_limit: MembershipLimit,
     pub invitation_expires_in: i64,
     pub invitation_limit: usize,
     pub cancel_pending_invitations_on_re_invite: bool,
@@ -23,17 +42,40 @@ pub struct OrganizationOptions {
     pub send_invitation_email: Option<SendInvitationEmailHook>,
     pub teams: TeamOptions,
     pub dynamic_access_control: DynamicAccessControlOptions,
-    pub custom_roles: std::collections::BTreeMap<String, serde_json::Value>,
+    pub access_control: Option<AccessControl>,
+    pub roles: Option<BTreeMap<String, Role>>,
+    pub custom_roles: BTreeMap<String, serde_json::Value>,
     pub schema: OrganizationSchemaOptions,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct TeamOptions {
     pub enabled: bool,
     pub create_default_team: bool,
+    pub custom_create_default_team: Option<CustomCreateDefaultTeamHook>,
     pub maximum_teams: Option<usize>,
     pub maximum_members_per_team: Option<usize>,
     pub allow_removing_all_teams: bool,
+}
+
+impl std::fmt::Debug for TeamOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TeamOptions")
+            .field("enabled", &self.enabled)
+            .field("create_default_team", &self.create_default_team)
+            .field(
+                "custom_create_default_team",
+                &self
+                    .custom_create_default_team
+                    .as_ref()
+                    .map(|_| "<custom-create-default-team>"),
+            )
+            .field("maximum_teams", &self.maximum_teams)
+            .field("maximum_members_per_team", &self.maximum_members_per_team)
+            .field("allow_removing_all_teams", &self.allow_removing_all_teams)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -68,7 +110,7 @@ impl Default for OrganizationOptions {
             allow_user_to_create_organization: true,
             organization_limit: None,
             creator_role: "owner".to_owned(),
-            membership_limit: 100,
+            membership_limit: MembershipLimit::default(),
             invitation_expires_in: 60 * 60 * 48,
             invitation_limit: 100,
             cancel_pending_invitations_on_re_invite: false,
@@ -78,7 +120,9 @@ impl Default for OrganizationOptions {
             send_invitation_email: None,
             teams: TeamOptions::default(),
             dynamic_access_control: DynamicAccessControlOptions::default(),
-            custom_roles: std::collections::BTreeMap::new(),
+            access_control: None,
+            roles: None,
+            custom_roles: BTreeMap::new(),
             schema: OrganizationSchemaOptions::default(),
         }
     }
@@ -89,6 +133,7 @@ impl Default for TeamOptions {
         Self {
             enabled: false,
             create_default_team: true,
+            custom_create_default_team: None,
             maximum_teams: None,
             maximum_members_per_team: None,
             allow_removing_all_teams: false,
@@ -104,9 +149,12 @@ impl OrganizationOptions {
     pub(crate) fn to_metadata(&self) -> Value {
         json!({
             "allowUserToCreateOrganization": self.allow_user_to_create_organization,
-            "organizationLimit": self.organization_limit,
+            "organizationLimit": self.organization_limit.as_ref().map(|_| "<organization-limit>"),
             "creatorRole": self.creator_role,
-            "membershipLimit": self.membership_limit,
+            "membershipLimit": match &self.membership_limit {
+                MembershipLimit::Fixed(limit) => json!(limit),
+                MembershipLimit::Dynamic(_) => json!("<membership-limit>"),
+            },
             "invitationExpiresIn": self.invitation_expires_in,
             "invitationLimit": self.invitation_limit,
             "cancelPendingInvitationsOnReInvite": self.cancel_pending_invitations_on_re_invite,
@@ -114,7 +162,10 @@ impl OrganizationOptions {
             "disableOrganizationDeletion": self.disable_organization_deletion,
             "teams": {
                 "enabled": self.teams.enabled,
-                "defaultTeam": { "enabled": self.teams.create_default_team },
+                "defaultTeam": {
+                    "enabled": self.teams.create_default_team,
+                    "customCreateDefaultTeam": self.teams.custom_create_default_team.is_some(),
+                },
                 "maximumTeams": self.teams.maximum_teams,
                 "maximumMembersPerTeam": self.teams.maximum_members_per_team,
                 "allowRemovingAllTeams": self.teams.allow_removing_all_teams,
@@ -123,6 +174,8 @@ impl OrganizationOptions {
                 "enabled": self.dynamic_access_control.enabled,
                 "maximumRolesPerOrganization": self.dynamic_access_control.maximum_roles_per_organization,
             },
+            "ac": self.access_control.is_some(),
+            "roles": self.roles.as_ref().map(|roles| roles.keys().collect::<Vec<_>>()),
             "customRoles": self.custom_roles,
         })
     }
@@ -140,7 +193,15 @@ impl OrganizationOptionsBuilder {
     }
 
     pub fn organization_limit(mut self, limit: usize) -> Self {
-        self.options.organization_limit = Some(limit);
+        self.options.organization_limit = Some(OrganizationLimit::Fixed(limit));
+        self
+    }
+
+    pub fn organization_limit_dynamic(
+        mut self,
+        callback: super::limits::OrganizationLimitCallback,
+    ) -> Self {
+        self.options.organization_limit = Some(OrganizationLimit::Dynamic(callback));
         self
     }
 
@@ -150,7 +211,15 @@ impl OrganizationOptionsBuilder {
     }
 
     pub fn membership_limit(mut self, limit: usize) -> Self {
-        self.options.membership_limit = limit;
+        self.options.membership_limit = MembershipLimit::Fixed(limit);
+        self
+    }
+
+    pub fn membership_limit_dynamic(
+        mut self,
+        callback: super::limits::MembershipLimitCallback,
+    ) -> Self {
+        self.options.membership_limit = MembershipLimit::Dynamic(callback);
         self
     }
 
@@ -196,6 +265,16 @@ impl OrganizationOptionsBuilder {
 
     pub fn dynamic_access_control(mut self, options: DynamicAccessControlOptions) -> Self {
         self.options.dynamic_access_control = options;
+        self
+    }
+
+    pub fn access_control(mut self, access_control: AccessControl) -> Self {
+        self.options.access_control = Some(access_control);
+        self
+    }
+
+    pub fn roles(mut self, roles: BTreeMap<String, Role>) -> Self {
+        self.options.roles = Some(roles);
         self
     }
 

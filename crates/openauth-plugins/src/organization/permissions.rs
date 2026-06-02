@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::access::Role;
+
 use super::options::OrganizationOptions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +77,9 @@ pub fn has_permission(
         if role == options.creator_role {
             return true;
         }
+        if configured_role_has_permission(role, options, permission) {
+            return true;
+        }
         if custom_role_has_permission(role, options, permission) {
             return true;
         }
@@ -99,6 +104,10 @@ pub(crate) fn parse_roles(role: impl AsRef<str>) -> String {
 pub(crate) fn is_known_static_role(role: &str, options: &OrganizationOptions) -> bool {
     role == options.creator_role
         || options.custom_roles.contains_key(role)
+        || options
+            .roles
+            .as_ref()
+            .is_some_and(|roles| roles.contains_key(role))
         || matches!(role, "owner" | "admin" | "member")
 }
 
@@ -119,6 +128,34 @@ pub(crate) fn permission_value_has_permission(
         .unwrap_or(false)
 }
 
+pub(crate) fn validate_permission_with_access_control(
+    permission: &serde_json::Value,
+    options: &OrganizationOptions,
+) -> Result<(), openauth_core::error::OpenAuthError> {
+    let Some(ac) = options.access_control.as_ref() else {
+        return Err(openauth_core::error::OpenAuthError::Api(
+            "MISSING_AC_INSTANCE".to_owned(),
+        ));
+    };
+    let statements = permission_value_to_statements(permission)?;
+    ac.new_role(statements)
+        .map(|_| ())
+        .map_err(|error| openauth_core::error::OpenAuthError::InvalidConfig(error.to_string()))
+}
+
+fn configured_role_has_permission(
+    role: &str,
+    options: &OrganizationOptions,
+    permission: OrganizationPermission,
+) -> bool {
+    options
+        .roles
+        .as_ref()
+        .and_then(|roles| roles.get(role))
+        .map(|role| role_has_permission(role, permission))
+        .unwrap_or(false)
+}
+
 fn custom_role_has_permission(
     role: &str,
     options: &OrganizationOptions,
@@ -129,4 +166,44 @@ fn custom_role_has_permission(
         .get(role)
         .map(|value| permission_value_has_permission(value, permission))
         .unwrap_or(false)
+}
+
+fn role_has_permission(role: &Role, permission: OrganizationPermission) -> bool {
+    let (resource, action) = permission.resource_action();
+    role.statements()
+        .get(resource)
+        .or_else(|| {
+            (resource == "apiKey")
+                .then(|| role.statements().get("api_key"))
+                .flatten()
+        })
+        .map(|actions| actions.contains(action))
+        .unwrap_or(false)
+}
+
+fn permission_value_to_statements(
+    permission: &serde_json::Value,
+) -> Result<crate::access::Statements, openauth_core::error::OpenAuthError> {
+    let Some(object) = permission.as_object() else {
+        return Err(openauth_core::error::OpenAuthError::Api(
+            "permission must be an object".to_owned(),
+        ));
+    };
+    let mut statements = crate::access::Statements::new();
+    for (resource, actions) in object {
+        let Some(actions) = actions.as_array() else {
+            return Err(openauth_core::error::OpenAuthError::Api(
+                "permission actions must be arrays".to_owned(),
+            ));
+        };
+        statements.insert(
+            resource.clone(),
+            actions
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+        );
+    }
+    Ok(statements)
 }

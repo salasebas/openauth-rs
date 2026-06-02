@@ -39,6 +39,7 @@ pub struct JwtOptions {
     pub jwt: JwtSigningOptions,
     pub adapter: JwtAdapterOptions,
     pub disable_setting_jwt_header: bool,
+    pub schema: super::schema::JwtSchemaOptions,
 }
 
 #[derive(Debug, Clone)]

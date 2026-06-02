@@ -14,6 +14,7 @@ fn organization_endpoints_register_operation_ids_without_path_conflicts(
             maximum_teams: None,
             maximum_members_per_team: None,
             allow_removing_all_teams: false,
+            ..Default::default()
         })
         .dynamic_access_control(DynamicAccessControlOptions {
             enabled: true,

@@ -47,6 +47,7 @@ pub struct PhoneNumberOptions {
     /// Sync-only phone-number validator callback.
     pub phone_number_validator: Option<PhoneNumberValidator>,
     pub sign_up_on_verification: Option<SignUpOnVerification>,
+    pub schema: super::schema::PhoneNumberSchemaOptions,
 }
 
 impl Default for PhoneNumberOptions {
@@ -62,6 +63,7 @@ impl Default for PhoneNumberOptions {
             callback_on_verification: None,
             phone_number_validator: None,
             sign_up_on_verification: None,
+            schema: super::schema::PhoneNumberSchemaOptions::default(),
         }
     }
 }

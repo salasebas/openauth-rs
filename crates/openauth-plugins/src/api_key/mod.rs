@@ -29,8 +29,9 @@ pub use hashing::default_key_hasher;
 pub use models::{ApiKeyCreateRecord, ApiKeyPublicRecord, ApiKeyRecord};
 pub use options::{
     ApiKeyConfiguration, ApiKeyExpirationOptions, ApiKeyGenerator, ApiKeyGeneratorInput,
-    ApiKeyGetter, ApiKeyOptions, ApiKeyOptionsError, ApiKeyPermissions, ApiKeyRateLimitOptions,
-    ApiKeyReference, ApiKeyStorageMode, ApiKeyValidator, StartingCharactersConfig,
+    ApiKeyGetter, ApiKeyOptions, ApiKeyOptionsError, ApiKeyPermissions, ApiKeyPluginBuild,
+    ApiKeyRateLimitOptions, ApiKeyReference, ApiKeyStorageMode, ApiKeyValidator,
+    DefaultPermissionsResolver, StartingCharactersConfig,
 };
 pub use routes::{
     CreateApiKeyRequest, DeleteApiKeyRequest, GetApiKeyQuery, ListApiKeysQuery,
@@ -47,8 +48,16 @@ pub fn api_key() -> AuthPlugin {
 }
 
 pub fn api_key_with_options(options: ApiKeyOptions) -> AuthPlugin {
-    build_plugin(options::ResolvedConfigurations::single(
+    build_plugin(options::ResolvedConfigurations::with_schema(
         options.configuration,
+        ApiKeySchemaOptions::default(),
+    ))
+}
+
+pub fn api_key_with_build(build: options::ApiKeyPluginBuild) -> AuthPlugin {
+    build_plugin(options::ResolvedConfigurations::with_schema(
+        build.configuration,
+        build.schema,
     ))
 }
 
@@ -57,14 +66,26 @@ pub fn api_key_with_configurations(
 ) -> Result<AuthPlugin, ApiKeyOptionsError> {
     Ok(build_plugin(options::ResolvedConfigurations::multiple(
         configurations,
+        ApiKeySchemaOptions::default(),
+    )?))
+}
+
+pub fn api_key_with_configurations_and_schema(
+    configurations: Vec<ApiKeyConfiguration>,
+    schema: ApiKeySchemaOptions,
+) -> Result<AuthPlugin, ApiKeyOptionsError> {
+    Ok(build_plugin(options::ResolvedConfigurations::multiple(
+        configurations,
+        schema,
     )?))
 }
 
 fn build_plugin(configurations: options::ResolvedConfigurations) -> AuthPlugin {
+    let schema = configurations.schema().clone();
     let configurations = Arc::new(configurations);
     let mut plugin = AuthPlugin::new(UPSTREAM_PLUGIN_ID)
         .with_version(crate::VERSION)
-        .with_schema(schema::schema_contribution(&ApiKeySchemaOptions::default()))
+        .with_schema(schema::schema_contribution(&schema))
         .with_endpoint(routes::create_endpoint(Arc::clone(&configurations)))
         .with_endpoint(routes::verify_endpoint(Arc::clone(&configurations)))
         .with_endpoint(routes::get_endpoint(Arc::clone(&configurations)))

@@ -37,7 +37,7 @@ pub(super) fn send_otp_endpoint(
                     Err(error) => return flow_error_response(error),
                 };
                 let code = generate_otp(options.otp.digits);
-                let stored = store_otp(&code, &context.secret, &options.otp)?;
+                let stored = store_otp(&code, &context.secret, &options.otp).await?;
                 DbVerificationStore::new(flow.adapter.as_ref())
                     .create_verification(CreateVerificationInput::new(
                         format!("2fa-otp-{}", flow.key),
@@ -102,7 +102,7 @@ pub(super) fn verify_otp_endpoint(
                         error_message("TOO_MANY_ATTEMPTS_REQUEST_NEW_CODE"),
                     );
                 }
-                if !verify_stored_otp(stored, &body.code, &context.secret, &options.otp)? {
+                if !verify_stored_otp(stored, &body.code, &context.secret, &options.otp).await? {
                     store
                         .update_verification(
                             &identifier,

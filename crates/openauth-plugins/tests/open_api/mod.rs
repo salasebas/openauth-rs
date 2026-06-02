@@ -178,6 +178,7 @@ async fn generated_schema_audits_all_server_plugin_endpoints(
                     maximum_teams: None,
                     maximum_members_per_team: None,
                     allow_removing_all_teams: false,
+                    ..Default::default()
                 })
                 .dynamic_access_control(DynamicAccessControlOptions {
                     enabled: true,

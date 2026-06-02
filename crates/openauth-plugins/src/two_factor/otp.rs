@@ -15,35 +15,41 @@ pub fn generate_otp(digits: usize) -> String {
         .collect()
 }
 
-pub fn store_otp(otp: &str, secret: &str, options: &OtpOptions) -> Result<String, OpenAuthError> {
-    match options.storage {
+pub async fn store_otp(
+    otp: &str,
+    secret: &str,
+    options: &OtpOptions,
+) -> Result<String, OpenAuthError> {
+    match &options.storage {
         OtpStorage::Plain => Ok(otp.to_owned()),
         OtpStorage::Encrypted => symmetric_encrypt(secret, otp),
         OtpStorage::Hashed => Ok(hash_otp(otp)),
+        OtpStorage::CustomHash(hash) => (hash)(otp.to_owned()).await,
+        OtpStorage::CustomEncrypt { encrypt, .. } => (encrypt)(otp.to_owned()).await,
     }
 }
 
-pub fn verify_stored_otp(
+pub async fn verify_stored_otp(
     stored: &str,
     input: &str,
     secret: &str,
     options: &OtpOptions,
 ) -> Result<bool, OpenAuthError> {
-    let expected = match options.storage {
-        OtpStorage::Plain => stored.to_owned(),
-        OtpStorage::Encrypted => symmetric_decrypt(secret, stored)?,
-        OtpStorage::Hashed => stored.to_owned(),
-    };
-    Ok(expected
-        .as_bytes()
-        .ct_eq(input_for_compare(input, options).as_bytes())
-        .into())
-}
-
-fn input_for_compare(input: &str, options: &OtpOptions) -> String {
-    match options.storage {
-        OtpStorage::Hashed => hash_otp(input),
-        OtpStorage::Plain | OtpStorage::Encrypted => input.to_owned(),
+    match &options.storage {
+        OtpStorage::Plain => Ok(stored.as_bytes().ct_eq(input.as_bytes()).into()),
+        OtpStorage::Encrypted => {
+            let expected = symmetric_decrypt(secret, stored)?;
+            Ok(expected.as_bytes().ct_eq(input.as_bytes()).into())
+        }
+        OtpStorage::Hashed => Ok(stored.as_bytes().ct_eq(hash_otp(input).as_bytes()).into()),
+        OtpStorage::CustomHash(hash) => {
+            let hashed_input = (hash)(input.to_owned()).await?;
+            Ok(stored.as_bytes().ct_eq(hashed_input.as_bytes()).into())
+        }
+        OtpStorage::CustomEncrypt { decrypt, .. } => {
+            let expected = (decrypt)(stored.to_owned()).await?;
+            Ok(expected.as_bytes().ct_eq(input.as_bytes()).into())
+        }
     }
 }
 

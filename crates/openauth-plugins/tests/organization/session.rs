@@ -170,6 +170,7 @@ async fn active_team_is_returned_from_get_session_when_teams_are_enabled(
             maximum_teams: None,
             maximum_members_per_team: None,
             allow_removing_all_teams: false,
+            ..Default::default()
         })
         .build();
     let auth = super::test_router(Arc::new(MemoryAdapter::new()), options)?;

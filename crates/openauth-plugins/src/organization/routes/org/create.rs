@@ -104,8 +104,9 @@ pub(super) fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         "YOU_ARE_NOT_ALLOWED_TO_CREATE_A_NEW_ORGANIZATION",
                     );
                 }
-                if let Some(limit) = options.organization_limit {
-                    if store.organizations_for_user(&user.id).await?.len() >= limit {
+                if let Some(limit) = &options.organization_limit {
+                    let count = store.organizations_for_user(&user.id).await?.len();
+                    if limit.is_reached(&user, count).await? {
                         return http::organization_error(
                             StatusCode::FORBIDDEN,
                             "YOU_HAVE_REACHED_THE_MAXIMUM_NUMBER_OF_ORGANIZATIONS",
@@ -158,10 +159,16 @@ pub(super) fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
                     )
                     .await?;
                 if options.teams.enabled && options.teams.create_default_team {
+                    let team_name = if let Some(custom) = &options.teams.custom_create_default_team
+                    {
+                        custom(organization.clone()).await?.name
+                    } else {
+                        "Default".to_owned()
+                    };
                     let team = store
                         .create_team(
                             &organization.id,
-                            "Default",
+                            &team_name,
                             openauth_core::db::DbRecord::new(),
                         )
                         .await?;

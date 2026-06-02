@@ -312,6 +312,7 @@ async fn team_additional_fields_persist_and_respect_returned_metadata(
                 maximum_teams: None,
                 maximum_members_per_team: None,
                 allow_removing_all_teams: true,
+                ..Default::default()
             })
             .schema(schema)
             .build(),

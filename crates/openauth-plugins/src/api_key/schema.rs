@@ -4,7 +4,7 @@ use openauth_core::plugin::PluginSchemaContribution;
 
 use super::{API_KEY_MODEL, API_KEY_TABLE};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ApiKeySchemaOptions {
     pub table: TableOptions,
 }

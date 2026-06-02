@@ -7,6 +7,7 @@ mod flow;
 mod options;
 mod otp;
 mod otp_routes;
+mod otp_storage;
 mod payloads;
 mod routes;
 mod schema;
@@ -16,8 +17,8 @@ mod totp;
 pub use backup_codes::{decode_backup_codes, encode_backup_codes, generate_backup_codes};
 pub use errors::TWO_FACTOR_ERROR_CODES;
 pub use options::{
-    BackupCodeOptions, BackupCodeStorage, OtpOptions, OtpStorage, SendOtp, TotpOptions,
-    TwoFactorOptions,
+    BackupCodeOptions, BackupCodeStorage, OtpDecryptFn, OtpEncryptFn, OtpHashFn, OtpOptions,
+    OtpStorage, SendOtp, TotpOptions, TwoFactorOptions,
 };
 pub use totp::{totp_code, totp_uri, verify_totp_code};
 

@@ -22,6 +22,10 @@ pub type ApiKeyValidatorFuture<'a> =
     Pin<Box<dyn Future<Output = Result<bool, OpenAuthError>> + Send + 'a>>;
 pub type ApiKeyValidator =
     Arc<dyn for<'a> Fn(&'a AuthContext, &'a str) -> ApiKeyValidatorFuture<'a> + Send + Sync>;
+pub type DefaultPermissionsFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<ApiKeyPermissions>, OpenAuthError>> + Send + 'a>>;
+pub type DefaultPermissionsResolver =
+    Arc<dyn for<'a> Fn(&'a AuthContext, &'a str) -> DefaultPermissionsFuture<'a> + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiKeyGeneratorInput {
@@ -116,6 +120,8 @@ pub struct ApiKeyConfiguration {
     pub enable_session_for_api_keys: bool,
     pub default_permissions: Option<ApiKeyPermissions>,
     #[serde(skip)]
+    pub default_permissions_resolver: Option<DefaultPermissionsResolver>,
+    #[serde(skip)]
     pub custom_key_generator: Option<ApiKeyGenerator>,
     #[serde(skip)]
     pub custom_api_key_getter: Option<ApiKeyGetter>,
@@ -156,6 +162,7 @@ impl Default for ApiKeyConfiguration {
             rate_limit: ApiKeyRateLimitOptions::default(),
             enable_session_for_api_keys: false,
             default_permissions: None,
+            default_permissions_resolver: None,
             custom_key_generator: None,
             custom_api_key_getter: None,
             custom_api_key_validator: None,
@@ -236,6 +243,34 @@ pub struct ApiKeyOptions {
     pub configuration: ApiKeyConfiguration,
 }
 
+impl ApiKeyOptions {
+    #[must_use]
+    pub fn with_schema(
+        self,
+        schema: crate::api_key::schema::ApiKeySchemaOptions,
+    ) -> ApiKeyPluginBuild {
+        ApiKeyPluginBuild {
+            configuration: self.configuration,
+            schema,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ApiKeyPluginBuild {
+    pub configuration: ApiKeyConfiguration,
+    pub schema: crate::api_key::schema::ApiKeySchemaOptions,
+}
+
+impl From<ApiKeyConfiguration> for ApiKeyPluginBuild {
+    fn from(configuration: ApiKeyConfiguration) -> Self {
+        Self {
+            configuration,
+            schema: Default::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ApiKeyOptionsError {
     #[error("config_id is required for each API key configuration in the api-key plugin")]
@@ -253,16 +288,24 @@ impl From<ApiKeyOptionsError> for OpenAuthError {
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedConfigurations {
     configurations: Vec<ApiKeyConfiguration>,
+    schema: crate::api_key::schema::ApiKeySchemaOptions,
 }
 
 impl ResolvedConfigurations {
-    pub fn single(configuration: ApiKeyConfiguration) -> Self {
+    pub fn with_schema(
+        configuration: ApiKeyConfiguration,
+        schema: crate::api_key::schema::ApiKeySchemaOptions,
+    ) -> Self {
         Self {
             configurations: vec![configuration],
+            schema,
         }
     }
 
-    pub fn multiple(configurations: Vec<ApiKeyConfiguration>) -> Result<Self, ApiKeyOptionsError> {
+    pub fn multiple(
+        configurations: Vec<ApiKeyConfiguration>,
+        schema: crate::api_key::schema::ApiKeySchemaOptions,
+    ) -> Result<Self, ApiKeyOptionsError> {
         let mut seen = HashSet::new();
         for configuration in &configurations {
             let Some(config_id) = configuration.config_id.as_deref() else {
@@ -272,7 +315,14 @@ impl ResolvedConfigurations {
                 return Err(ApiKeyOptionsError::DuplicateConfigId);
             }
         }
-        Ok(Self { configurations })
+        Ok(Self {
+            configurations,
+            schema,
+        })
+    }
+
+    pub fn schema(&self) -> &crate::api_key::schema::ApiKeySchemaOptions {
+        &self.schema
     }
 
     pub fn all(&self) -> &[ApiKeyConfiguration] {

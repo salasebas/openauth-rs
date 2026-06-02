@@ -1,20 +1,42 @@
-use openauth_core::db::{DbField, DbFieldType};
+use openauth_core::db::{DbField, DbFieldType, TableOptions};
 use openauth_core::plugin::PluginSchemaContribution;
 
-pub fn username_field() -> PluginSchemaContribution {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UsernameSchemaOptions {
+    pub user: TableOptions,
+}
+
+pub fn username_field(options: &UsernameSchemaOptions) -> PluginSchemaContribution {
     PluginSchemaContribution::field(
         "user",
         "username",
-        DbField::new("username", DbFieldType::String)
-            .optional()
-            .unique(),
+        DbField::new(
+            options
+                .user
+                .field_names
+                .get("username")
+                .cloned()
+                .unwrap_or_else(|| "username".to_owned()),
+            DbFieldType::String,
+        )
+        .optional()
+        .unique(),
     )
 }
 
-pub fn display_username_field() -> PluginSchemaContribution {
+pub fn display_username_field(options: &UsernameSchemaOptions) -> PluginSchemaContribution {
     PluginSchemaContribution::field(
         "user",
         "display_username",
-        DbField::new("display_username", DbFieldType::String).optional(),
+        DbField::new(
+            options
+                .user
+                .field_names
+                .get("displayUsername")
+                .cloned()
+                .unwrap_or_else(|| "display_username".to_owned()),
+            DbFieldType::String,
+        )
+        .optional(),
     )
 }

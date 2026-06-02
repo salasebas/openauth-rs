@@ -659,6 +659,48 @@ async fn invalid_trusted_device_cookie_is_expired_on_second_factor_challenge(
     Ok(())
 }
 
+#[tokio::test]
+async fn generate_totp_endpoint_returns_code_for_secret() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (_adapter, router) = seeded_router().await?;
+    let secret = "JBSWY3DPEHPK3PXP";
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let expected = totp_code(secret, 6, 30, now);
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/two-factor/generate-totp",
+            &format!(r#"{{"secret":"{secret}"}}"#),
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"].as_str(), Some(expected.as_str()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn generate_totp_rejects_when_totp_disabled() -> Result<(), Box<dyn std::error::Error>> {
+    let mut options = TwoFactorOptions::default();
+    options.totp.disabled = true;
+    let (_adapter, router) = seeded_router_with_options(options).await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/two-factor/generate-totp",
+            r#"{"secret":"JBSWY3DPEHPK3PXP"}"#,
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
 fn otp_options(
     storage: OtpStorage,
     allowed_attempts: u32,
