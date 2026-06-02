@@ -327,6 +327,24 @@ fn basic_authentication_form_encodes_reserved_and_non_ascii_credentials() {
 }
 
 #[test]
+fn authorization_code_additional_params_cannot_replace_existing_body_fields() {
+    let request = create_authorization_code_request(AuthorizationCodeRequest {
+        code: "code-123".to_owned(),
+        redirect_uri: "https://app.example.com/callback".to_owned(),
+        options: ProviderOptions {
+            client_id: Some(ClientId::Single("client-id".to_owned())),
+            client_secret: Some("client-secret".to_owned()),
+            ..ProviderOptions::default()
+        },
+        additional_params: BTreeMap::from([("grant_type".to_owned(), "refresh_token".to_owned())]),
+        ..AuthorizationCodeRequest::default()
+    })
+    .expect("request should build");
+
+    assert_eq!(request.form_value("grant_type"), Some("authorization_code"));
+}
+
+#[test]
 fn authorization_code_additional_params_do_not_overwrite_standard_fields() {
     let request = create_authorization_code_request(AuthorizationCodeRequest {
         code: "code-123".to_owned(),
@@ -1107,7 +1125,7 @@ async fn verify_access_token_rejects_remote_missing_active_and_missing_audience(
         "sub": "user-123",
         "scope": "read"
     }));
-    let error = verify_access_token(
+    let payload = verify_access_token(
         "opaque-token",
         VerifyAccessTokenOptions {
             remote_verify: Some(VerifyAccessTokenRemote {
@@ -1125,7 +1143,36 @@ async fn verify_access_token_rejects_remote_missing_active_and_missing_audience(
         },
     )
     .await
-    .expect_err("configured audience should require aud in introspection payload");
+    .expect(
+        "introspection without aud should succeed when audience is configured (Better Auth parity)",
+    );
+    assert_eq!(payload["sub"], "user-123");
+
+    let wrong_audience = JsonServer::spawn(json!({
+        "active": true,
+        "sub": "user-123",
+        "aud": "wrong-client",
+        "scope": "read"
+    }));
+    let error = verify_access_token(
+        "opaque-token",
+        VerifyAccessTokenOptions {
+            remote_verify: Some(VerifyAccessTokenRemote {
+                introspect_url: wrong_audience.url(),
+                client_id: "client-id".to_owned(),
+                client_secret: "client-secret".to_owned(),
+                force: true,
+            }),
+            verify_options: TokenValidationOptions {
+                audience: vec!["api".to_owned()],
+                ..TokenValidationOptions::default()
+            },
+            scopes: vec!["read".to_owned()],
+            jwks_url: None,
+        },
+    )
+    .await
+    .expect_err("introspection with mismatched aud should fail");
     assert!(error.to_string().contains("audience"));
 }
 
@@ -1301,6 +1348,22 @@ async fn verify_jws_access_token_reuses_cached_jwks_for_known_kid() {
     verify_jws_access_token(&token, &server.url(), TokenValidationOptions::default())
         .await
         .expect("second verification should use cached jwks");
+
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
+async fn validate_token_reuses_cached_jwks_for_known_kid() {
+    clear_jwks_cache().expect("cache should clear");
+    let (token, jwk) = signed_asymmetric_token("RS256", "validate-token-cache-key");
+    let server = JsonServer::spawn_many(vec![JsonResponse::ok(json!({ "keys": [jwk] }))]);
+
+    validate_token(&token, &server.url(), TokenValidationOptions::default())
+        .await
+        .expect("first validate_token should fetch jwks");
+    validate_token(&token, &server.url(), TokenValidationOptions::default())
+        .await
+        .expect("second validate_token should use cached jwks");
 
     assert_eq!(server.request_count(), 1);
 }

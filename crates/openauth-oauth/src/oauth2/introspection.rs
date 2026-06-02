@@ -89,6 +89,12 @@ pub async fn verify_access_token_with_client(
                 .await
                 {
                     Ok(result) => payload = Some(result.payload),
+                    Err(error)
+                        if options.remote_verify.is_some()
+                            && local_jws_failure_allows_remote_fallback(&error) =>
+                    {
+                        payload = None;
+                    }
                     Err(error) => return Err(error),
                 }
             }
@@ -130,7 +136,12 @@ fn validate_introspection_claims(
     };
     validate_temporal_claims_with_leeway(claims, options.leeway_seconds)?;
     validate_required_claims(claims, options)?;
-    if !options.audience.is_empty() && !audience_matches(claims.get("aud"), &options.audience) {
+    // Match Better Auth: only validate audience when the introspection response includes
+    // a truthy `aud` claim (RFC 7662 responses may omit it).
+    if !options.audience.is_empty()
+        && introspection_includes_audience(claims)
+        && !audience_matches(claims.get("aud"), &options.audience)
+    {
         return Err(OAuthError::TokenVerification(
             "audience mismatch".to_owned(),
         ));
@@ -142,6 +153,32 @@ fn validate_introspection_claims(
         }
     }
     Ok(())
+}
+
+/// Returns true when the introspection JSON includes a non-empty `aud` claim.
+fn introspection_includes_audience(claims: &serde_json::Map<String, Value>) -> bool {
+    match claims.get("aud") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(audience)) => !audience.is_empty(),
+        Some(Value::Array(audiences)) => audiences
+            .iter()
+            .any(|value| value.as_str().is_some_and(|audience| !audience.is_empty())),
+        Some(_) => true,
+    }
+}
+
+/// Mirrors Better Auth `verifyAccessToken`: swallow local JWS parse errors when remote
+/// introspection is configured so opaque or malformed tokens can fall back.
+fn local_jws_failure_allows_remote_fallback(error: &OAuthError) -> bool {
+    match error {
+        OAuthError::TokenVerification(message) => {
+            message == "token is not a JWS"
+                || message == "missing jwt kid"
+                || message.starts_with("JOSE operation failed:")
+        }
+        OAuthError::Jose(message) => message.contains("InvalidJws"),
+        _ => false,
+    }
 }
 
 fn looks_like_parseable_jws(token: &str) -> bool {

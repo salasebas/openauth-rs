@@ -10,6 +10,7 @@ use serde_json::Value;
 use super::claims::{validate_payload_claims, TokenValidationOptions};
 use super::error::OAuthError;
 use super::http::{default_http_client, OAuthHttpClient};
+use super::jwks::{get_cached_jwks_for_token, OAuthJwksCacheConfig};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TokenValidationResult {
@@ -32,8 +33,13 @@ pub async fn validate_token_with_client(
     options: TokenValidationOptions,
     client: &OAuthHttpClient,
 ) -> Result<TokenValidationResult, OAuthError> {
-    let jwks = client.get_bytes(jwks_endpoint).await?;
-    let jwk_set = JwkSet::from_bytes(&jwks)?;
+    let jwk_set = get_cached_jwks_for_token(
+        token,
+        jwks_endpoint,
+        client,
+        OAuthJwksCacheConfig::default(),
+    )
+    .await?;
     verify_jws_with_jwks(token, &jwk_set, &options)
 }
 

@@ -144,7 +144,7 @@ fn map_azp_to_client_id(payload: &mut serde_json::Value) {
     }
 }
 
-async fn get_cached_jwks_for_token(
+pub(crate) async fn get_cached_jwks_for_token(
     token: &str,
     jwks_url: &str,
     client: &OAuthHttpClient,
