@@ -4,8 +4,29 @@ All notable changes to `openauth-redis` are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `RedisOpenAuthStores` connects rate limiting and secondary storage through one
+  `ConnectionManager`.
+- `RedisOpenAuthStores::apply_to_options` wires `secondary_storage` and
+  `RateLimitOptions::secondary_storage` in one call.
+- `RedisSecondaryStorage::list_keys` and `clear` using `SCAN`, matching
+  `openauth-fred`.
+- `connect_with_options`, `connect_redis`, and `connect_valkey` on both stores.
+- `scan_count` on `RedisSecondaryStorageOptions`.
+
+### Changed
+
+- `set` with `Some(0)` now stores without expiration (aligned with Better Auth
+  and `openauth-fred`) instead of deleting the key.
+- Empty `key_prefix` is rejected for secondary storage and rate limit keys.
+- Rate limit Lua resets the bucket when `(now - last_request) > window` (was
+  `>=`), matching Better Auth `onResponseRateLimit` window rollover.
+
 ### Fixed
 
+- Secondary storage `get`, `set`, and `delete` validate `key_prefix` before Redis
+  commands.
 - Made TLS connections work for documented `rediss://` and `valkeys://` URLs by
   adding opt-in `rustls` and `native-tls` crate features that enable the
   corresponding redis-rs TLS backend. Without a TLS feature these URLs now fail

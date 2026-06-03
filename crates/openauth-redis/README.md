@@ -16,6 +16,8 @@ client.
 - `RedisRateLimitStore`: distributed atomic rate limiting through Lua.
 - `RedisSecondaryStorage`: secondary storage for sessions, verification state,
   SSO state, and plugin data that opt into secondary storage.
+- `RedisOpenAuthStores`: one shared `ConnectionManager` for both stores.
+- `list_keys()` / `clear()` on secondary storage (`SCAN`, matching `openauth-fred`).
 - `redis://`, `rediss://`, `valkey://`, and `valkeys://` URL support. TLS
   schemes (`rediss://`, `valkeys://`) require enabling a TLS feature; see
   [TLS](#tls).
@@ -84,5 +86,6 @@ contracts may change before stable release.
 
 ## Links
 
+- [Paridad vs `@better-auth/redis-storage`](../../docs/parity/openauth-redis/README.md)
 - [Root README](../../README.md)
 - [Repository](https://github.com/sebasxsala/openauth-rs)

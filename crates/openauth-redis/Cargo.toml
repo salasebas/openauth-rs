@@ -17,7 +17,6 @@ path = "src/lib.rs"
 [dependencies]
 openauth-core.workspace = true
 redis = { version = "0.32", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
-thiserror.workspace = true
 tokio.workspace = true
 
 [features]
