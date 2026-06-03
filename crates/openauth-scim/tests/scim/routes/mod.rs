@@ -35,6 +35,7 @@ mod isolation;
 mod management;
 mod metadata;
 mod organization;
+mod parity_gaps;
 mod provisioning;
 mod search;
 mod support;

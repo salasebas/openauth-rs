@@ -40,6 +40,13 @@ fn rejects_unsupported_filter_operator_with_invalid_filter_type() {
 }
 
 #[test]
+fn rejects_empty_user_name_eq_filter_value() {
+    let error = parse_user_filter(r#"userName eq """#).expect_err("empty value must fail");
+
+    assert_eq!(error.scim_type.as_deref(), Some("invalidFilter"));
+}
+
+#[test]
 fn rejects_unsupported_filter_attribute() {
     let error = parse_user_filter(r#"displayName eq "Ada""#).expect_err("attribute must fail");
 

@@ -5,7 +5,7 @@ Reference upstream: Better Auth `@better-auth/scim` **v1.6.9**
 
 OpenAuth crate: `crates/openauth-scim`
 
-Related: [README](../README.md), [tests/support/scim_parity.md](../tests/support/scim_parity.md), [parity plan](../../../docs/superpowers/plans/2026-05-12-scim-upstream-parity.md)
+Related: [docs/parity/openauth-scim/README.md](../../../docs/parity/openauth-scim/README.md) (canonical), [README](../README.md), [tests/support/scim_parity.md](../tests/support/scim_parity.md), [parity plan](../../../docs/superpowers/plans/2026-05-12-scim-upstream-parity.md)
 
 ---
 

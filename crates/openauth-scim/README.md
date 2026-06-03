@@ -218,11 +218,12 @@ release.
 
 ## Better Auth comparison
 
-Design differences, test parity matrix, and follow-up gaps versus Better Auth
-**1.6.9** `packages/scim`:
+Parity documentation (server-only, Better Auth **1.6.9**):
 
-- [docs/better-auth-design-differences.md](docs/better-auth-design-differences.md)
-- [tests/support/scim_parity.md](tests/support/scim_parity.md) (test mapping only)
+- **[docs/parity/openauth-scim/](../../docs/parity/openauth-scim/README.md)** — canonical index (endpoints, features, tests, design decisions)
+- [PARITY.md](PARITY.md) — short pointer
+- [docs/better-auth-design-differences.md](docs/better-auth-design-differences.md) — legacy detailed notes in-crate
+- [tests/support/scim_parity.md](tests/support/scim_parity.md) — test module → upstream file map
 
 ## Links
 
