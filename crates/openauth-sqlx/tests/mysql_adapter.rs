@@ -14,17 +14,21 @@ use openauth_core::crypto::password::verify_password;
 use openauth_core::db::{
     adapter_harness::run_adapter_contract, auth_schema, AdapterCapabilities, AuthSchemaOptions,
     Count, Create, DbAdapter, DbField, DbFieldType, DbRecord, DbSchema, DbTable, DbValue,
-    DeleteMany, FindMany, FindOne, ForeignKey, IdGeneration, IdPolicy, JoinOption, OnDelete,
-    RateLimitStorage, Sort, SortDirection, TableOptions, Update, Where, WhereOperator,
+    DeleteMany, FindMany, FindOne, ForeignKey, HookedAdapter, IdGeneration, IdPolicy, JoinOption,
+    OnDelete, RateLimitStorage, Sort, SortDirection, TableOptions, Update, Where, WhereOperator,
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     AdvancedOptions, OpenAuthOptions, RateLimitConsumeInput, RateLimitRule, RateLimitStore,
 };
+use openauth_core::plugin::{
+    PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook,
+};
 use openauth_sqlx::migration::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_sqlx::{MySqlAdapter, MySqlRateLimitStore};
 use serde_json::Value;
 use sqlx::mysql::MySqlPoolOptions;
+use std::sync::Mutex as StdMutex;
 use time::OffsetDateTime;
 
 static TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -335,7 +339,7 @@ async fn mysql_adapter_reports_public_capabilities() -> Result<(), OpenAuthError
             .named("SQLx MySQL")
             .with_json()
             .with_arrays()
-            .with_joins()
+            .with_native_joins()
             .with_transactions()
     );
     Ok(())
@@ -402,6 +406,97 @@ async fn mysql_rate_limit_store_allows_exactly_one_concurrent_request() -> Resul
         .count();
 
     assert_eq!(permitted, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn mysql_rate_limit_store_denies_without_incrementing_denied_requests(
+) -> Result<(), OpenAuthError> {
+    let prefix = unique_prefix();
+    let rate_limits_table = format!("{prefix}_rate_limits");
+    let schema = auth_schema(AuthSchemaOptions {
+        rate_limit_storage: RateLimitStorage::Database,
+        user: table_options(&prefix, "users"),
+        account: table_options(&prefix, "accounts"),
+        session: table_options(&prefix, "sessions"),
+        verification: table_options(&prefix, "verifications"),
+        rate_limit: table_options(&prefix, "rate_limits"),
+        ..AuthSchemaOptions::default()
+    });
+    let pool = test_pool(1).await?;
+    let adapter = MySqlAdapter::with_schema(pool.clone(), schema.clone());
+    adapter.create_schema(&schema, None).await?;
+    let store = MySqlRateLimitStore::from(&adapter);
+    let rule = RateLimitRule { window: 60, max: 1 };
+    let key = format!("{prefix}|127.0.0.1|/limited");
+
+    let first = store
+        .consume(RateLimitConsumeInput {
+            key: key.clone(),
+            rule: rule.clone(),
+            now_ms: 1_700_000_000_000,
+        })
+        .await?;
+    let second = store
+        .consume(RateLimitConsumeInput {
+            key: key.clone(),
+            rule,
+            now_ms: 1_700_000_000_001,
+        })
+        .await?;
+
+    assert!(first.permitted);
+    assert!(!second.permitted);
+    let stored_count: i64 = sqlx::query_scalar(&format!(
+        "SELECT count FROM {rate_limits_table} WHERE `key` = ?"
+    ))
+    .bind(&key)
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+    assert_eq!(stored_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn mysql_rate_limit_store_rejects_negative_persisted_counts() -> Result<(), OpenAuthError> {
+    let prefix = unique_prefix();
+    let rate_limits_table = format!("{prefix}_rate_limits");
+    let schema = auth_schema(AuthSchemaOptions {
+        rate_limit_storage: RateLimitStorage::Database,
+        user: table_options(&prefix, "users"),
+        account: table_options(&prefix, "accounts"),
+        session: table_options(&prefix, "sessions"),
+        verification: table_options(&prefix, "verifications"),
+        rate_limit: table_options(&prefix, "rate_limits"),
+        ..AuthSchemaOptions::default()
+    });
+    let pool = test_pool(1).await?;
+    let adapter = MySqlAdapter::with_schema(pool.clone(), schema.clone());
+    adapter.create_schema(&schema, None).await?;
+    let store = MySqlRateLimitStore::from(&adapter);
+    let key = format!("{prefix}|127.0.0.1|/corrupt-negative-count");
+    sqlx::query(&format!(
+        "INSERT INTO {rate_limits_table} (`key`, count, last_request) VALUES (?, ?, ?)"
+    ))
+    .bind(&key)
+    .bind(-1_i64)
+    .bind(1_700_000_000_000_i64)
+    .execute(&pool)
+    .await
+    .map_err(sql_error)?;
+
+    let result = store
+        .consume(RateLimitConsumeInput {
+            key,
+            rule: RateLimitRule { window: 60, max: 5 },
+            now_ms: 1_700_000_000_001,
+        })
+        .await;
+
+    assert!(
+        matches!(result, Err(OpenAuthError::Adapter(message)) if message.contains("negative rate limit count"))
+    );
     Ok(())
 }
 
@@ -649,6 +744,58 @@ async fn mysql_adapter_plan_migrations_warns_for_type_mismatch_without_rewrite(
     assert!(!sql.contains("RENAME"));
     assert!(!sql.contains("MODIFY COLUMN"));
     assert!(!sql.contains("CHANGE COLUMN"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn mysql_adapter_plan_migrations_warns_for_foreign_key_mismatch() -> Result<(), OpenAuthError>
+{
+    let prefix = unique_prefix();
+    let users_table = format!("{prefix}_users");
+    let sessions_table = format!("{prefix}_sessions");
+    let schema = auth_schema(AuthSchemaOptions {
+        user: table_options(&prefix, "users"),
+        session: table_options(&prefix, "sessions"),
+        account: table_options(&prefix, "accounts"),
+        verification: table_options(&prefix, "verifications"),
+        rate_limit: table_options(&prefix, "rate_limits"),
+        ..AuthSchemaOptions::default()
+    });
+    let pool = test_pool(1).await?;
+    sqlx::query(&format!(
+        "CREATE TABLE {users_table} (id VARCHAR(255) PRIMARY KEY) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    ))
+    .execute(&pool)
+    .await
+    .map_err(sql_error)?;
+    sqlx::query(&format!(
+        "CREATE TABLE {sessions_table} (id VARCHAR(255) PRIMARY KEY, user_id VARCHAR(255), CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES {users_table}(id) ON DELETE RESTRICT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    ))
+    .execute(&pool)
+    .await
+    .map_err(sql_error)?;
+
+    let adapter = MySqlAdapter::with_schema(pool, schema.clone());
+    let plan = adapter.plan_migrations(&schema).await?;
+
+    assert!(
+        plan.warnings.iter().any(|warning| {
+            matches!(
+                warning,
+                SchemaMigrationWarning::ForeignKeyMismatch {
+                    table_name,
+                    column_name,
+                    expected,
+                    actual: Some(actual),
+                } if table_name == &sessions_table
+                    && column_name == "user_id"
+                    && expected.on_delete == OnDelete::Cascade
+                    && actual.on_delete == OnDelete::Restrict
+            )
+        }),
+        "expected FK mismatch warning, got {:?}",
+        plan.warnings
+    );
     Ok(())
 }
 
@@ -1039,6 +1186,168 @@ async fn mysql_adapter_supports_forward_reverse_and_limited_joins() -> Result<()
         account.get("user"),
         Some(DbValue::Record(user)) if user.get("id") == Some(&DbValue::String("user_1".to_owned()))
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn mysql_adapter_supports_multi_joins_inside_transactions() -> Result<(), OpenAuthError> {
+    let adapter = adapter().await?;
+    seed_join_user(&adapter, "user_1", "ada@example.com").await?;
+    seed_join_account(&adapter, "account_1", "user_1").await?;
+    seed_join_session(&adapter, "session_1", "user_1").await?;
+    let joined_records = Arc::new(StdMutex::new(Vec::<DbRecord>::new()));
+
+    adapter
+        .transaction(Box::new({
+            let joined_records = Arc::clone(&joined_records);
+            move |tx| {
+                Box::pin(async move {
+                    let users = tx
+                        .find_many(
+                            FindMany::new("user")
+                                .where_clause(Where::new(
+                                    "id",
+                                    DbValue::String("user_1".to_owned()),
+                                ))
+                                .join("account", JoinOption::enabled())
+                                .join("session", JoinOption::enabled()),
+                        )
+                        .await?;
+                    *joined_records.lock().map_err(|_| {
+                        OpenAuthError::Adapter("joined records lock poisoned".to_owned())
+                    })? = users;
+                    Ok(())
+                })
+            }
+        }))
+        .await?;
+
+    let users = joined_records
+        .lock()
+        .map_err(|_| OpenAuthError::Adapter("joined records lock poisoned".to_owned()))?;
+    assert_eq!(users.len(), 1);
+    assert!(matches!(
+        users[0].get("account"),
+        Some(DbValue::RecordArray(accounts)) if accounts.len() == 1
+    ));
+    assert!(matches!(
+        users[0].get("session"),
+        Some(DbValue::RecordArray(sessions)) if sessions.len() == 1
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn mysql_hooked_adapter_preserves_native_transaction_rollback() -> Result<(), OpenAuthError> {
+    let raw = adapter().await?;
+    let events = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let adapter = HookedAdapter::new(
+        Arc::new(raw.clone()) as Arc<dyn DbAdapter>,
+        vec![
+            PluginDatabaseHook::before_create("rewrite-name", |_context, mut query| {
+                if query.model == "user" {
+                    query
+                        .data
+                        .insert("name".to_owned(), DbValue::String("Hooked".to_owned()));
+                }
+                Ok(PluginDatabaseBeforeAction::Continue(
+                    PluginDatabaseBeforeInput::Create(query),
+                ))
+            }),
+            PluginDatabaseHook::after_create("after-create", {
+                let events = Arc::clone(&events);
+                move |_context, _query, _result| {
+                    events
+                        .lock()
+                        .map_err(|_| OpenAuthError::Adapter("events lock poisoned".to_owned()))?
+                        .push("after".to_owned());
+                    Ok(())
+                }
+            }),
+        ],
+    );
+
+    let result = adapter
+        .transaction(Box::new(|tx| {
+            Box::pin(async move {
+                tx.create(
+                    Create::new("user")
+                        .data("id", DbValue::String("user_hooked_rollback".to_owned()))
+                        .data("name", DbValue::String("Ada".to_owned()))
+                        .data("email", DbValue::String("rollback@example.com".to_owned()))
+                        .data("email_verified", DbValue::Boolean(false))
+                        .data("image", DbValue::Null)
+                        .data("created_at", DbValue::Timestamp(OffsetDateTime::now_utc()))
+                        .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc())),
+                )
+                .await?;
+                Err(OpenAuthError::Adapter("force rollback".to_owned()))
+            })
+        }))
+        .await;
+
+    assert!(result.is_err());
+    assert_eq!(raw.count(Count::new("user")).await?, 0);
+    assert!(events
+        .lock()
+        .map_err(|_| OpenAuthError::Adapter("events lock poisoned".to_owned()))?
+        .is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn mysql_hooked_adapter_runs_after_hooks_after_native_transaction_commit(
+) -> Result<(), OpenAuthError> {
+    let raw = adapter().await?;
+    let events = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let adapter = HookedAdapter::new(
+        Arc::new(raw.clone()) as Arc<dyn DbAdapter>,
+        vec![PluginDatabaseHook::after_create("after-create", {
+            let events = Arc::clone(&events);
+            move |_context, _query, _result| {
+                events
+                    .lock()
+                    .map_err(|_| OpenAuthError::Adapter("events lock poisoned".to_owned()))?
+                    .push("after".to_owned());
+                Ok(())
+            }
+        })],
+    );
+
+    adapter
+        .transaction(Box::new({
+            let events = Arc::clone(&events);
+            move |tx| {
+                Box::pin(async move {
+                    tx.create(
+                        Create::new("user")
+                            .data("id", DbValue::String("user_hooked_commit".to_owned()))
+                            .data("name", DbValue::String("Ada".to_owned()))
+                            .data("email", DbValue::String("commit@example.com".to_owned()))
+                            .data("email_verified", DbValue::Boolean(false))
+                            .data("image", DbValue::Null)
+                            .data("created_at", DbValue::Timestamp(OffsetDateTime::now_utc()))
+                            .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc())),
+                    )
+                    .await?;
+                    assert!(events
+                        .lock()
+                        .map_err(|_| OpenAuthError::Adapter("events lock poisoned".to_owned()))?
+                        .is_empty());
+                    Ok(())
+                })
+            }
+        }))
+        .await?;
+
+    assert_eq!(raw.count(Count::new("user")).await?, 1);
+    assert_eq!(
+        events
+            .lock()
+            .map_err(|_| OpenAuthError::Adapter("events lock poisoned".to_owned()))?
+            .as_slice(),
+        ["after"]
+    );
     Ok(())
 }
 

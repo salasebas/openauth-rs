@@ -252,7 +252,7 @@ async fn sqlite_adapter_reports_public_capabilities() -> Result<(), OpenAuthErro
             .named("SQLx SQLite")
             .with_json()
             .with_arrays()
-            .with_joins()
+            .with_native_joins()
             .with_transactions()
     );
     Ok(())

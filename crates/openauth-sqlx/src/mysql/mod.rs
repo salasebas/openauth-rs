@@ -10,7 +10,7 @@ use std::sync::Arc;
 use openauth_core::db::{
     auth_schema, rate_limit_consume_statements, AdapterCapabilities, AdapterFuture,
     AuthSchemaOptions, Count, Create, DbAdapter, DbRecord, DbSchema, Delete, DeleteMany, FindMany,
-    FindOne, JoinAdapter, SchemaCreation, SqlDialect, TransactionCallback, Update, UpdateMany,
+    FindOne, SchemaCreation, SqlDialect, TransactionCallback, Update, UpdateMany,
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
@@ -169,7 +169,7 @@ impl DbAdapter for MySqlAdapter {
             .named("SQLx MySQL")
             .with_json()
             .with_arrays()
-            .with_joins()
+            .with_native_joins()
             .with_transactions()
     }
 
@@ -182,15 +182,7 @@ impl DbAdapter for MySqlAdapter {
     }
 
     fn find_many<'a>(&'a self, query: FindMany) -> AdapterFuture<'a, Vec<DbRecord>> {
-        Box::pin(async move {
-            if query.joins.len() <= 1 {
-                self.state().find_many(query).await
-            } else {
-                let adapter =
-                    JoinAdapter::new(self.schema.as_ref().clone(), Arc::new(self.clone()), false);
-                adapter.find_many(query).await
-            }
-        })
+        Box::pin(async move { self.state().find_many(query).await })
     }
 
     fn count<'a>(&'a self, query: Count) -> AdapterFuture<'a, u64> {
@@ -291,7 +283,7 @@ impl DbAdapter for MySqlTxAdapter<'_> {
             .named("SQLx MySQL")
             .with_json()
             .with_arrays()
-            .with_joins()
+            .with_native_joins()
             .with_transactions()
     }
 
@@ -304,14 +296,7 @@ impl DbAdapter for MySqlTxAdapter<'_> {
     }
 
     fn find_many<'a>(&'a self, query: FindMany) -> AdapterFuture<'a, Vec<DbRecord>> {
-        Box::pin(async move {
-            if query.joins.len() <= 1 {
-                self.state().await?.find_many(query).await
-            } else {
-                let adapter = JoinAdapter::new(self.schema.as_ref().clone(), self, false);
-                adapter.find_many(query).await
-            }
-        })
+        Box::pin(async move { self.state().await?.find_many(query).await })
     }
 
     fn count<'a>(&'a self, query: Count) -> AdapterFuture<'a, u64> {

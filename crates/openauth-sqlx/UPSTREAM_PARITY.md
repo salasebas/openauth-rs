@@ -32,6 +32,8 @@ literally.
 - Join behavior matches Better Auth's one-to-one and one-to-many contracts,
   including default join limits, explicit join limits, missing one-to-one
   records as `null`, and missing one-to-many records as empty arrays.
+- `find_many` with two or more joins compiles to a single SQL statement on SQL
+  adapters (`supports_native_joins`), matching Kysely's join chain behavior.
 - Native transactions roll back failed callbacks.
 - Schema planning and execution are additive, ordered, and refuse unsafe
   warning plans instead of applying destructive changes.
