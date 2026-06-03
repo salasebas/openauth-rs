@@ -71,6 +71,9 @@ serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
   `OpenAuthAxumOptions::trust_proxy_headers_for_base_url(true)` are enabled.
 - Do not trust public `x-forwarded-for` headers unless traffic is terminated by
   a trusted reverse proxy.
+- Do not run Tower/Axum body-consuming middleware on auth routes before
+  `openauth-axum` (same idea as avoiding `express.json()` before Better Auth on
+  Express).
 
 ## Status
 

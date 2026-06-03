@@ -8,6 +8,12 @@ use openauth::ApiErrorResponse;
 pub enum OpenAuthAxumError {
     #[error("OpenAuth base path must be an absolute literal path mountable by Axum: {0}")]
     InvalidBasePath(String),
+    #[error("OpenAuth base_url is not a valid absolute URL: {0}")]
+    InvalidBaseUrl(String),
+    #[error(
+        "OpenAuth base_url path `{url_path}` does not match configured base_path `{base_path}`"
+    )]
+    InconsistentBaseUrlPath { url_path: String, base_path: String },
 }
 
 pub(crate) fn bad_request_response() -> axum::response::Response {

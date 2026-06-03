@@ -20,10 +20,11 @@ http-body-util.workspace = true
 openauth.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
 url.workspace = true
 
 [lints]

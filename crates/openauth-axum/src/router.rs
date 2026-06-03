@@ -6,7 +6,12 @@ use axum::http::{header, HeaderMap, Request, Uri};
 use axum::response::IntoResponse;
 use axum::routing::any;
 use axum::Router;
-use openauth::{auth::oauth::OAuthBaseUrlOverride, OpenAuth, OpenAuthError, RequestBaseUrl};
+use openauth::{
+    auth::oauth::OAuthBaseUrlOverride,
+    utils::host::is_loopback_host,
+    utils::url::{is_valid_forwarded_host, is_valid_forwarded_proto},
+    OpenAuth, OpenAuthError, RequestBaseUrl,
+};
 
 use crate::error::{internal_error_response, OpenAuthAxumError};
 use crate::request::to_api_request;
@@ -68,6 +73,7 @@ pub fn router_with_options(
     auth: OpenAuth,
     options: OpenAuthAxumOptions,
 ) -> Result<Router, OpenAuthAxumError> {
+    validate_base_url_matches_base_path(&auth)?;
     let base_path = normalize_base_path(&auth.context().base_path)?;
     if base_path == "/" {
         return Ok(routes_with_options(auth, options));
@@ -96,17 +102,17 @@ fn routes_from_shared(auth: Arc<OpenAuth>, options: OpenAuthAxumOptions) -> Rout
 }
 
 /// Handle a single Axum request through OpenAuth.
-pub async fn handle(auth: OpenAuth, request: Request<Body>) -> axum::response::Response {
-    handle_ref(&auth, request).await
+pub async fn handle(auth: &OpenAuth, request: Request<Body>) -> axum::response::Response {
+    handle_ref(auth, request).await
 }
 
 /// Handle a single Axum request through OpenAuth with adapter-specific options.
 pub async fn handle_with_options(
-    auth: OpenAuth,
+    auth: &OpenAuth,
     options: OpenAuthAxumOptions,
     request: Request<Body>,
 ) -> axum::response::Response {
-    handle_ref_with_options(&auth, options, request).await
+    handle_ref_with_options(auth, options, request).await
 }
 
 /// Handle a single Axum request through a borrowed OpenAuth instance.
@@ -140,6 +146,35 @@ async fn route_handler(
     request: Request<Body>,
 ) -> impl IntoResponse {
     handle_ref_with_options(state.auth.as_ref(), state.options, request).await
+}
+
+fn validate_base_url_matches_base_path(auth: &OpenAuth) -> Result<(), OpenAuthAxumError> {
+    let base_url = auth.context().base_url.as_str();
+    if base_url.is_empty() {
+        return Ok(());
+    }
+
+    let parsed = url::Url::parse(base_url)
+        .map_err(|_| OpenAuthAxumError::InvalidBaseUrl(base_url.to_owned()))?;
+    let url_path = trim_path_suffix(parsed.path());
+    let base_path = trim_path_suffix(&auth.context().base_path);
+    if url_path == base_path {
+        return Ok(());
+    }
+
+    Err(OpenAuthAxumError::InconsistentBaseUrlPath {
+        url_path,
+        base_path,
+    })
+}
+
+fn trim_path_suffix(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        "/".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 fn normalize_base_path(base_path: &str) -> Result<String, OpenAuthAxumError> {
@@ -204,7 +239,7 @@ fn infer_base_url(
 fn forwarded_origin(headers: &HeaderMap) -> Option<String> {
     let host = header_str(headers, "x-forwarded-host")?;
     let proto = header_str(headers, "x-forwarded-proto")?;
-    if !is_valid_host(host) || !is_valid_proto(proto) {
+    if !is_valid_forwarded_host(host) || !is_valid_forwarded_proto(proto) {
         return None;
     }
     Some(format!("{}://{}", proto.to_ascii_lowercase(), host))
@@ -212,11 +247,11 @@ fn forwarded_origin(headers: &HeaderMap) -> Option<String> {
 
 fn uri_origin(uri: &Uri) -> Option<String> {
     let scheme = uri.scheme_str()?;
-    if !is_valid_proto(scheme) {
+    if !is_valid_forwarded_proto(scheme) {
         return None;
     }
     let authority = uri.authority()?.as_str();
-    if !is_valid_host(authority) {
+    if !is_valid_forwarded_host(authority) {
         return None;
     }
     Some(format!("{}://{}", scheme, authority))
@@ -224,7 +259,7 @@ fn uri_origin(uri: &Uri) -> Option<String> {
 
 fn host_header_origin(headers: &HeaderMap) -> Option<String> {
     let host = header_str(headers, header::HOST.as_str())?;
-    if !is_valid_host(host) {
+    if !is_valid_forwarded_host(host) {
         return None;
     }
     let scheme = if is_loopback_host(host) {
@@ -247,33 +282,6 @@ fn with_base_path(mut origin: String, base_path: &str) -> String {
     origin
 }
 
-fn is_valid_proto(proto: &str) -> bool {
-    proto.eq_ignore_ascii_case("http") || proto.eq_ignore_ascii_case("https")
-}
-
-fn is_valid_host(host: &str) -> bool {
-    !host.is_empty()
-        && host.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':' | b'[' | b']')
-        })
-        && !host.contains("..")
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    let host = host
-        .strip_prefix('[')
-        .and_then(|value| value.split_once(']'))
-        .map_or(host, |(host, _)| host);
-    let host = host
-        .rsplit_once(':')
-        .filter(|(_, port)| port.chars().all(|character| character.is_ascii_digit()))
-        .map_or(host, |(host, _)| host);
-    host.eq_ignore_ascii_case("localhost")
-        || host.to_ascii_lowercase().ends_with(".localhost")
-        || host == "::1"
-        || host.starts_with("127.")
-}
-
 fn is_valid_base_path(base_path: &str) -> bool {
     base_path.starts_with('/')
         && !base_path.contains('?')
@@ -293,6 +301,7 @@ fn log_internal_error(auth: &OpenAuth, error: &OpenAuthError) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
 
     const SECRET: &str = "test-secret-123456789012345678901234";
 
@@ -319,6 +328,95 @@ mod tests {
                 Err(OpenAuthAxumError::InvalidBasePath(_))
             ));
         }
+    }
+
+    #[test]
+    fn infer_base_url_rejects_malicious_forwarded_headers_and_falls_back_to_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("javascript:alert(1)"),
+        );
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+        headers.insert(header::HOST, HeaderValue::from_static("app.example.com"));
+
+        let base = infer_base_url(
+            &headers,
+            &Uri::from_static("/api/auth/ok"),
+            "/api/auth",
+            true,
+        );
+        assert_eq!(base.as_deref(), Some("https://app.example.com/api/auth"));
+    }
+
+    #[test]
+    fn infer_base_url_uses_forwarded_headers_when_trusted_and_valid() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("public.example.com"),
+        );
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        headers.insert(header::HOST, HeaderValue::from_static("internal.local"));
+
+        let base = infer_base_url(&headers, &Uri::from_static("/ok"), "/api/auth", true);
+        assert_eq!(base.as_deref(), Some("https://public.example.com/api/auth"));
+    }
+
+    #[test]
+    fn infer_base_url_uses_absolute_request_uri_origin() {
+        let headers = HeaderMap::new();
+        let uri = Uri::from_static("https://app.example.com/api/auth/sign-in/social");
+        let base = infer_base_url(&headers, &uri, "/api/auth", false);
+        assert_eq!(base.as_deref(), Some("https://app.example.com/api/auth"));
+    }
+
+    #[test]
+    fn infer_base_url_uses_http_for_loopback_host_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:3000"));
+
+        let base = infer_base_url(&headers, &Uri::from_static("/ok"), "/api/auth", false);
+        assert_eq!(base.as_deref(), Some("http://127.0.0.1:3000/api/auth"));
+    }
+
+    #[test]
+    fn validate_base_url_accepts_matching_pathname() -> Result<(), OpenAuthError> {
+        let auth = OpenAuth::builder()
+            .secret(SECRET)
+            .base_path("/api/auth")
+            .base_url("http://localhost:3000/api/auth/")
+            .build()?;
+        assert!(validate_base_url_matches_base_path(&auth).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn validate_base_url_rejects_mismatched_pathname() -> Result<(), OpenAuthError> {
+        let auth = OpenAuth::builder()
+            .secret(SECRET)
+            .base_path("/api/auth")
+            .base_url("http://localhost:3000/wrong")
+            .build()?;
+        assert!(matches!(
+            validate_base_url_matches_base_path(&auth),
+            Err(OpenAuthAxumError::InconsistentBaseUrlPath { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn validate_base_url_rejects_invalid_absolute_url() -> Result<(), OpenAuthError> {
+        let auth = OpenAuth::builder()
+            .secret(SECRET)
+            .base_path("/api/auth")
+            .base_url("not-a-url")
+            .build()?;
+        assert!(matches!(
+            validate_base_url_matches_base_path(&auth),
+            Err(OpenAuthAxumError::InvalidBaseUrl(_))
+        ));
+        Ok(())
     }
 
     #[test]

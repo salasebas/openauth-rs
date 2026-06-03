@@ -20,6 +20,9 @@ pub const BODY_LIMIT: usize = 10 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResponseExtensionMarker(pub &'static str);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequestExtensionMarker(pub &'static str);
+
 pub fn auth_with_options(options: OpenAuthOptions) -> Result<OpenAuth, openauth::OpenAuthError> {
     OpenAuth::builder().options(options).secret(SECRET).build()
 }
@@ -52,6 +55,26 @@ pub fn custom_endpoint(path: &'static str) -> AsyncAuthEndpoint {
         |_context: &AuthContext, _request| {
             Box::pin(async {
                 let mut response = ApiResponse::new(b"CUSTOM".to_vec());
+                *response.status_mut() = axum::http::StatusCode::OK;
+                Ok(response)
+            })
+        },
+    )
+}
+
+pub fn request_extension_endpoint(path: &'static str) -> AsyncAuthEndpoint {
+    openauth::create_auth_endpoint(
+        path,
+        Method::GET,
+        AuthEndpointOptions::new(),
+        |_context: &AuthContext, request| {
+            Box::pin(async move {
+                let marker = request
+                    .extensions()
+                    .get::<RequestExtensionMarker>()
+                    .map(|marker| marker.0)
+                    .unwrap_or("missing");
+                let mut response = ApiResponse::new(format!("request={marker}").into_bytes());
                 *response.status_mut() = axum::http::StatusCode::OK;
                 Ok(response)
             })

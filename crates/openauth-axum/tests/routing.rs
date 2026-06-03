@@ -144,6 +144,42 @@ async fn invalid_base_paths_are_rejected_before_mounting() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
+async fn invalid_base_url_is_rejected_before_mounting() -> Result<(), Box<dyn std::error::Error>> {
+    let result = OpenAuth::builder()
+        .secret(SECRET)
+        .base_path("/api/auth")
+        .base_url("not-a-url")
+        .build()?
+        .into_router();
+
+    let Err(error) = result else {
+        return Err(std::io::Error::other("invalid base_url should be rejected").into());
+    };
+    assert!(matches!(error, OpenAuthAxumError::InvalidBaseUrl(_)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn inconsistent_base_url_path_is_rejected_before_mounting(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let result = OpenAuth::builder()
+        .secret(SECRET)
+        .base_path("/api/auth")
+        .base_url("http://localhost:3000/wrong")
+        .build()?
+        .into_router();
+
+    let Err(error) = result else {
+        return Err(std::io::Error::other("mismatched base_url should be rejected").into());
+    };
+    assert!(matches!(
+        error,
+        OpenAuthAxumError::InconsistentBaseUrlPath { .. }
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn non_auth_paths_and_wrong_methods_return_not_found(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let app = router(auth_with_options(OpenAuthOptions::default())?)?;

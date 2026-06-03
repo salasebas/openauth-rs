@@ -828,7 +828,7 @@ async fn dynamic_auth_handler(
     )
     .await
     {
-        Ok(auth) => openauth_axum::handle(auth, request).await,
+        Ok(auth) => openauth_axum::handle(&auth, request).await,
         Err(error) => json_error(StatusCode::BAD_GATEWAY, &error.to_string()),
     }
 }

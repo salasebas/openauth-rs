@@ -63,6 +63,8 @@ async fn internal_endpoint_errors_are_sanitized() -> Result<(), Box<dyn std::err
     let app = router(
         OpenAuth::builder()
             .secret(SECRET)
+            .production(true)
+            .rate_limit(openauth::RateLimitOptions::new().enabled(false))
             .async_endpoint(failing_endpoint("/fail"))
             .build()?,
     )?;
@@ -74,7 +76,7 @@ async fn internal_endpoint_errors_are_sanitized() -> Result<(), Box<dyn std::err
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = body_json(response).await?;
     assert_eq!(body["code"], "INTERNAL_SERVER_ERROR");
-    assert_eq!(body["message"], "Internal server error");
+    assert_eq!(body["message"], "Internal Server Error");
     assert!(!body.to_string().contains("simulated internal failure"));
     Ok(())
 }
