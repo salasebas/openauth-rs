@@ -3,7 +3,7 @@ use openauth_saml::{
     collect_saml_runtime_algorithms,
     metadata::service_provider_metadata,
     validate_saml_config_algorithms, validate_saml_config_algorithms_with_policy,
-    validate_saml_runtime_algorithms, validate_saml_timestamp,
+    validate_saml_runtime_algorithms, validate_saml_timestamp, validate_saml_timestamp_at,
     xml::validate_saml_xml,
     DeprecatedAlgorithmBehavior, DigestAlgorithm, SamlConditions, SamlConfig, SamlIdpMetadata,
     SamlRuntimeAlgorithmPolicy, SamlSecurityError, SignatureAlgorithm, TimestampValidationOptions,
@@ -395,6 +395,83 @@ fn timestamp_validation_can_require_conditions() {
         result,
         Err(SamlSecurityError::MissingTimestampConditions)
     ));
+}
+
+#[test]
+fn timestamp_validation_accepts_not_before_at_now_with_zero_skew(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000)?;
+    let options = TimestampValidationOptions {
+        clock_skew: Duration::ZERO,
+        require_timestamps: false,
+    };
+    validate_saml_timestamp_at(
+        Some(&SamlConditions {
+            not_before: Some(now.format(&Rfc3339)?),
+            not_on_or_after: None,
+        }),
+        options,
+        now,
+    )?;
+    Ok(())
+}
+
+#[test]
+fn timestamp_validation_rejects_not_before_one_millisecond_after_now_with_zero_skew(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000)?;
+    let not_before = (now + Duration::milliseconds(1)).format(&Rfc3339)?;
+    let result = validate_saml_timestamp_at(
+        Some(&SamlConditions {
+            not_before: Some(not_before),
+            not_on_or_after: None,
+        }),
+        TimestampValidationOptions {
+            clock_skew: Duration::ZERO,
+            require_timestamps: false,
+        },
+        now,
+    );
+    assert!(matches!(result, Err(SamlSecurityError::NotYetValid)));
+    Ok(())
+}
+
+#[test]
+fn timestamp_validation_accepts_not_on_or_after_at_now_with_zero_skew(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000)?;
+    validate_saml_timestamp_at(
+        Some(&SamlConditions {
+            not_before: None,
+            not_on_or_after: Some(now.format(&Rfc3339)?),
+        }),
+        TimestampValidationOptions {
+            clock_skew: Duration::ZERO,
+            require_timestamps: false,
+        },
+        now,
+    )?;
+    Ok(())
+}
+
+#[test]
+fn timestamp_validation_rejects_not_on_or_after_one_millisecond_before_now_with_zero_skew(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000)?;
+    let not_on_or_after = (now - Duration::milliseconds(1)).format(&Rfc3339)?;
+    let result = validate_saml_timestamp_at(
+        Some(&SamlConditions {
+            not_before: None,
+            not_on_or_after: Some(not_on_or_after),
+        }),
+        TimestampValidationOptions {
+            clock_skew: Duration::ZERO,
+            require_timestamps: false,
+        },
+        now,
+    );
+    assert!(matches!(result, Err(SamlSecurityError::Expired)));
+    Ok(())
 }
 
 #[test]

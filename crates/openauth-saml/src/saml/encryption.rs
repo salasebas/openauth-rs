@@ -36,5 +36,12 @@ pub fn decrypt_encrypted_assertion_response(
     _xml: &str,
     _private_key_pem: &str,
 ) -> Result<String, SamlAssertionDecryptionError> {
-    Err(SamlAssertionDecryptionError::Unsupported)
+    #[cfg(feature = "saml-signed")]
+    {
+        Err(SamlAssertionDecryptionError::DecryptionFailed)
+    }
+    #[cfg(not(feature = "saml-signed"))]
+    {
+        Err(SamlAssertionDecryptionError::Unsupported)
+    }
 }

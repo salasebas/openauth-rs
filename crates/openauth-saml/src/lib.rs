@@ -1,9 +1,11 @@
 //! SAML 2.0 service-provider support for OpenAuth enterprise SSO.
 //!
-//! Signed and encrypted SAML paths fail closed until a dedicated verification
-//! backend is enabled behind an explicit feature.
+//! Signed and encrypted SAML paths use [`opensaml`] when the `saml-signed`
+//! feature is enabled; otherwise they fail closed with stable error codes.
 
 pub mod options;
+
+mod bridge;
 
 #[path = "saml/mod.rs"]
 mod saml_impl;
@@ -44,15 +46,17 @@ pub mod xml {
     pub use crate::saml_impl::xml::*;
 }
 
+pub use crate::bridge::SpBuildOptions;
 pub use options::{
     SamlConfig, SamlIdpMetadata, SamlMapping, SamlProviderConfig, SamlService, SamlSpMetadata,
 };
 pub use saml_impl::{
     collect_saml_runtime_algorithms, validate_saml_config_algorithms,
     validate_saml_config_algorithms_with_policy, validate_saml_runtime_algorithms,
-    validate_saml_timestamp, DataEncryptionAlgorithm, DeprecatedAlgorithmBehavior, DigestAlgorithm,
-    KeyEncryptionAlgorithm, SamlConditions, SamlRuntimeAlgorithmPolicy, SamlRuntimeAlgorithms,
-    SamlSecurityError, SignatureAlgorithm, TimestampValidationOptions,
+    validate_saml_timestamp, validate_saml_timestamp_at, DataEncryptionAlgorithm,
+    DeprecatedAlgorithmBehavior, DigestAlgorithm, KeyEncryptionAlgorithm, SamlConditions,
+    SamlRuntimeAlgorithmPolicy, SamlRuntimeAlgorithms, SamlSecurityError, SignatureAlgorithm,
+    TimestampValidationOptions,
 };
 
 /// Public signature policy placeholder for future backend selection.

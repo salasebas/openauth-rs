@@ -4,12 +4,52 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::BTreeMap;
 
+use crate::bridge::{
+    assertion_id_from_saml_content, create_identity_provider, create_service_provider,
+    map_flow_attributes, map_flow_to_conditions, opensaml_error_code, parse_login_response,
+    SpBuildOptions,
+};
+use crate::options::SamlConfig;
+
 use super::encryption::{decrypt_encrypted_assertion_response, SamlAssertionDecryptionError};
 use super::security::{collect_saml_runtime_algorithms, SamlConditions, SamlRuntimeAlgorithms};
 use super::signature::SamlSignatureInfo;
 use super::xml::{local_name, validate_saml_xml};
 
 pub const ENCRYPTED_ASSERTION_UNSUPPORTED: &str = "Encrypted SAML assertions are not supported";
+
+/// Inputs required to parse signed or encrypted SAML login responses via opensaml.
+#[derive(Debug, Clone)]
+pub struct SamlLoginParseContext<'a> {
+    pub config: &'a SamlConfig,
+    pub base_url: &'a str,
+    pub provider_id: &'a str,
+    pub in_response_to: Option<&'a str>,
+    pub build_options: SpBuildOptions,
+}
+
+/// Parse a SAML login response, using opensaml when signatures or encryption are present.
+pub fn parse_saml_login_response(
+    encoded_response: &str,
+    context: &SamlLoginParseContext<'_>,
+) -> Result<ParsedSamlResponse, SamlResponseParseError> {
+    validate_single_assertion(encoded_response).map_err(SamlResponseParseError::from)?;
+    let xml = decode_saml_response_xml_detailed(encoded_response)?;
+    if xml.contains("EncryptedAssertion") && !has_decryption_key(context.config) {
+        return Err(SamlResponseParseError::EncryptedAssertionUnsupported(
+            ENCRYPTED_ASSERTION_UNSUPPORTED,
+        ));
+    }
+    if requires_opensaml_parse(&xml) {
+        parse_saml_response_via_opensaml(encoded_response, context)
+    } else {
+        parse_saml_response_xml_detailed(&xml)
+    }
+}
+
+fn has_decryption_key(config: &SamlConfig) -> bool {
+    config.decryption_pvk.is_some() || config.sp_metadata.enc_private_key.is_some()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SamlResponseParseError {
@@ -37,8 +77,19 @@ impl SamlResponseParseError {
             Self::MissingAssertionId => "INVALID_SAML_RESPONSE",
             Self::MissingAssertion
             | Self::UnexpectedAssertionCount { .. }
-            | Self::InvalidEncoding
-            | Self::InvalidXml(_) => "INVALID_SAML_RESPONSE",
+            | Self::InvalidEncoding => "INVALID_SAML_RESPONSE",
+            Self::InvalidXml(message)
+                if message.contains("SAML_SIGNATURE_VALIDATION_NOT_IMPLEMENTED") =>
+            {
+                "SAML_SIGNATURE_VALIDATION_NOT_IMPLEMENTED"
+            }
+            Self::InvalidXml(message) if message.contains("SAML_SIGNATURE_INVALID") => {
+                "SAML_SIGNATURE_INVALID"
+            }
+            Self::InvalidXml(message) if message.contains("SAML_ASSERTION_DECRYPTION_FAILED") => {
+                "SAML_ASSERTION_DECRYPTION_FAILED"
+            }
+            Self::InvalidXml(_) => "INVALID_SAML_RESPONSE",
         }
     }
 
@@ -146,6 +197,7 @@ pub struct ParsedSamlResponse {
     pub status_code: Option<String>,
     pub has_signature: bool,
     pub signature: SamlSignatureInfo,
+    pub signature_verified: bool,
     pub algorithms: SamlRuntimeAlgorithms,
     pub assertion: ParsedSamlAssertion,
 }
@@ -199,6 +251,252 @@ pub fn parse_saml_response_with_decryption_detailed(
         return parse_saml_response_xml_detailed(&decrypted);
     }
     parse_saml_response_xml_detailed(&xml)
+}
+
+fn requires_opensaml_parse(xml: &str) -> bool {
+    xml.contains("EncryptedAssertion") || xml.contains("<Signature") || xml.contains(":Signature")
+}
+
+#[cfg(feature = "saml-signed")]
+fn parse_saml_response_via_opensaml(
+    encoded_response: &str,
+    context: &SamlLoginParseContext<'_>,
+) -> Result<ParsedSamlResponse, SamlResponseParseError> {
+    let sp = create_service_provider(
+        context.config,
+        context.base_url,
+        context.provider_id,
+        &context.build_options,
+    )
+    .map_err(|error| map_opensaml_parse_error(error, ""))?;
+    let idp = create_identity_provider(context.config)
+        .map_err(|error| map_opensaml_parse_error(error, ""))?;
+    let xml = decode_saml_response_xml_detailed(encoded_response)?;
+    let has_encrypted = xml.contains("EncryptedAssertion");
+    let check_signature = encoded_response_contains_signature(encoded_response)
+        || context.config.want_assertions_signed
+        || has_encrypted;
+    let flow = parse_login_response(
+        &sp,
+        &idp,
+        encoded_response,
+        context.in_response_to,
+        check_signature,
+    )
+    .map_err(|error| map_opensaml_parse_error(error, &xml))?;
+    map_flow_result_to_parsed_response(&flow, check_signature)
+}
+
+#[cfg(not(feature = "saml-signed"))]
+fn parse_saml_response_via_opensaml(
+    _encoded_response: &str,
+    _context: &SamlLoginParseContext<'_>,
+) -> Result<ParsedSamlResponse, SamlResponseParseError> {
+    Err(SamlResponseParseError::InvalidXml(
+        "SAML_SIGNATURE_VALIDATION_NOT_IMPLEMENTED".to_owned(),
+    ))
+}
+
+fn encoded_response_contains_signature(encoded_response: &str) -> bool {
+    decode_saml_response_xml_detailed(encoded_response)
+        .map(|xml| xml.contains("<Signature") || xml.contains(":Signature"))
+        .unwrap_or(false)
+}
+
+fn map_flow_result_to_parsed_response(
+    flow: &opensaml::flow::FlowResult,
+    signature_checked: bool,
+) -> Result<ParsedSamlResponse, SamlResponseParseError> {
+    let algorithms = collect_saml_runtime_algorithms(&flow.saml_content)
+        .map_err(SamlResponseParseError::from)?;
+    let assertion_id = assertion_id_from_saml_content(&flow.saml_content)
+        .ok_or(SamlResponseParseError::MissingAssertionId)?;
+    let signature = signature_info_from_content(
+        &flow.saml_content,
+        signature_checked,
+        flow.sig_alg.is_some(),
+    );
+    let conditions = map_flow_to_conditions(&flow.extract);
+    let mut attributes = map_flow_attributes(&flow.extract);
+    if attributes.is_empty() {
+        attributes = extract_assertion_attributes_from_xml(&flow.saml_content);
+    }
+    Ok(ParsedSamlResponse {
+        response_destination: flow
+            .extract
+            .get_str("response.destination")
+            .map(str::to_owned),
+        response_in_response_to: flow
+            .extract
+            .get_str("response.inResponseTo")
+            .map(str::to_owned),
+        response_issuer: flow.extract.get_str("issuer").map(str::to_owned),
+        status_code: flow.extract.get_str("response.status").map(str::to_owned),
+        has_signature: signature.is_signed(),
+        signature,
+        signature_verified: signature_checked && (flow.sig_alg.is_some() || signature.is_signed()),
+        algorithms: runtime_algorithms_from_sig(flow.sig_alg.as_deref(), algorithms),
+        assertion: ParsedSamlAssertion {
+            id: assertion_id,
+            issuer: flow.extract.get_str("issuer").map(str::to_owned),
+            name_id: flow.extract.get_str("nameID").map(str::to_owned),
+            audiences: audience_values(&flow.extract),
+            conditions,
+            subject_confirmation: None,
+            attributes,
+            session_index: flow
+                .extract
+                .get_str("sessionIndex.sessionIndex")
+                .or_else(|| flow.extract.get_str("sessionIndex"))
+                .map(str::to_owned),
+        },
+    })
+}
+
+fn extract_assertion_attributes_from_xml(xml: &str) -> BTreeMap<String, String> {
+    let mut attributes = BTreeMap::new();
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut current_attribute: Option<(String, String)> = None;
+    let mut current_text = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(element)) => {
+                if local_name(element.name().as_ref()).ok().as_deref() == Some("Attribute") {
+                    current_text.clear();
+                    let key = attr(&reader, &element, "Name")
+                        .ok()
+                        .flatten()
+                        .or_else(|| attr(&reader, &element, "FriendlyName").ok().flatten());
+                    current_attribute = key.map(|key| (key, String::new()));
+                }
+            }
+            Ok(Event::Empty(element)) => {
+                if local_name(element.name().as_ref()).ok().as_deref() == Some("Attribute") {
+                    if let Ok(Some(key)) = attr(&reader, &element, "Name") {
+                        attributes.insert(key, String::new());
+                    }
+                }
+            }
+            Ok(Event::Text(text)) => {
+                if current_attribute.is_some() {
+                    if let Ok(value) = text.unescape() {
+                        current_text.push_str(&value);
+                    }
+                }
+            }
+            Ok(Event::End(element)) => {
+                if local_name(element.name().as_ref()).ok().as_deref() == Some("Attribute") {
+                    if let Some((key, value)) = current_attribute.take() {
+                        let resolved = if value.is_empty() {
+                            current_text.clone()
+                        } else {
+                            value
+                        };
+                        attributes.insert(key, resolved);
+                    }
+                    current_text.clear();
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    attributes
+}
+
+fn audience_values(extract: &opensaml::util::Value) -> Vec<String> {
+    match extract.get("audience") {
+        Some(opensaml::util::Value::Str(value)) => vec![value.clone()],
+        Some(opensaml::util::Value::Array(items)) => items
+            .iter()
+            .filter_map(opensaml::util::Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn runtime_algorithms_from_sig(
+    sig_alg: Option<&str>,
+    mut algorithms: SamlRuntimeAlgorithms,
+) -> SamlRuntimeAlgorithms {
+    if let Some(sig_alg) = sig_alg {
+        if !algorithms
+            .signature_algorithms
+            .iter()
+            .any(|value| value == sig_alg)
+        {
+            algorithms.signature_algorithms.push(sig_alg.to_owned());
+        }
+    }
+    algorithms
+}
+
+fn assertion_signature_present(xml: &str) -> bool {
+    let Some(assertion_start) = xml
+        .find("<saml:Assertion")
+        .or_else(|| xml.find("<saml2:Assertion"))
+        .or_else(|| xml.find("<Assertion"))
+        .or_else(|| xml.find(":Assertion"))
+    else {
+        return false;
+    };
+    let tail = &xml[assertion_start..];
+    tail.contains("<ds:Signature") || tail.contains("<Signature")
+}
+
+fn signature_info_from_content(
+    xml: &str,
+    signature_checked: bool,
+    verified: bool,
+) -> SamlSignatureInfo {
+    let response = xml.contains("<ds:Signature") || xml.contains("<Signature");
+    let assertion = assertion_signature_present(xml);
+    let count = usize::from(response) + usize::from(assertion && !response);
+    SamlSignatureInfo {
+        count: if signature_checked && verified {
+            count.max(1)
+        } else {
+            count
+        },
+        response,
+        assertion,
+        logout_request: false,
+        logout_response: false,
+    }
+}
+
+fn map_opensaml_parse_error(
+    error: opensaml::error::OpenSamlError,
+    xml: &str,
+) -> SamlResponseParseError {
+    match &error {
+        opensaml::error::OpenSamlError::FailedToVerifySignature
+        | opensaml::error::OpenSamlError::FailedMessageSignatureVerification
+        | opensaml::error::OpenSamlError::PotentialWrappingAttack
+        | opensaml::error::OpenSamlError::UnmatchCertificate => {
+            return SamlResponseParseError::InvalidXml("SAML_SIGNATURE_INVALID".to_owned());
+        }
+        opensaml::error::OpenSamlError::Crypto(_) if xml.contains("EncryptedAssertion") => {
+            return SamlResponseParseError::Decryption(
+                SamlAssertionDecryptionError::DecryptionFailed,
+            );
+        }
+        opensaml::error::OpenSamlError::Crypto(_) => {
+            return SamlResponseParseError::InvalidXml("SAML_SIGNATURE_INVALID".to_owned());
+        }
+        _ => {}
+    }
+    let code = opensaml_error_code(&error);
+    if code == "SAML_ASSERTION_DECRYPTION_FAILED" && xml.contains("EncryptedAssertion") {
+        return SamlResponseParseError::Decryption(SamlAssertionDecryptionError::DecryptionFailed);
+    }
+    if code == "SAML_SIGNATURE_INVALID" {
+        return SamlResponseParseError::InvalidXml("SAML_SIGNATURE_INVALID".to_owned());
+    }
+    SamlResponseParseError::InvalidXml(format!("{error} ({code})"))
 }
 
 fn parse_saml_response_xml(xml: &str) -> Result<ParsedSamlResponse, OpenAuthError> {
@@ -420,6 +718,7 @@ impl SamlResponseParseState {
             status_code: self.status_code,
             has_signature: self.has_signature,
             signature: self.signature,
+            signature_verified: false,
             algorithms,
             assertion: ParsedSamlAssertion {
                 id: assertion_id,

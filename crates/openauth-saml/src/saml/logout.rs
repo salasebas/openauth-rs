@@ -9,10 +9,24 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use url::Url;
 
+use crate::bridge::{
+    build_sp_logout_request, build_sp_logout_response, parse_inbound_logout_request,
+    parse_inbound_logout_response, SpBuildOptions,
+};
 use crate::options::SamlConfig;
 use crate::saml_impl::metadata::first_single_logout_service_location;
 use crate::saml_impl::signature::SamlSignatureInfo;
 use crate::saml_impl::xml::{local_name, validate_saml_xml};
+use opensaml::constants::Binding;
+use opensaml::flow::HttpRequest;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SamlLogoutBuildContext<'a> {
+    pub config: &'a SamlConfig,
+    pub base_url: &'a str,
+    pub provider_id: &'a str,
+    pub build_options: SpBuildOptions,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SamlLogoutRequest {
@@ -60,8 +74,31 @@ pub fn build_logout_request_redirect(
 
 pub fn build_logout_request_binding(
     config: &SamlConfig,
+    build: &SamlLogoutBuildContext<'_>,
     input: SamlLogoutRequestInput,
 ) -> Result<SamlLogoutBindingResponse, SamlLogoutRequestError> {
+    #[cfg(feature = "saml-signed")]
+    {
+        let destination = idp_logout_service(config);
+        let binding = logout_service_binding(&destination);
+        let ctx = build_sp_logout_request(
+            config,
+            build.base_url,
+            build.provider_id,
+            &build.build_options,
+            &input.request_id,
+            &input.name_id,
+            input.session_index.as_deref(),
+            Some(input.relay_state.as_str()),
+            binding,
+        )
+        .map_err(map_logout_build_error)?;
+        return Ok(binding_context_to_response(ctx));
+    }
+    #[cfg(not(feature = "saml-signed"))]
+    {
+        let _ = build;
+    }
     let destination = idp_logout_service(config);
     let xml = logout_request_xml_for_destination(config, &input, &destination.location)?;
     let binding = if destination.binding == SamlLogoutServiceBinding::Post {
@@ -112,10 +149,32 @@ pub fn build_logout_response_redirect(
 
 pub fn build_logout_response_binding(
     config: &SamlConfig,
+    build: &SamlLogoutBuildContext<'_>,
     response_id: String,
     in_response_to: &str,
     relay_state: Option<&str>,
 ) -> Result<SamlLogoutBindingResponse, SamlLogoutRequestError> {
+    #[cfg(feature = "saml-signed")]
+    {
+        let destination = idp_logout_service(config);
+        let binding = logout_service_binding(&destination);
+        let ctx = build_sp_logout_response(
+            config,
+            build.base_url,
+            build.provider_id,
+            &build.build_options,
+            &response_id,
+            in_response_to,
+            relay_state,
+            binding,
+        )
+        .map_err(map_logout_build_error)?;
+        return Ok(binding_context_to_response(ctx));
+    }
+    #[cfg(not(feature = "saml-signed"))]
+    {
+        let _ = build;
+    }
     let destination = idp_logout_service(config);
     let xml = logout_response_xml_for_destination(
         config,
@@ -357,8 +416,17 @@ pub struct ParsedSamlLogoutResponse {
     pub signature: SamlSignatureInfo,
 }
 
+pub type SamlLogoutParseContext<'a> = SamlLogoutBuildContext<'a>;
+
 pub fn parse_post_logout_request(encoded: &str) -> Result<ParsedSamlLogoutRequest, OpenAuthError> {
     parse_logout_request_xml(&decode_base64_xml(encoded)?)
+}
+
+pub fn parse_post_logout_request_with_context(
+    encoded: &str,
+    context: &SamlLogoutParseContext<'_>,
+) -> Result<ParsedSamlLogoutRequest, OpenAuthError> {
+    parse_logout_request_via_opensaml(encoded, context, Binding::Post, None)
 }
 
 pub fn parse_post_logout_response(
@@ -367,16 +435,250 @@ pub fn parse_post_logout_response(
     parse_logout_response_xml(&decode_base64_xml(encoded)?)
 }
 
+pub fn parse_post_logout_response_with_context(
+    encoded: &str,
+    context: &SamlLogoutParseContext<'_>,
+) -> Result<ParsedSamlLogoutResponse, OpenAuthError> {
+    parse_logout_response_via_opensaml(encoded, context, Binding::Post, None)
+}
+
 pub fn parse_redirect_logout_request(
     encoded: &str,
 ) -> Result<ParsedSamlLogoutRequest, OpenAuthError> {
     parse_logout_request_xml(&decode_redirect_xml(encoded)?)
 }
 
+pub fn parse_redirect_logout_request_with_context(
+    encoded: &str,
+    context: &SamlLogoutParseContext<'_>,
+) -> Result<ParsedSamlLogoutRequest, OpenAuthError> {
+    parse_logout_request_via_opensaml(encoded, context, Binding::Redirect, None)
+}
+
+pub fn parse_redirect_logout_request_with_redirect_query(
+    encoded: &str,
+    context: &SamlLogoutParseContext<'_>,
+    redirect_query: &[(String, String)],
+) -> Result<ParsedSamlLogoutRequest, OpenAuthError> {
+    parse_logout_request_via_opensaml(encoded, context, Binding::Redirect, Some(redirect_query))
+}
+
 pub fn parse_redirect_logout_response(
     encoded: &str,
 ) -> Result<ParsedSamlLogoutResponse, OpenAuthError> {
     parse_logout_response_xml(&decode_redirect_xml(encoded)?)
+}
+
+pub fn parse_redirect_logout_response_with_context(
+    encoded: &str,
+    context: &SamlLogoutParseContext<'_>,
+) -> Result<ParsedSamlLogoutResponse, OpenAuthError> {
+    parse_logout_response_via_opensaml(encoded, context, Binding::Redirect, None)
+}
+
+pub fn parse_redirect_logout_response_with_redirect_query(
+    encoded: &str,
+    context: &SamlLogoutParseContext<'_>,
+    redirect_query: &[(String, String)],
+) -> Result<ParsedSamlLogoutResponse, OpenAuthError> {
+    parse_logout_response_via_opensaml(encoded, context, Binding::Redirect, Some(redirect_query))
+}
+
+#[cfg(feature = "saml-signed")]
+fn parse_logout_request_via_opensaml(
+    encoded: &str,
+    context: &SamlLogoutParseContext<'_>,
+    binding: Binding,
+    redirect_query: Option<&[(String, String)]>,
+) -> Result<ParsedSamlLogoutRequest, OpenAuthError> {
+    let compact = encoded.split_whitespace().collect::<String>();
+    let xml = logout_xml_from_encoded(&compact, binding)?;
+    validate_saml_xml(&xml)?;
+    if should_use_legacy_logout_request_parse(&xml, context, redirect_query) {
+        return parse_logout_request_xml(&xml);
+    }
+    let request = match binding {
+        Binding::Redirect => HttpRequest::redirect(
+            redirect_query
+                .map(|query| query.to_vec())
+                .unwrap_or_else(|| vec![("SAMLRequest".to_owned(), compact)]),
+        ),
+        _ => HttpRequest::post(vec![("SAMLRequest".to_owned(), compact)]),
+    };
+    let flow = parse_inbound_logout_request(
+        context.config,
+        context.base_url,
+        context.provider_id,
+        &context.build_options,
+        binding,
+        &request,
+    )
+    .map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    validate_saml_xml(&flow.saml_content)?;
+    map_flow_to_logout_request(&flow)
+}
+
+#[cfg(not(feature = "saml-signed"))]
+fn parse_logout_request_via_opensaml(
+    encoded: &str,
+    _context: &SamlLogoutParseContext<'_>,
+    binding: Binding,
+    _redirect_query: Option<&[(String, String)]>,
+) -> Result<ParsedSamlLogoutRequest, OpenAuthError> {
+    match binding {
+        Binding::Redirect => parse_redirect_logout_request(encoded),
+        _ => parse_post_logout_request(encoded),
+    }
+}
+
+#[cfg(feature = "saml-signed")]
+fn parse_logout_response_via_opensaml(
+    encoded: &str,
+    context: &SamlLogoutParseContext<'_>,
+    binding: Binding,
+    redirect_query: Option<&[(String, String)]>,
+) -> Result<ParsedSamlLogoutResponse, OpenAuthError> {
+    let compact = encoded.split_whitespace().collect::<String>();
+    let xml = logout_xml_from_encoded(&compact, binding)?;
+    validate_saml_xml(&xml)?;
+    if should_use_legacy_logout_response_parse(&xml, context, redirect_query) {
+        return parse_logout_response_xml(&xml);
+    }
+    let request = match binding {
+        Binding::Redirect => HttpRequest::redirect(
+            redirect_query
+                .map(|query| query.to_vec())
+                .unwrap_or_else(|| vec![("SAMLResponse".to_owned(), compact)]),
+        ),
+        _ => HttpRequest::post(vec![("SAMLResponse".to_owned(), compact)]),
+    };
+    let flow = parse_inbound_logout_response(
+        context.config,
+        context.base_url,
+        context.provider_id,
+        &context.build_options,
+        binding,
+        &request,
+    )
+    .map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    validate_saml_xml(&flow.saml_content)?;
+    map_flow_to_logout_response(&flow)
+}
+
+#[cfg(not(feature = "saml-signed"))]
+fn parse_logout_response_via_opensaml(
+    encoded: &str,
+    _context: &SamlLogoutParseContext<'_>,
+    binding: Binding,
+    _redirect_query: Option<&[(String, String)]>,
+) -> Result<ParsedSamlLogoutResponse, OpenAuthError> {
+    match binding {
+        Binding::Redirect => parse_redirect_logout_response(encoded),
+        _ => parse_post_logout_response(encoded),
+    }
+}
+
+fn logout_xml_from_encoded(encoded: &str, binding: Binding) -> Result<String, OpenAuthError> {
+    match binding {
+        Binding::Redirect => decode_redirect_xml(encoded),
+        _ => decode_base64_xml(encoded),
+    }
+}
+
+fn logout_xml_has_signature(xml: &str) -> bool {
+    xml.contains(":Signature") || xml.contains("<Signature")
+}
+
+fn redirect_query_has_signature(query: &[(String, String)]) -> bool {
+    query.iter().any(|(key, _)| key == "Signature")
+}
+
+fn should_use_legacy_logout_request_parse(
+    xml: &str,
+    _context: &SamlLogoutParseContext<'_>,
+    redirect_query: Option<&[(String, String)]>,
+) -> bool {
+    if redirect_query.is_some_and(redirect_query_has_signature) {
+        // Detached redirect signatures are verified outside opensaml parse.
+        return true;
+    }
+    !logout_xml_has_signature(xml)
+}
+
+fn should_use_legacy_logout_response_parse(
+    xml: &str,
+    _context: &SamlLogoutParseContext<'_>,
+    redirect_query: Option<&[(String, String)]>,
+) -> bool {
+    if redirect_query.is_some_and(redirect_query_has_signature) {
+        return true;
+    }
+    !logout_xml_has_signature(xml)
+}
+
+fn map_flow_to_logout_request(
+    flow: &opensaml::flow::FlowResult,
+) -> Result<ParsedSamlLogoutRequest, OpenAuthError> {
+    let xml = &flow.saml_content;
+    let has_signature = xml.contains("<Signature") || xml.contains(":Signature");
+    let mut signature = SamlSignatureInfo::default();
+    if has_signature {
+        signature.count = 1;
+        signature.logout_request = true;
+    }
+    let id = flow
+        .extract
+        .get("request")
+        .and_then(|value| value.get_str("id"))
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            opensaml::xml::extract(
+                xml,
+                &[
+                    opensaml::xml::ExtractorField::new("request", &["LogoutRequest"])
+                        .attrs(&["ID"]),
+                ],
+            )
+            .ok()
+            .and_then(|value| value.get_str("request.id").map(str::to_owned))
+        })
+        .ok_or_else(|| OpenAuthError::Api("SAML LogoutRequest missing ID".to_owned()))?;
+    Ok(ParsedSamlLogoutRequest {
+        id,
+        name_id: flow.extract.get_str("nameID").map(str::to_owned),
+        session_index: flow.extract.get_str("sessionIndex").map(str::to_owned),
+        has_signature,
+        signature,
+    })
+}
+
+fn map_flow_to_logout_response(
+    flow: &opensaml::flow::FlowResult,
+) -> Result<ParsedSamlLogoutResponse, OpenAuthError> {
+    let xml = &flow.saml_content;
+    let has_signature = xml.contains("<Signature") || xml.contains(":Signature");
+    let mut signature = SamlSignatureInfo::default();
+    if has_signature {
+        signature.count = 1;
+        signature.logout_response = true;
+    }
+    Ok(ParsedSamlLogoutResponse {
+        in_response_to: flow
+            .extract
+            .get("response")
+            .and_then(|value| value.get_str("inResponseTo"))
+            .or_else(|| flow.extract.get_str("response.inResponseTo"))
+            .map(str::to_owned),
+        status_code: flow
+            .extract
+            .get("response")
+            .and_then(|value| value.get_str("status"))
+            .or_else(|| flow.extract.get_str("response.status"))
+            .map(str::to_owned),
+        has_signature,
+        signature,
+    })
 }
 
 fn parse_logout_request_xml(xml: &str) -> Result<ParsedSamlLogoutRequest, OpenAuthError> {
@@ -542,6 +844,35 @@ fn escape_xml(value: &str) -> String {
         .replace('\'', "&apos;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+#[cfg(feature = "saml-signed")]
+fn logout_service_binding(
+    destination: &SamlLogoutServiceDestination,
+) -> opensaml::constants::Binding {
+    match destination.binding {
+        SamlLogoutServiceBinding::Post => opensaml::constants::Binding::Post,
+        SamlLogoutServiceBinding::Redirect => opensaml::constants::Binding::Redirect,
+    }
+}
+
+#[cfg(feature = "saml-signed")]
+fn binding_context_to_response(ctx: opensaml::entity::BindingContext) -> SamlLogoutBindingResponse {
+    let binding = match ctx.binding {
+        opensaml::constants::Binding::Post => SamlLogoutBinding::Post {
+            html: ctx.post_form(),
+        },
+        _ => SamlLogoutBinding::Redirect { url: ctx.context },
+    };
+    SamlLogoutBindingResponse {
+        id: ctx.id,
+        binding,
+    }
+}
+
+#[cfg(feature = "saml-signed")]
+fn map_logout_build_error(error: opensaml::error::OpenSamlError) -> SamlLogoutRequestError {
+    SamlLogoutRequestError::Encode(error.to_string())
 }
 
 #[derive(Debug, thiserror::Error)]

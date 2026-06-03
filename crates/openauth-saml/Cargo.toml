@@ -16,13 +16,14 @@ path = "src/lib.rs"
 
 [features]
 default = []
-saml-signed = []
+saml-signed = ["opensaml/crypto-bergshamra"]
 
 [dependencies]
 base64.workspace = true
 flate2.workspace = true
 http.workspace = true
 openauth-core.workspace = true
+opensaml = { workspace = true, default-features = false }
 quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
