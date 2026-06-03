@@ -294,6 +294,10 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
     )
 }
 
+fn normalize_stored_oidc_endpoint(endpoint: Option<String>) -> Option<String> {
+    endpoint.filter(|value| !value.is_empty())
+}
+
 fn merge_oidc_config(mut existing: OidcConfig, update: UpdateOidcConfig) -> OidcConfig {
     if let Some(value) = update.client_id {
         existing.client_id = value;
@@ -308,28 +312,30 @@ fn merge_oidc_config(mut existing: OidcConfig, update: UpdateOidcConfig) -> Oidc
         existing.pkce = value;
     }
     if update.authorization_endpoint.is_some() {
-        existing.authorization_endpoint = update.authorization_endpoint;
+        existing.authorization_endpoint =
+            normalize_stored_oidc_endpoint(update.authorization_endpoint);
     }
     if update.token_endpoint.is_some() {
-        existing.token_endpoint = update.token_endpoint;
+        existing.token_endpoint = normalize_stored_oidc_endpoint(update.token_endpoint);
     }
     if update.user_info_endpoint.is_some() {
-        existing.user_info_endpoint = update.user_info_endpoint;
+        existing.user_info_endpoint = normalize_stored_oidc_endpoint(update.user_info_endpoint);
     }
     if let Some(value) = update.token_endpoint_authentication {
         existing.token_endpoint_authentication = Some(value);
     }
     if update.jwks_endpoint.is_some() {
-        existing.jwks_endpoint = update.jwks_endpoint;
+        existing.jwks_endpoint = normalize_stored_oidc_endpoint(update.jwks_endpoint);
     }
     if update.revocation_endpoint.is_some() {
-        existing.revocation_endpoint = update.revocation_endpoint;
+        existing.revocation_endpoint = normalize_stored_oidc_endpoint(update.revocation_endpoint);
     }
     if update.end_session_endpoint.is_some() {
-        existing.end_session_endpoint = update.end_session_endpoint;
+        existing.end_session_endpoint = normalize_stored_oidc_endpoint(update.end_session_endpoint);
     }
     if update.introspection_endpoint.is_some() {
-        existing.introspection_endpoint = update.introspection_endpoint;
+        existing.introspection_endpoint =
+            normalize_stored_oidc_endpoint(update.introspection_endpoint);
     }
     if let Some(value) = update.discovery_endpoint {
         existing.discovery_endpoint = value;

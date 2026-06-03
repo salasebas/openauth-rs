@@ -26,6 +26,32 @@ pub struct OidcDiscoveryDocument {
     pub code_challenge_methods_supported: Option<Vec<String>>,
 }
 
+/// Returns true when an optional endpoint URL is present and non-empty.
+///
+/// Better Auth treats empty strings as missing for runtime discovery
+/// (`!config.tokenEndpoint` is true for `""`).
+pub fn is_configured_oidc_endpoint(endpoint: Option<&str>) -> bool {
+    endpoint.is_some_and(|value| !value.is_empty())
+}
+
+fn merge_required_endpoint(existing: Option<&str>, discovered: String) -> String {
+    existing
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or(discovered)
+}
+
+fn merge_optional_endpoint(existing: Option<&str>, discovered: Option<String>) -> Option<String> {
+    if let Some(value) = existing.filter(|value| !value.is_empty()) {
+        return Some(value.to_owned());
+    }
+    discovered
+}
+
+fn non_empty_endpoint(endpoint: Option<&str>) -> Option<&str> {
+    endpoint.filter(|value| !value.is_empty())
+}
+
 pub fn compute_discovery_url(issuer: &str) -> String {
     format!(
         "{}/.well-known/openid-configuration",
@@ -131,34 +157,28 @@ where
             .map(str::to_owned)
             .unwrap_or(normalized.issuer),
         discovery_endpoint,
-        authorization_endpoint: existing
-            .authorization_endpoint
-            .map(str::to_owned)
-            .unwrap_or(normalized.authorization_endpoint),
-        token_endpoint: existing
-            .token_endpoint
-            .map(str::to_owned)
-            .unwrap_or(normalized.token_endpoint),
-        jwks_endpoint: existing
-            .jwks_endpoint
-            .map(str::to_owned)
-            .unwrap_or(normalized.jwks_uri),
-        user_info_endpoint: existing
-            .user_info_endpoint
-            .map(str::to_owned)
-            .or(normalized.userinfo_endpoint),
-        revocation_endpoint: existing
-            .revocation_endpoint
-            .map(str::to_owned)
-            .or(normalized.revocation_endpoint),
-        end_session_endpoint: existing
-            .end_session_endpoint
-            .map(str::to_owned)
-            .or(normalized.end_session_endpoint),
-        introspection_endpoint: existing
-            .introspection_endpoint
-            .map(str::to_owned)
-            .or(normalized.introspection_endpoint),
+        authorization_endpoint: merge_required_endpoint(
+            existing.authorization_endpoint,
+            normalized.authorization_endpoint,
+        ),
+        token_endpoint: merge_required_endpoint(existing.token_endpoint, normalized.token_endpoint),
+        jwks_endpoint: merge_required_endpoint(existing.jwks_endpoint, normalized.jwks_uri),
+        user_info_endpoint: merge_optional_endpoint(
+            existing.user_info_endpoint,
+            normalized.userinfo_endpoint,
+        ),
+        revocation_endpoint: merge_optional_endpoint(
+            existing.revocation_endpoint,
+            normalized.revocation_endpoint,
+        ),
+        end_session_endpoint: merge_optional_endpoint(
+            existing.end_session_endpoint,
+            normalized.end_session_endpoint,
+        ),
+        introspection_endpoint: merge_optional_endpoint(
+            existing.introspection_endpoint,
+            normalized.introspection_endpoint,
+        ),
         token_endpoint_authentication,
         scopes_supported: normalized.scopes_supported,
     };
@@ -309,9 +329,9 @@ impl OidcRuntimeRequirement {
         // Preserve the enum for API clarity while keeping both modes aligned
         // with that upstream contract.
         let _ = self;
-        config.authorization_endpoint.is_some()
-            && config.token_endpoint.is_some()
-            && config.jwks_endpoint.is_some()
+        is_configured_oidc_endpoint(config.authorization_endpoint.as_deref())
+            && is_configured_oidc_endpoint(config.token_endpoint.as_deref())
+            && is_configured_oidc_endpoint(config.jwks_endpoint.as_deref())
     }
 }
 
@@ -344,13 +364,13 @@ where
             issuer: Some(config.issuer.as_str()),
             discovery_endpoint: (!config.discovery_endpoint.is_empty())
                 .then_some(config.discovery_endpoint.as_str()),
-            authorization_endpoint: config.authorization_endpoint.as_deref(),
-            token_endpoint: config.token_endpoint.as_deref(),
-            user_info_endpoint: config.user_info_endpoint.as_deref(),
-            jwks_endpoint: config.jwks_endpoint.as_deref(),
-            revocation_endpoint: config.revocation_endpoint.as_deref(),
-            end_session_endpoint: config.end_session_endpoint.as_deref(),
-            introspection_endpoint: config.introspection_endpoint.as_deref(),
+            authorization_endpoint: non_empty_endpoint(config.authorization_endpoint.as_deref()),
+            token_endpoint: non_empty_endpoint(config.token_endpoint.as_deref()),
+            user_info_endpoint: non_empty_endpoint(config.user_info_endpoint.as_deref()),
+            jwks_endpoint: non_empty_endpoint(config.jwks_endpoint.as_deref()),
+            revocation_endpoint: non_empty_endpoint(config.revocation_endpoint.as_deref()),
+            end_session_endpoint: non_empty_endpoint(config.end_session_endpoint.as_deref()),
+            introspection_endpoint: non_empty_endpoint(config.introspection_endpoint.as_deref()),
             token_endpoint_authentication: config.token_endpoint_authentication,
         },
         &is_trusted_origin,
@@ -716,6 +736,28 @@ mod tests {
     }
 
     #[test]
+    fn normalize_endpoint_resolves_relative_urls_with_duplicate_slashes(
+    ) -> Result<(), OidcDiscoveryError> {
+        assert_eq!(
+            normalize_endpoint(
+                "token_endpoint",
+                "//oauth2/token",
+                "https://idp.example.com/base//",
+            )?,
+            "https://idp.example.com/base/oauth2/token"
+        );
+        assert_eq!(
+            normalize_endpoint(
+                "token_endpoint",
+                "oauth2/token",
+                "https://idp.example.com/base/"
+            )?,
+            "https://idp.example.com/base/oauth2/token"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn endpoint_url_api_resolves_relative_values_against_issuer_path(
     ) -> Result<(), OidcDiscoveryError> {
         assert_eq!(
@@ -733,6 +775,49 @@ mod tests {
         )
         .is_err());
         Ok::<(), OidcDiscoveryError>(())
+    }
+
+    #[test]
+    fn is_configured_oidc_endpoint_treats_empty_string_as_missing() {
+        assert!(!is_configured_oidc_endpoint(None));
+        assert!(!is_configured_oidc_endpoint(Some("")));
+        assert!(is_configured_oidc_endpoint(Some(
+            "https://idp.example.com/oauth2/v1/authorize"
+        )));
+    }
+
+    #[test]
+    fn runtime_discovery_treats_empty_string_endpoints_as_missing() {
+        let config = OidcConfig {
+            issuer: "https://idp.example.com".to_owned(),
+            pkce: true,
+            client_id: "client".to_owned(),
+            client_secret: "secret".into(),
+            discovery_endpoint: compute_discovery_url("https://idp.example.com"),
+            authorization_endpoint: Some(String::new()),
+            token_endpoint: Some("https://idp.example.com/token".to_owned()),
+            user_info_endpoint: None,
+            jwks_endpoint: Some("https://idp.example.com/keys".to_owned()),
+            revocation_endpoint: None,
+            end_session_endpoint: None,
+            introspection_endpoint: None,
+            token_endpoint_authentication: None,
+            scopes: None,
+            mapping: None,
+            override_user_info: false,
+        };
+
+        assert!(needs_runtime_discovery(
+            &config,
+            OidcRuntimeRequirement::SignIn
+        ));
+        assert!(needs_runtime_discovery(
+            &config,
+            OidcRuntimeRequirement::Callback
+        ));
+        assert!(!is_configured_oidc_endpoint(
+            config.authorization_endpoint.as_deref()
+        ));
     }
 
     #[test]
@@ -876,6 +961,60 @@ mod tests {
                 Err(OidcDiscoveryError::MissingField(missing)) if missing == field
             ));
         }
+    }
+
+    #[test]
+    fn discovery_validation_normalizes_issuer_trailing_slash() {
+        let document = discovery_document("https://idp.example.com/");
+        assert!(validate_discovery_document(&document, "https://idp.example.com").is_ok());
+        let document = discovery_document("https://idp.example.com");
+        assert!(validate_discovery_document(&document, "https://idp.example.com/").is_ok());
+    }
+
+    #[test]
+    fn discovery_validation_rejects_issuer_mismatch() {
+        let document = discovery_document("https://evil.example.com");
+        assert!(matches!(
+            validate_discovery_document(&document, "https://idp.example.com"),
+            Err(OidcDiscoveryError::IssuerMismatch)
+        ));
+    }
+
+    #[test]
+    fn token_endpoint_authentication_prefers_client_secret_basic_when_both_supported() {
+        let mut document = discovery_document("https://idp.example.com");
+        document.token_endpoint_auth_methods_supported = Some(vec![
+            "client_secret_post".to_owned(),
+            "client_secret_basic".to_owned(),
+        ]);
+        assert_eq!(
+            select_token_endpoint_authentication(&document),
+            TokenEndpointAuthentication::ClientSecretBasic
+        );
+    }
+
+    #[test]
+    fn token_endpoint_authentication_selects_client_secret_post_when_only_supported() {
+        let mut document = discovery_document("https://idp.example.com");
+        document.token_endpoint_auth_methods_supported =
+            Some(vec!["client_secret_post".to_owned()]);
+        assert_eq!(
+            select_token_endpoint_authentication(&document),
+            TokenEndpointAuthentication::ClientSecretPost
+        );
+    }
+
+    #[test]
+    fn normalize_absolute_http_url_accepts_http_and_https() -> Result<(), OidcDiscoveryError> {
+        assert_eq!(
+            normalize_absolute_http_url("discovery_endpoint", "http://idp.example.com/path")?,
+            "http://idp.example.com/path"
+        );
+        assert_eq!(
+            normalize_absolute_http_url("discovery_endpoint", "https://idp.example.com/path")?,
+            "https://idp.example.com/path"
+        );
+        Ok(())
     }
 
     #[test]
@@ -1112,6 +1251,64 @@ mod tests {
         };
         assert_eq!(error.code(), "discovery_untrusted_origin");
         assert!(error.to_string().contains("revocation_endpoint"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discover_ignores_empty_existing_endpoint_overrides(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let base_url = format!("http://{address}");
+        let server_base_url = base_url.clone();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let server_base_url = server_base_url.clone();
+                tokio::spawn(async move {
+                    let mut buffer = [0_u8; 1024];
+                    let Ok(read) = tokio::io::AsyncReadExt::read(&mut stream, &mut buffer).await
+                    else {
+                        return;
+                    };
+                    let request = String::from_utf8_lossy(&buffer[..read]);
+                    let body = if request.starts_with("GET /.well-known/openid-configuration ") {
+                        format!(
+                            r#"{{
+                                "issuer":"{server_base_url}",
+                                "authorization_endpoint":"{server_base_url}/authorize",
+                                "token_endpoint":"{server_base_url}/token",
+                                "jwks_uri":"{server_base_url}/keys"
+                            }}"#
+                        )
+                    } else {
+                        r#"{"error":"not_found"}"#.to_owned()
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ =
+                        tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes()).await;
+                });
+            }
+        });
+
+        let hydrated = discover_oidc_config_with_origin_validator(
+            &base_url,
+            None,
+            PartialOidcDiscoveryConfig {
+                authorization_endpoint: Some(""),
+                ..PartialOidcDiscoveryConfig::default()
+            },
+            |url| url.starts_with(&base_url),
+            &reqwest::Client::new(),
+        )
+        .await?;
+
+        assert_eq!(
+            hydrated.authorization_endpoint,
+            format!("{base_url}/authorize")
+        );
         Ok(())
     }
 

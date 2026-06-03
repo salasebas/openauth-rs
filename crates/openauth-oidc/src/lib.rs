@@ -10,8 +10,8 @@ pub mod options;
 
 pub use discovery::{
     compute_discovery_url, discover_oidc_config, discover_oidc_config_with_origin_validator,
-    ensure_runtime_oidc_config_with_origin_validator, needs_runtime_discovery,
-    normalize_absolute_http_url, normalize_endpoint_url, normalize_url,
+    ensure_runtime_oidc_config_with_origin_validator, is_configured_oidc_endpoint,
+    needs_runtime_discovery, normalize_absolute_http_url, normalize_endpoint_url, normalize_url,
     validate_configured_oidc_endpoint_origins, validate_issuer_url, HydratedOidcDiscovery,
     OidcDiscoveryDocument, OidcDiscoveryError, OidcEndpointConfig, OidcRuntimeRequirement,
     PartialOidcDiscoveryConfig,

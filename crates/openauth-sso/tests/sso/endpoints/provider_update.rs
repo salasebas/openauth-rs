@@ -240,6 +240,71 @@ async fn update_provider_merges_partial_oidc_config_and_keeps_secret(
 
 #[tokio::test]
 #[cfg(feature = "oidc")]
+async fn update_provider_empty_authorization_endpoint_triggers_runtime_discovery_on_sign_in(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let oidc = MockOidcServer::start().await?;
+    let (adapter, router) = router_with_options_and_trusted_origins(
+        SsoOptions::default(),
+        vec![oidc.base_url.clone()],
+    )?;
+    let cookie = seed_session(&adapter).await?;
+
+    router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/register",
+            &format!(
+                r#"{{
+                "providerId":"okta",
+                "issuer":"{}",
+                "domain":"example.com",
+                "oidcConfig":{{
+                    "clientId":"client_123456",
+                    "clientSecret":"super-secret",
+                    "pkce":true
+                }}
+            }}"#,
+                oidc.base_url
+            ),
+            Some(&cookie),
+        )?)
+        .await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/update-provider",
+            r#"{
+                "providerId":"okta",
+                "oidcConfig":{
+                    "authorizationEndpoint":""
+                }
+            }"#,
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(json_body(response)?["oidcConfig"]["authorizationEndpoint"].is_null());
+
+    let sign_in = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sign-in/sso",
+            r#"{"providerId":"okta","callbackURL":"/dashboard"}"#,
+            None,
+        )?)
+        .await?;
+    assert_eq!(sign_in.status(), StatusCode::OK);
+    let sign_in_body = json_body(sign_in)?;
+    assert!(sign_in_body["url"]
+        .as_str()
+        .is_some_and(|url| url.starts_with(&format!("{}/authorize?", oidc.base_url))));
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "oidc")]
 async fn update_provider_rejects_untrusted_manual_oidc_endpoint_when_strict_policy_is_enabled(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut options = SsoOptions::default();

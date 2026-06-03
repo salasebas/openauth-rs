@@ -33,6 +33,9 @@ mod non_sso_linking;
 #[cfg(feature = "oidc")]
 #[path = "endpoints/oidc_callback.rs"]
 mod oidc_callback;
+#[cfg(feature = "oidc")]
+#[path = "endpoints/oidc_upstream_parity.rs"]
+mod oidc_upstream_parity;
 #[path = "endpoints/provider_update.rs"]
 mod provider_update;
 #[path = "endpoints/providers.rs"]
