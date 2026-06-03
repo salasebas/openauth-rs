@@ -137,6 +137,37 @@ async fn saml_acs_accepts_form_urlencoded_body() -> Result<(), Box<dyn std::erro
 }
 
 #[tokio::test]
+async fn saml_post_acs_then_get_callback_completes_login_redirect(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&_adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+    let relay_state = saml_sign_in_relay_state(&router).await?;
+    let saml_response = valid_saml_response(&relay_state, "assertion-post-then-get")?;
+
+    let acs = post_saml_acs(&router, &saml_response, &relay_state).await?;
+    assert_eq!(acs.status(), StatusCode::FOUND);
+    let session_cookie = set_cookie_header(&acs)?;
+
+    let callback = router
+        .handle_async(json_request(
+            Method::GET,
+            "/sso/saml2/callback/saml-okta?RelayState=/dashboard/settings",
+            "",
+            Some(&session_cookie),
+        )?)
+        .await?;
+
+    assert_eq!(callback.status(), StatusCode::FOUND);
+    assert_eq!(
+        callback.headers().get(header::LOCATION),
+        Some(&http::HeaderValue::from_static("/dashboard/settings"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn saml_get_callback_redirects_to_safe_relay_state_with_session(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
@@ -194,6 +225,30 @@ async fn saml_get_callback_falls_back_for_unsafe_relay_state(
         .handle_async(json_request(
             Method::GET,
             "/sso/saml2/callback/saml-okta?RelayState=https%3A%2F%2Fevil.example.com%2Fsteal",
+            "",
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response.headers().get(header::LOCATION),
+        Some(&http::HeaderValue::from_static("https://app.example.com"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn saml_get_callback_falls_back_for_protocol_relative_relay_state(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::GET,
+            "/sso/saml2/callback/saml-okta?RelayState=%2F%2Fevil.example.com%2Fsteal",
             "",
             Some(&cookie),
         )?)

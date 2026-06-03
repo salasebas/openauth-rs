@@ -100,6 +100,33 @@ async fn saml_acs_uses_in_response_to_state_when_relay_state_is_missing(
 }
 
 #[tokio::test]
+async fn saml_acs_rejects_stale_in_response_to_when_relay_state_is_valid(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+    let relay_state = saml_sign_in_relay_state(&router).await?;
+    let saml_response = valid_saml_response(&relay_state, "assertion-stale-in-response-to")?;
+    let saml_response = tamper_base64_xml(
+        &saml_response,
+        &format!(r#"InResponseTo="{relay_state}""#),
+        r#"InResponseTo="stale-authn-request-id""#,
+    )?;
+
+    let callback = post_saml_acs(&router, &saml_response, &relay_state).await?;
+
+    assert_eq!(callback.status(), StatusCode::FOUND);
+    assert_eq!(
+        callback.headers().get(header::LOCATION),
+        Some(&http::HeaderValue::from_static(
+            "/login-error?error=saml_in_response_to_mismatch"
+        ))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn saml_acs_rejects_unknown_in_response_to_without_relay_state(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
@@ -218,6 +245,55 @@ async fn saml_acs_rejects_in_response_to_state_for_another_provider(
 }
 
 #[tokio::test]
+async fn saml_callback_rejects_replayed_assertion_on_second_post(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+
+    let first_relay = saml_sign_in_relay_state(&router).await?;
+    let first_response = valid_saml_response(&first_relay, "assertion-callback-replay")?;
+    let first = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/saml2/callback/saml-okta",
+            &format!(
+                r#"{{"SAMLResponse":{},"RelayState":{}}}"#,
+                serde_json::to_string(&first_response)?,
+                serde_json::to_string(&first_relay)?
+            ),
+            None,
+        )?)
+        .await?;
+    assert_eq!(first.status(), StatusCode::FOUND);
+
+    let second_relay = saml_sign_in_relay_state(&router).await?;
+    let second_response = valid_saml_response(&second_relay, "assertion-callback-replay")?;
+    let second = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/saml2/callback/saml-okta",
+            &format!(
+                r#"{{"SAMLResponse":{},"RelayState":{}}}"#,
+                serde_json::to_string(&second_response)?,
+                serde_json::to_string(&second_relay)?
+            ),
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(second.status(), StatusCode::FOUND);
+    assert_eq!(
+        second.headers().get(header::LOCATION),
+        Some(&http::HeaderValue::from_static(
+            "/login-error?error=replayed_saml_assertion"
+        ))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn saml_acs_rejects_replayed_assertion_id() -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
     let cookie = seed_session(&adapter).await?;
@@ -301,7 +377,7 @@ async fn saml_acs_rejects_assertion_without_id() -> Result<(), Box<dyn std::erro
 }
 
 #[tokio::test]
-async fn saml_acs_rejects_encrypted_assertion_until_decryption_is_supported(
+async fn saml_acs_rejects_encrypted_assertion_without_decryption_key(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
     let cookie = seed_session(&adapter).await?;
@@ -327,7 +403,7 @@ async fn saml_acs_rejects_encrypted_assertion_until_decryption_is_supported(
 }
 
 #[tokio::test]
-async fn saml_acs_rejects_encrypted_assertion_with_key_without_crypto_feature(
+async fn saml_acs_rejects_encrypted_assertion_with_invalid_decryption_key(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
     let cookie = seed_session(&adapter).await?;
@@ -364,7 +440,7 @@ async fn saml_acs_rejects_encrypted_assertion_with_key_without_crypto_feature(
     assert_eq!(
         callback.headers().get(header::LOCATION),
         Some(&http::HeaderValue::from_static(
-            "/login-error?error=encrypted_saml_assertion_unsupported"
+            "/login-error?error=saml_assertion_decryption_failed"
         ))
     );
     assert!(adapter.records("account").await.is_empty());

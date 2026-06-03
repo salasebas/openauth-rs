@@ -1,6 +1,35 @@
 use super::*;
 
 #[tokio::test]
+async fn sign_in_sso_omits_redirect_signature_when_authn_requests_are_unsigned(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sign-in/sso",
+            r#"{"providerId":"saml-okta","providerType":"saml","callbackURL":"/dashboard"}"#,
+            None,
+        )?)
+        .await?;
+
+    let body = json_body(response)?;
+    let url = url::Url::parse(body["url"].as_str().ok_or("missing URL")?)?;
+    let query = url
+        .query_pairs()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert!(query.contains_key("SAMLRequest"));
+    assert!(query.contains_key("RelayState"));
+    assert!(!query.contains_key("Signature"));
+    assert!(!query.contains_key("SigAlg"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn sign_in_sso_with_saml_provider_returns_authn_request_redirect(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
