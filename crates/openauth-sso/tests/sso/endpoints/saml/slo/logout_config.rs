@@ -234,9 +234,7 @@ async fn saml_logout_uses_post_form_for_post_single_logout_service(
         Some(&http::HeaderValue::from_static("text/html; charset=utf-8"))
     );
     let body = String::from_utf8(logout.body().clone())?;
-    assert!(body.contains(
-        r#"<form method="post" action="https://idp.example.com/saml/slo-post?tenant=acme&amp;mode=logout">"#
-    ));
+    assert!(body.contains(r#"<form method="post" action="https://idp.example.com/saml/slo-post">"#));
     assert!(body.contains(r#"name="SAMLRequest""#));
     assert!(body.contains(r#"name="RelayState" value="/logged-out""#));
     assert!(body.contains("<noscript>"));

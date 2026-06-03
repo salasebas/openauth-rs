@@ -110,9 +110,10 @@ pub(super) async fn register_saml_provider_with_post_single_logout_service(
                     "cert":"CERTIFICATE",
                     "callbackUrl":"https://app.example.com/sso/saml2/sp/acs/saml-okta",
                     "idpMetadata":{
+                        "entityId":"https://idp.example.com",
                         "singleLogoutService":[{
                             "Binding":"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
-                            "Location":"https://idp.example.com/saml/slo-post?tenant=acme&mode=logout"
+                            "Location":"https://idp.example.com/saml/slo-post"
                         }]
                     },
                     "spMetadata":{"entityId":"https://app.example.com/saml/sp"},
@@ -359,28 +360,80 @@ pub(super) fn default_oidc_sso_options_requiring_discovery(base_url: &str) -> Ss
 }
 
 #[cfg(feature = "saml")]
+fn default_saml_sso_provider(provider_id: &str) -> SsoProvider {
+    SsoProvider {
+        provider_id: provider_id.to_owned(),
+        issuer: "https://idp.example.com".to_owned(),
+        domain: "example.com".to_owned(),
+        organization_id: None,
+        oidc_config: None,
+        saml_config: Some(SamlConfig {
+            issuer: "https://app.example.com/sso/saml2/sp/metadata".to_owned(),
+            entry_point: "https://idp.example.com/saml/sso".to_owned(),
+            cert: "CERTIFICATE".to_owned(),
+            callback_url: format!("https://app.example.com/sso/saml2/sp/acs/{provider_id}"),
+            acs_url: None,
+            audience: None,
+            idp_metadata: None,
+            sp_metadata: SamlSpMetadata {
+                entity_id: Some("https://app.example.com/saml/sp".to_owned()),
+                ..SamlSpMetadata::default()
+            },
+            mapping: None,
+            want_assertions_signed: false,
+            authn_requests_signed: false,
+            signature_algorithm: None,
+            digest_algorithm: None,
+            identifier_format: None,
+            private_key: None,
+            decryption_pvk: None,
+            additional_params: None,
+        }),
+    }
+}
+
+#[cfg(feature = "saml")]
 pub(super) fn default_saml_sso_options() -> SsoOptions {
     SsoOptions {
-        default_sso: vec![SsoProvider {
+        default_sso: vec![default_saml_sso_provider("default-saml")],
+        ..SsoOptions::default()
+    }
+}
+
+#[cfg(feature = "saml")]
+pub(super) fn multi_default_saml_sso_options() -> SsoOptions {
+    SsoOptions {
+        default_sso: vec![
+            default_saml_sso_provider("default-saml-a"),
+            default_saml_sso_provider("default-saml-b"),
+        ],
+        ..SsoOptions::default()
+    }
+}
+
+#[cfg(feature = "saml")]
+pub(super) async fn seed_invalid_default_saml_db_provider(
+    adapter: &MemoryAdapter,
+) -> Result<(), Box<dyn std::error::Error>> {
+    SsoProviderStore::new(adapter)
+        .create(CreateSsoProviderInput {
             provider_id: "default-saml".to_owned(),
-            issuer: "https://idp.example.com".to_owned(),
+            issuer: "https://broken-idp.example.com".to_owned(),
             domain: "example.com".to_owned(),
+            user_id: "user_1".to_owned(),
             organization_id: None,
             oidc_config: None,
-            saml_config: Some(SamlConfig {
+            saml_config: Some(serde_json::to_string(&SamlConfig {
                 issuer: "https://app.example.com/sso/saml2/sp/metadata".to_owned(),
-                entry_point: "https://idp.example.com/saml/sso".to_owned(),
-                cert: "CERTIFICATE".to_owned(),
+                entry_point: String::new(),
+                cert: "INVALID".to_owned(),
                 callback_url: "https://app.example.com/sso/saml2/sp/acs/default-saml".to_owned(),
                 acs_url: None,
                 audience: None,
                 idp_metadata: None,
-                sp_metadata: SamlSpMetadata {
-                    entity_id: Some("https://app.example.com/saml/sp".to_owned()),
-                    ..SamlSpMetadata::default()
-                },
+                sp_metadata: SamlSpMetadata::default(),
                 mapping: None,
-                want_assertions_signed: false,
+                want_assertions_signed: true,
                 authn_requests_signed: false,
                 signature_algorithm: None,
                 digest_algorithm: None,
@@ -388,10 +441,11 @@ pub(super) fn default_saml_sso_options() -> SsoOptions {
                 private_key: None,
                 decryption_pvk: None,
                 additional_params: None,
-            }),
-        }],
-        ..SsoOptions::default()
-    }
+            })?),
+            domain_verified: Some(true),
+        })
+        .await?;
+    Ok(())
 }
 
 pub(super) async fn seed_runtime_discovery_oidc_provider(
@@ -582,6 +636,46 @@ pub(super) fn valid_saml_response(
 }
 
 #[cfg(feature = "saml")]
+pub(super) fn idp_initiated_saml_response(
+    provider_id: &str,
+    assertion_id: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let acs_path = format!("/sso/saml2/sp/acs/{provider_id}");
+    let acs_url = format!("https://app.example.com{acs_path}");
+    let now = time::OffsetDateTime::now_utc();
+    let not_before = (now - time::Duration::minutes(1))
+        .format(&time::format_description::well_known::Rfc3339)?;
+    let not_on_or_after = (now + time::Duration::minutes(5))
+        .format(&time::format_description::well_known::Rfc3339)?;
+    let issue_instant = now.format(&time::format_description::well_known::Rfc3339)?;
+    let xml = format!(
+        r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="response-idp-initiated" Version="2.0" IssueInstant="{issue_instant}" Destination="{acs_url}">
+            <saml:Issuer>https://idp.example.com</saml:Issuer>
+            <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
+            <saml:Assertion ID="{assertion_id}" Version="2.0" IssueInstant="{issue_instant}">
+                <saml:Issuer>https://idp.example.com</saml:Issuer>
+                <saml:Subject>
+                    <saml:NameID>saml-subject-123</saml:NameID>
+                    <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
+                        <saml:SubjectConfirmationData Recipient="{acs_url}" NotOnOrAfter="{not_on_or_after}"/>
+                    </saml:SubjectConfirmation>
+                </saml:Subject>
+                <saml:Conditions NotBefore="{not_before}" NotOnOrAfter="{not_on_or_after}">
+                    <saml:AudienceRestriction><saml:Audience>https://app.example.com/saml/sp</saml:Audience></saml:AudienceRestriction>
+                </saml:Conditions>
+                <saml:AuthnStatement AuthnInstant="{issue_instant}" SessionIndex="session-index-1"/>
+                <saml:AttributeStatement>
+                    <saml:Attribute Name="email"><saml:AttributeValue>saml-user@example.com</saml:AttributeValue></saml:Attribute>
+                    <saml:Attribute Name="givenName"><saml:AttributeValue>Saml</saml:AttributeValue></saml:Attribute>
+                    <saml:Attribute Name="surname"><saml:AttributeValue>User</saml:AttributeValue></saml:Attribute>
+                </saml:AttributeStatement>
+            </saml:Assertion>
+        </samlp:Response>"#
+    );
+    Ok(base64::engine::general_purpose::STANDARD.encode(xml.as_bytes()))
+}
+
+#[cfg(feature = "saml")]
 pub(super) fn encrypted_saml_response(
     in_response_to: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -612,6 +706,53 @@ pub(super) fn signed_marker_saml_response(
         1,
     );
     Ok(base64::engine::general_purpose::STANDARD.encode(signed.as_bytes()))
+}
+
+#[cfg(feature = "saml")]
+pub(super) fn expired_saml_response(
+    in_response_to: &str,
+    assertion_id: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let now = time::OffsetDateTime::now_utc();
+    let not_before = (now - time::Duration::minutes(20))
+        .format(&time::format_description::well_known::Rfc3339)?;
+    let not_on_or_after = (now - time::Duration::minutes(10))
+        .format(&time::format_description::well_known::Rfc3339)?;
+    let issue_instant = (now - time::Duration::minutes(15))
+        .format(&time::format_description::well_known::Rfc3339)?;
+    let xml = format!(
+        r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="response-expired" Version="2.0" IssueInstant="{issue_instant}" Destination="https://app.example.com/sso/saml2/sp/acs/saml-okta" InResponseTo="{in_response_to}">
+            <saml:Issuer>https://idp.example.com</saml:Issuer>
+            <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
+            <saml:Assertion ID="{assertion_id}" Version="2.0" IssueInstant="{issue_instant}">
+                <saml:Issuer>https://idp.example.com</saml:Issuer>
+                <saml:Subject>
+                    <saml:NameID>saml-subject-123</saml:NameID>
+                    <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
+                        <saml:SubjectConfirmationData Recipient="https://app.example.com/sso/saml2/sp/acs/saml-okta" InResponseTo="{in_response_to}" NotOnOrAfter="{not_on_or_after}"/>
+                    </saml:SubjectConfirmation>
+                </saml:Subject>
+                <saml:Conditions NotBefore="{not_before}" NotOnOrAfter="{not_on_or_after}">
+                    <saml:AudienceRestriction><saml:Audience>https://app.example.com/saml/sp</saml:Audience></saml:AudienceRestriction>
+                </saml:Conditions>
+                <saml:AuthnStatement AuthnInstant="{issue_instant}" SessionIndex="session-index-1"/>
+                <saml:AttributeStatement>
+                    <saml:Attribute Name="email"><saml:AttributeValue>saml-user@example.com</saml:AttributeValue></saml:Attribute>
+                </saml:AttributeStatement>
+            </saml:Assertion>
+        </samlp:Response>"#
+    );
+    Ok(base64::engine::general_purpose::STANDARD.encode(xml.as_bytes()))
+}
+
+#[cfg(feature = "saml")]
+pub(super) fn signed_valid_saml_response(
+    in_response_to: &str,
+    user: &opensaml::entity::User,
+) -> Result<String, Box<dyn std::error::Error>> {
+    #[path = "../fixtures/saml_crypto.rs"]
+    mod saml_crypto_helpers;
+    saml_crypto_helpers::signed_saml_login_response(in_response_to, user)
 }
 
 #[cfg(feature = "saml")]

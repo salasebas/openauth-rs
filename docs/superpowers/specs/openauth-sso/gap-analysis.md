@@ -43,10 +43,11 @@ an idiomatic Rust implementation, not a line-by-line TypeScript port.
 | OIDC sign-in/callback | Implemented | `defaultSSO`, `organizationSlug`, runtime discovery, ID-token-only profile extraction, state/path provider mix-up rejection, strict trust semantics, new-user redirects, provisioning callbacks, production-shaped Okta/Azure/Google endpoint and claim fixture tests, and default Basic token auth are covered. |
 | Domain verification | Implemented | Secondary storage, DNS TXT verification, custom prefixes, URL/bare domains, multi-domain behavior, and org access checks are covered. |
 | SAML metadata | Implemented | Generated and passthrough metadata, SLO bindings, NameID format, signing flags, and upstream-compatible `format=json` tolerance are covered. |
-| SAML sign-in | Implemented | Unsigned Redirect AuthnRequest works by default; signed Redirect AuthnRequest is available behind `saml-signed`. |
-| SAML ACS | Partial | ACS parses response XML for `InResponseTo` state when `RelayState` is absent, validates provider match, timestamps, algorithms, direct assertion placement, and replay until assertion expiration. XMLDSig validation and encrypted assertion decryption remain fail-closed. |
-| SAML signature validation | Not production-ready | Signature parsing and policy gates exist, but XMLDSig verification and outbound signing are not implemented in the default backend. Signed paths return stable fail-closed errors. |
-| SLO | Partial | Local logout, sign-out cleanup hook, SP/IdP initiated parsing, Redirect/POST bindings, and state-preservation failure cases are covered. Signed SLO messages still require XMLDSig backend work. |
+| SAML sign-in | Implemented | Redirect AuthnRequest via `opensaml`; unsigned by default, signed when `authnRequestsSigned` and SP private key are configured (`saml-signed` / `openauth-sso` `saml` feature). |
+| SAML ACS | Implemented | ACS uses `opensaml` flow for signed/encrypted responses after OpenAuth pre-checks; unsigned responses use the local parser. InResponseTo state, replay, algorithms, and wrapping checks remain in OpenAuth. |
+| SAML IdP interoperability | Implemented | Production-shaped Okta/Azure/Google provider configs (`tests/fixtures/saml/idp/*-shaped.json`), signed XMLDSig responses via `opensaml`, and ACS mapping tests in `provider_fixtures.rs` (no live IdP network calls). |
+| SAML signature validation | Implemented | XMLDSig verify for Response/Assertion/Logout POST and Redirect bindings via `opensaml` + `bergshamra` (`saml-signed`). Fail-closed when crypto feature is disabled. |
+| SLO | Implemented | SP/IdP-initiated logout, Redirect/POST bindings, outbound LogoutRequest/Response via `opensaml`, and signature verification for signed messages. |
 | Organization assignment | Implemented | SSO login organization assignment and verified-domain non-SSO assignment run after session creation. |
 | OpenAPI | Implemented | SSO route metadata, hidden browser/IdP routes, unique operation IDs, and public response schemas are covered. |
 | Modularization | Implemented | Endpoint families and large SAML tests have been split into focused modules. |
@@ -113,28 +114,83 @@ an idiomatic Rust implementation, not a line-by-line TypeScript port.
   own physical snake_case/plural storage.
 - Client/browser SDK behavior is out of scope for this crate. Server endpoints
   are the public contract; future clients should be thin HTTP wrappers.
-- SAML XML validation uses OpenAuth's parser boundary, local-name traversal,
-  DOCTYPE rejection, algorithm inspection, and XMLDSig feature boundary rather
-  than embedding `samlify`. Upstream configures `samlify` with
-  `fast-xml-parser` well-formed XML validation, not full SAML XSD validation.
-- `saml-signed` keeps native XML tooling optional. Default builds reject signed
-  SAML paths that require unavailable signature validation instead of silently
-  accepting them.
+- SAML XML validation uses OpenAuth pre-checks (single assertion, wrapping placement,
+  DOCTYPE rejection, algorithm policy) plus `opensaml` for crypto and extraction
+  (samlify parity via the local `opensaml` crate, not embedded `samlify` npm).
+- `saml-signed` enables `opensaml/crypto-bergshamra` for XMLDSig and XML-Enc.
+  Builds without the feature reject signed/encrypted SAML paths fail-closed.
 
 ## Remaining Work
 
-The main remaining parity gap is SAML cryptography. Do not mark SAML
-production-ready until these are implemented with an auditable backend and
-negative tests:
+SAML cryptography and production-shaped IdP fixtures are implemented via `opensaml`
+and `tests/fixtures/saml/idp/*-shaped.json` (see `provider_fixtures.rs`). Continue
+hardening with:
 
-- XMLDSig verification for SAML POST and Redirect bindings across responses,
-  assertions, LogoutRequest, and LogoutResponse.
-- Outbound AuthnRequest and SLO signing when policy requires it.
-- EncryptedAssertion decryption, or a documented permanent non-parity decision.
-- Real IdP interoperability matrix for Okta, Azure/Entra ID, Google, and at
-  least one strict SAML implementation.
+- Optional full SAML XSD validation hook (upstream does not require this either).
+- Live IdP sandbox smoke: `./scripts/saml-smoke.sh` (Phase 1 offline, always) and
+  `SAML_SMOKE_LIVE=1 ./scripts/saml-smoke.sh` (Phase 2 preflight + browser checklist).
+  See [SMOKE-SAML.md](../../../crates/openauth-sso/SMOKE-SAML.md). Not run in CI.
 
-Other intentional differences remain:
+## CI / local test matrix
+
+Run these from the workspace root:
+
+| Command | Purpose |
+| --- | --- |
+| `cargo test -p openauth-sso --features saml,oidc -- saml` | Primary SAML regression (135 integration tests; always run in CI) |
+| `cargo test -p openauth-sso --features oidc` | OIDC-only build; SAML routes not compiled |
+| `cargo test -p openauth-saml --features saml-signed` | Unit + security tests for the SAML crate |
+| `cargo test -p opensaml --features crypto-bergshamra` | Optional upstream crypto conformance for the pinned `opensaml` git rev |
+| `./scripts/saml-smoke.sh` | Offline smoke (both crates); optional live preflight with `SAML_SMOKE_LIVE=1` |
+
+`opensaml` is pinned in the workspace `Cargo.toml` by git rev (no local path
+dependency). Refresh upstream parity sources with
+`./scripts/fetch-upstream-better-auth.sh` before auditing
+`reference/upstream-src/1.6.9/repository/packages/sso/src/saml.test.ts`.
+
+## Upstream `saml.test.ts` parity (Better Auth 1.6.9)
+
+Audited against `reference/upstream-src/1.6.9/repository/packages/sso/src/saml.test.ts`
+(~108 `it` blocks). Status key: **Covered** = equivalent Rust test or enforced
+behavior; **Partial** = subset or different surface; **Pending** = no equivalent yet.
+
+| Upstream `describe` / theme | Status | Rust notes |
+| --- | --- | --- |
+| `defaultSSO` array fallback | Covered | `metadata_acs/default_sso.rs`: match by `providerId`, 404 for unknown id, precedence over DB; array order/fallback not duplicated |
+| Signed AuthnRequests | Covered | `crypto.rs`, `dual_signed.rs` (redirect sig, private key required) |
+| Unsigned AuthnRequests | Covered | `sign_in/saml.rs` omits `Signature`/`SigAlg` when `authnRequestsSigned` is false |
+| `idpMetadata` without metadata XML | Covered | Registration + sign-in fallback tests |
+| Core SAML SSO (register, metadata, sign-in, limits, linking) | Covered | `registration/*` incl. `saml_limits.rs` (limit + duplicate `providerId`); `metadata_acs/*`, `sign_in/*` |
+| Production IdP fixtures (Okta/Azure/Google SAML) | Covered | `fixtures/saml/idp/*-shaped.json`, `provider_fixtures.rs`, `crypto.rs` |
+| Custom fields / `safeJsonParse` | N/A | Server-only Rust crate; JSON parsing differs |
+| Provider config parsing | Covered | Registration persistence / sanitization tests |
+| IdP-initiated flow (GET after POST) | Covered | `flows.rs` POST ACS session + GET `/sso/saml2/callback`; `idp_initiated.rs` unsolicited ACS + `allow_idp_initiated` policy |
+| Timestamp validation | Covered | Expired assertion e2e in `crypto.rs`; 1 ms boundaries in `openauth-saml` via `validate_saml_timestamp_at` |
+| ACS origin bypass | Covered | ACS/SLO bypass origin; non-SSO routes remain protected |
+| Response security (forged/tampered) | Covered | `crypto.rs` wrong cert, tampered sig; marker tests in helpers |
+| Size limit constants | Covered | `DEFAULT_MAX_SAML_RESPONSE_SIZE` / `DEFAULT_MAX_SAML_METADATA_SIZE` in `options.rs`; `saml/constants.rs` |
+| Assertion replay | Covered | `metadata_acs/state.rs` (ACS + callback POST replay), replay keys |
+| Single assertion / XSW | Covered | `security.rs`, `crypto.rs` XSW HTTP test |
+| Email lowercase normalization | Covered | ACS provisioning tests |
+| Single Logout (SLO) | Covered | `slo/*`, `crypto.rs` signed POST + redirect; `logout_response.rs` `want_logout_response_signed` |
+| `provisionUser` / `provisionUserOnEveryLogin` | Covered | `metadata_acs/provisioning.rs`; implicit link deny: `linking.rs` |
+| InResponseTo opt-out | Covered | `idp_initiated.rs` `enable_in_response_to_validation: false` |
+| Account linking trust | Covered | `linking.rs` denies implicit link for unverified/untrusted provider; allows when `account_linking.trusted_providers` includes SAML `providerId` |
+| SAML SSO Hardening (ACS URL, provider lookup, registration validation) | Covered | `metadata_acs/*`, registration validation |
+
+Remaining upstream-only parity (not security gaps):
+
+| Item | Notes |
+| --- | --- |
+| `defaultSSO` array order/fallback | Sign-in from `default_sso` without DB record covered; strict array-index fallback not duplicated |
+| Full IdP browser POST→GET mock | HTTP ACS + callback covered; upstream mock-IdP browser chain not replayed |
+| RelayState cookie missing (cross-site POST) | OpenAuth uses session + GET callback; upstream cookie fallbacks not mirrored |
+| Redirect loop (`callbackUrl` → callback route) | Not tested; misconfiguration edge |
+| Better Auth client / `safeJsonParse` / callback naming | Out of scope for the server-first Rust crate |
+
+These are documented differences vs Better Auth 1.6.9 `saml.test.ts`, not missing server implementation.
+
+## Intentional differences (continued)
 
 - Better Auth client/browser helpers are out of scope for the server-first Rust
   crate.

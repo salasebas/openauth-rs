@@ -55,7 +55,7 @@ async fn sign_in_sso_with_dual_provider_can_select_saml() -> Result<(), Box<dyn 
 }
 
 #[tokio::test]
-async fn sign_in_sso_with_signed_saml_authn_request_fails_until_key_support_exists(
+async fn sign_in_sso_with_signed_saml_authn_request_requires_private_key(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
     let cookie = seed_session(&adapter).await?;
@@ -93,7 +93,7 @@ async fn sign_in_sso_with_signed_saml_authn_request_fails_until_key_support_exis
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         json_body(response)?["code"],
-        "SAML_AUTHN_REQUEST_SIGNING_NOT_SUPPORTED"
+        "SAML_AUTHN_REQUEST_PRIVATE_KEY_REQUIRED"
     );
 
     Ok(())

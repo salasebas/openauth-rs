@@ -10,7 +10,8 @@ use openauth_core::cookies::{set_session_cookie, Cookie, SessionCookieOptions};
 use openauth_core::db::{Create, DbAdapter, DbValue, MemoryAdapter};
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
-    AdvancedOptions, OpenAuthOptions, SecondaryStorage, SessionOptions, TrustedOriginOptions,
+    AccountLinkingOptions, AccountOptions, AdvancedOptions, OpenAuthOptions, SecondaryStorage,
+    SessionOptions, TrustedOriginOptions,
 };
 use openauth_core::plugin::AuthPlugin;
 use openauth_sso::{sso, SsoOptions};
@@ -35,6 +36,34 @@ pub fn router_with_options(
     options: SsoOptions,
 ) -> Result<(Arc<MemoryAdapter>, AuthRouter), OpenAuthError> {
     router_with_options_and_trusted_origins(options, Vec::new())
+}
+
+pub fn router_with_options_and_account_linking(
+    options: SsoOptions,
+    account_linking: AccountLinkingOptions,
+) -> Result<(Arc<MemoryAdapter>, AuthRouter), OpenAuthError> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let context = create_auth_context_with_adapter(
+        OpenAuthOptions {
+            base_url: Some("https://app.example.com".to_owned()),
+            secret: Some(SECRET.to_owned()),
+            plugins: vec![sso(allow_loopback_oidc(options))],
+            account: AccountOptions::default().account_linking(account_linking),
+            advanced: AdvancedOptions {
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            ..OpenAuthOptions::default()
+        },
+        adapter.clone(),
+    )?;
+    let router = AuthRouter::with_async_endpoints(
+        context,
+        Vec::new(),
+        core_auth_async_endpoints(adapter.clone()),
+    );
+    Ok((adapter, router?))
 }
 
 /// Builds a router that keeps the OIDC SSRF guard active (no opt-out), for

@@ -1,4 +1,5 @@
 use super::*;
+use openauth_core::options::AccountLinkingOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[tokio::test]
@@ -226,6 +227,95 @@ async fn saml_acs_redirects_new_user_to_new_user_callback_url(
         Some(&http::HeaderValue::from_static("/welcome"))
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn saml_acs_allows_implicit_link_when_provider_is_trusted(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let linking = AccountLinkingOptions::default().trusted_provider("saml-okta");
+    let (adapter, router) =
+        router_with_options_and_account_linking(SsoOptions::default(), linking)?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+    seed_existing_saml_user_with_account(&adapter).await?;
+    let relay_state = saml_sign_in_relay_state(&router).await?;
+    let saml_response = valid_saml_response(&relay_state, "assertion-trusted-link-allow")?;
+    let saml_response =
+        tamper_base64_xml(&saml_response, "saml-subject-123", "saml-subject-unlinked")?;
+
+    let response = post_saml_acs(&router, &saml_response, &relay_state).await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let accounts = adapter.records("account").await;
+    assert_eq!(accounts.len(), 2);
+    assert!(accounts.iter().all(|record| {
+        record.get("user_id") == Some(&DbValue::String("existing_saml_user".to_owned()))
+    }));
+    assert!(accounts.iter().any(|record| {
+        record.get("account_id") == Some(&DbValue::String("saml-subject-unlinked".to_owned()))
+    }));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn saml_acs_denies_implicit_link_for_untrusted_unverified_provider(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+    seed_existing_saml_user_with_account(&adapter).await?;
+    let relay_state = saml_sign_in_relay_state(&router).await?;
+    let saml_response = valid_saml_response(&relay_state, "assertion-untrusted-link-deny")?;
+    let saml_response =
+        tamper_base64_xml(&saml_response, "saml-subject-123", "saml-subject-unlinked")?;
+
+    let response = post_saml_acs(&router, &saml_response, &relay_state).await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response)?["code"], "SAML_SIGN_IN_FAILED");
+    assert_eq!(adapter.records("account").await.len(), 1);
+
+    Ok(())
+}
+
+async fn seed_existing_saml_user_with_account(
+    adapter: &MemoryAdapter,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = OffsetDateTime::now_utc();
+    adapter
+        .create(
+            Create::new("user")
+                .data("id", DbValue::String("existing_saml_user".to_owned()))
+                .data("name", DbValue::String("Existing SAML User".to_owned()))
+                .data("email", DbValue::String("saml-user@example.com".to_owned()))
+                .data("email_verified", DbValue::Boolean(true))
+                .data("image", DbValue::Null)
+                .data("created_at", DbValue::Timestamp(now))
+                .data("updated_at", DbValue::Timestamp(now))
+                .force_allow_id(),
+        )
+        .await?;
+    adapter
+        .create(
+            Create::new("account")
+                .data("id", DbValue::String("existing_saml_account".to_owned()))
+                .data("account_id", DbValue::String("saml-subject-123".to_owned()))
+                .data("provider_id", DbValue::String("saml-okta".to_owned()))
+                .data("user_id", DbValue::String("existing_saml_user".to_owned()))
+                .data("access_token", DbValue::Null)
+                .data("refresh_token", DbValue::Null)
+                .data("id_token", DbValue::Null)
+                .data("access_token_expires_at", DbValue::Null)
+                .data("refresh_token_expires_at", DbValue::Null)
+                .data("scope", DbValue::Null)
+                .data("password", DbValue::Null)
+                .data("created_at", DbValue::Timestamp(now))
+                .data("updated_at", DbValue::Timestamp(now))
+                .force_allow_id(),
+        )
+        .await?;
     Ok(())
 }
 

@@ -68,6 +68,14 @@ pub fn validate_saml_timestamp(
     conditions: Option<&SamlConditions>,
     options: TimestampValidationOptions,
 ) -> Result<(), SamlSecurityError> {
+    validate_saml_timestamp_at(conditions, options, OffsetDateTime::now_utc())
+}
+
+pub fn validate_saml_timestamp_at(
+    conditions: Option<&SamlConditions>,
+    options: TimestampValidationOptions,
+    now: OffsetDateTime,
+) -> Result<(), SamlSecurityError> {
     let has_timestamps = conditions.is_some_and(|conditions| {
         conditions.not_before.is_some() || conditions.not_on_or_after.is_some()
     });
@@ -86,7 +94,6 @@ pub fn validate_saml_timestamp(
             Ok(())
         };
     };
-    let now = OffsetDateTime::now_utc();
 
     if let Some(not_before) = &conditions.not_before {
         let parsed =

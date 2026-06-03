@@ -1,30 +1,47 @@
 # openauth-saml
 
-Experimental SAML 2.0 service-provider helpers for OpenAuth enterprise SSO.
+SAML 2.0 service-provider helpers for OpenAuth enterprise SSO.
 
 ## Status
 
-This crate is work in progress. It contains useful SAML service-provider
-building blocks, but signed and encrypted SAML production flows are not yet
-supported end to end. Signed and encrypted SAML messages fail closed unless a
-future auditable XML security backend is added.
+This crate provides SAML SP building blocks used by `openauth-sso`. Cryptography
+(XMLDSig verification, outbound signing, encrypted assertion decryption) is
+delegated to the [`opensaml`](https://github.com/sebasxsala/opensaml-rs) crate
+(samlify v2.10.2 parity) when the `saml-signed` feature is enabled.
+
+Builds without `saml-signed` reject signed or encrypted SAML messages
+fail-closed.
 
 Prefer OIDC for new enterprise SSO integrations when the identity provider
 supports it.
 
+## Features
+
+| Feature | Description |
+| --- | --- |
+| *(default)* | Unsigned SAML parse/build, metadata, logout helpers, security pre-checks. |
+| `saml-signed` | Enables `opensaml/crypto-bergshamra` for XMLDSig and XML-Enc. |
+
+The `openauth-sso` `saml` feature enables `openauth-saml/saml-signed`.
+
+## Dependency
+
+`opensaml` is wired as a workspace path dependency (see root `Cargo.toml`).
+For CI or downstream crates, pin a git revision once `opensaml` is published.
+
+SP signing and decryption keys (`privateKey`, `decryptionPvk`) must be PEM
+(PKCS#1 or PKCS#8). Passphrases are supported via `spMetadata.privateKeyPass`
+and `spMetadata.encPrivateKeyPass`.
+
 ## What It Provides
 
-- AuthnRequest generation.
-- Service-provider metadata helpers.
-- ACS response parsing and assertion extraction.
-- SAML logout request/response helpers.
+- AuthnRequest generation (unsigned and signed Redirect).
+- Service-provider metadata generation and IdP metadata parsing.
+- ACS response parsing with optional signature verify and assertion decrypt.
+- SAML logout request/response build and parse (Redirect/POST).
 - XML hardening, timestamp validation, destination/recipient checks, and replay
   state key helpers.
-- Algorithm policy types and a reserved `saml-signed` feature surface for
-  future signed-flow support.
-
-The crate does not currently add `xmlsec1`, `samael`, `openssl`, or another XML
-signature backend.
+- Algorithm policy types and stable OpenAuth error codes.
 
 ## Quick Start
 
@@ -38,13 +55,15 @@ let plugin = sso(SsoOptions::default());
 assert_eq!(plugin.id, "sso");
 ```
 
-Enable SAML routes through the `openauth-sso` `saml` feature when you are
-testing SAML compatibility. Keep production SAML rollout blocked until your
-deployment requirements match the supported unsigned/compatibility surface.
+Enable SAML routes through the `openauth-sso` `saml` feature:
+
+```toml
+openauth-sso = { version = "...", features = ["saml"] }
+```
 
 ## How It Fits
 
-- `openauth-saml`: low-level SAML service-provider helpers.
+- `openauth-saml`: low-level SAML service-provider helpers + `opensaml` adapter.
 - `openauth-sso`: enterprise SSO plugin that composes OIDC and optional SAML
   routes.
 - `openauth-oidc`: recommended relying-party path for modern enterprise IdPs.
@@ -52,4 +71,5 @@ deployment requirements match the supported unsigned/compatibility surface.
 ## Links
 
 - [Root README](../../README.md)
+- [Gap analysis](../../docs/superpowers/specs/openauth-sso/gap-analysis.md)
 - [Repository](https://github.com/sebasxsala/openauth-rs)

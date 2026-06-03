@@ -23,7 +23,7 @@ async fn saml_acs_rejects_unsigned_assertion_when_provider_requires_signature(
 }
 
 #[tokio::test]
-async fn saml_acs_rejects_signed_response_until_crypto_validation_is_enabled(
+async fn saml_acs_rejects_signed_response_with_invalid_signature(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options(SsoOptions::default())?;
     let cookie = seed_session(&adapter).await?;
@@ -33,10 +33,12 @@ async fn saml_acs_rejects_signed_response_until_crypto_validation_is_enabled(
 
     let response = post_saml_acs(&router, &saml_response, &relay_state).await?;
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::FOUND);
     assert_eq!(
-        json_body(response)?["code"],
-        "SAML_SIGNATURE_VALIDATION_NOT_IMPLEMENTED"
+        response.headers().get(header::LOCATION),
+        Some(&http::HeaderValue::from_static(
+            "/login-error?error=saml_signature_invalid"
+        ))
     );
 
     Ok(())

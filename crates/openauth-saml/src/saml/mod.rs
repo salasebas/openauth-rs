@@ -11,7 +11,8 @@ pub mod xml;
 pub use security::{
     collect_saml_runtime_algorithms, validate_saml_config_algorithms,
     validate_saml_config_algorithms_with_policy, validate_saml_runtime_algorithms,
-    validate_saml_timestamp, DataEncryptionAlgorithm, DeprecatedAlgorithmBehavior, DigestAlgorithm,
-    KeyEncryptionAlgorithm, SamlConditions, SamlRuntimeAlgorithmPolicy, SamlRuntimeAlgorithms,
-    SamlSecurityError, SignatureAlgorithm, TimestampValidationOptions,
+    validate_saml_timestamp, validate_saml_timestamp_at, DataEncryptionAlgorithm,
+    DeprecatedAlgorithmBehavior, DigestAlgorithm, KeyEncryptionAlgorithm, SamlConditions,
+    SamlRuntimeAlgorithmPolicy, SamlRuntimeAlgorithms, SamlSecurityError, SignatureAlgorithm,
+    TimestampValidationOptions,
 };
