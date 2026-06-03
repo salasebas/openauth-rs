@@ -16,6 +16,7 @@ mod router;
 mod schema;
 mod security;
 pub(crate) mod services;
+mod session_request_state;
 
 pub use body::parse_request_body;
 pub use endpoint::{

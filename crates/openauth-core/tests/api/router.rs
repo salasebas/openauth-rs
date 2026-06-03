@@ -535,3 +535,40 @@ fn auth_router_on_api_error_throw_propagates_errors() -> Result<(), Box<dyn std:
     assert!(matches!(error, OpenAuthError::Api(message) if message == "handler failed"));
     Ok(())
 }
+
+#[tokio::test]
+async fn auth_router_runs_on_response_plugins_for_async_not_found(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use openauth_core::plugin::AuthPlugin;
+
+    let plugin =
+        AuthPlugin::new("response-marker").with_on_response(|_context, _request, mut response| {
+            response.headers_mut().insert(
+                http::HeaderName::from_static("x-on-response"),
+                http::HeaderValue::from_static("1"),
+            );
+            Ok(response)
+        });
+    let context = create_auth_context(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        plugins: vec![plugin],
+        ..OpenAuthOptions::default()
+    })?;
+    let router = AuthRouter::with_async_endpoints(context, Vec::new(), Vec::new())?;
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("http://localhost:3000/api/auth/missing")
+        .body(Vec::new())?;
+
+    let response = router.handle_async(request).await?;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-on-response")
+            .and_then(|value| value.to_str().ok()),
+        Some("1")
+    );
+    Ok(())
+}

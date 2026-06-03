@@ -7,7 +7,7 @@ use crate::context::request_state::{
 use crate::context::AuthContext;
 use crate::error::OpenAuthError;
 use crate::plugin::{PluginBeforeHookAction, PluginRequestAction};
-use crate::rate_limit::{consume_rate_limit, on_request_rate_limit, on_response_rate_limit};
+use crate::rate_limit::{consume_rate_limit, on_request_rate_limit};
 use crate::utils::url::normalize_pathname;
 
 use super::endpoint::{
@@ -19,9 +19,9 @@ use super::on_api_error::handle_on_api_error;
 use super::openapi::build_openapi_schema;
 use super::path::{match_path_pattern, route_pathname, PathParams};
 use super::plugin_pipeline::{
-    endpoint_operation_id, plugin_async_endpoints, run_after_hooks, run_async_after_hooks,
-    run_async_before_hooks, run_before_hooks, run_matching_async_middlewares,
-    run_matching_middlewares, run_on_request_plugins, run_on_response_plugins,
+    endpoint_operation_id, finalize_response, finalize_response_async, plugin_async_endpoints,
+    run_after_hooks, run_async_after_hooks, run_async_before_hooks, run_before_hooks,
+    run_matching_async_middlewares, run_matching_middlewares, run_on_request_plugins,
     validate_endpoint_conflicts,
 };
 use super::security::validate_request_security;
@@ -117,14 +117,21 @@ impl AuthRouter {
             .iter()
             .any(|item| item == &normalized_path)
         {
-            return api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound);
+            return finalize_response(
+                &self.context,
+                &request,
+                api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound)?,
+            );
         }
+        let finalize_request = request.clone();
         request = match run_on_request_plugins(&self.context, request)? {
             PluginRequestAction::Continue(request) => request,
-            PluginRequestAction::Respond(response) => return Ok(response),
+            PluginRequestAction::Respond(response) => {
+                return finalize_response(&self.context, &finalize_request, response);
+            }
         };
         if let Some(rejection) = validate_request_security(&self.context, &request, false)? {
-            return Ok(rejection);
+            return finalize_response(&self.context, &request, rejection);
         }
         let path = route_pathname(
             &request.uri().to_string(),
@@ -145,18 +152,25 @@ impl AuthRouter {
                     "async endpoint requires AuthRouter::handle_async".to_owned(),
                 ));
             }
-            return api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound);
+            return finalize_response(
+                &self.context,
+                &request,
+                api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound)?,
+            );
         };
         request.extensions_mut().insert(PathParams::new(params));
         if let Some(response) = run_matching_middlewares(&self.context, &request, &path)? {
-            return Ok(response);
+            return finalize_response(&self.context, &request, response);
         }
         if let Some(rejection) = on_request_rate_limit(&self.context, &request)? {
-            return rate_limit_response(rejection);
+            return finalize_response(&self.context, &request, rate_limit_response(rejection)?);
         }
+        let finalize_request = request.clone();
         request = match run_before_hooks(&self.context, request, &endpoint.method, &path, None)? {
             PluginBeforeHookAction::Continue(request) => request,
-            PluginBeforeHookAction::Respond(response) => return Ok(response),
+            PluginBeforeHookAction::Respond(response) => {
+                return finalize_response(&self.context, &finalize_request, response);
+            }
         };
         let response = (endpoint.handler)(&self.context, request.clone())?;
         let response = run_after_hooks(
@@ -167,8 +181,7 @@ impl AuthRouter {
             &path,
             None,
         )?;
-        on_response_rate_limit(&self.context, &request)?;
-        run_on_response_plugins(&self.context, &request, response)
+        finalize_response(&self.context, &request, response)
     }
 
     pub async fn handle_async(&self, request: ApiRequest) -> Result<ApiResponse, OpenAuthError> {
@@ -210,11 +223,19 @@ impl AuthRouter {
             .iter()
             .any(|item| item == &normalized_path)
         {
-            return api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound);
+            return finalize_response_async(
+                &self.context,
+                &request,
+                api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound)?,
+            )
+            .await;
         }
+        let finalize_request = request.clone();
         request = match run_on_request_plugins(&self.context, request)? {
             PluginRequestAction::Continue(request) => request,
-            PluginRequestAction::Respond(response) => return Ok(response),
+            PluginRequestAction::Respond(response) => {
+                return finalize_response_async(&self.context, &finalize_request, response).await;
+            }
         };
         let path = route_pathname(
             &request.uri().to_string(),
@@ -237,39 +258,55 @@ impl AuthRouter {
         if let Some(rejection) =
             validate_request_security(&self.context, &request, bypass_origin_security)?
         {
-            return Ok(rejection);
+            return finalize_response_async(&self.context, &request, rejection).await;
         }
         if async_endpoint.is_none() && sync_endpoint.is_none() {
-            return api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound);
+            return finalize_response_async(
+                &self.context,
+                &request,
+                api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound)?,
+            )
+            .await;
         }
         // Consume the route rate limit before plugin middlewares so that security
         // middlewares (such as CAPTCHA) returning a rejection cannot bypass route
         // throttling or force repeated outbound provider calls.
         if let Some(rejection) = consume_rate_limit(&self.context, &request).await? {
-            return rate_limit_response(rejection);
+            return finalize_response_async(
+                &self.context,
+                &request,
+                rate_limit_response(rejection)?,
+            )
+            .await;
         }
         if let Some(response) = run_matching_middlewares(&self.context, &request, &path)? {
-            return Ok(response);
+            return finalize_response_async(&self.context, &request, response).await;
         }
         if let Some(response) =
             run_matching_async_middlewares(&self.context, &request, &path).await?
         {
-            return Ok(response);
+            return finalize_response_async(&self.context, &request, response).await;
         }
         if let Some((endpoint, params)) = async_endpoint {
             if endpoint.options.server_only && external {
-                return api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound);
+                return finalize_response_async(
+                    &self.context,
+                    &request,
+                    api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound)?,
+                )
+                .await;
             }
             set_current_request_path(path.clone())?;
             request.extensions_mut().insert(PathParams::new(params));
             if let Some(response) = validate_async_endpoint_request(endpoint, &request)? {
-                return Ok(response);
+                return finalize_response_async(&self.context, &request, response).await;
             }
             if let Some(response) =
                 run_endpoint_middlewares(&self.context, endpoint, &request).await?
             {
-                return Ok(response);
+                return finalize_response_async(&self.context, &request, response).await;
             }
+            let finalize_request = request.clone();
             request = match run_before_hooks(
                 &self.context,
                 request,
@@ -278,8 +315,12 @@ impl AuthRouter {
                 endpoint_operation_id(endpoint),
             )? {
                 PluginBeforeHookAction::Continue(request) => request,
-                PluginBeforeHookAction::Respond(response) => return Ok(response),
+                PluginBeforeHookAction::Respond(response) => {
+                    return finalize_response_async(&self.context, &finalize_request, response)
+                        .await;
+                }
             };
+            let finalize_request = request.clone();
             request = match run_async_before_hooks(
                 &self.context,
                 request,
@@ -290,7 +331,10 @@ impl AuthRouter {
             .await?
             {
                 PluginBeforeHookAction::Continue(request) => request,
-                PluginBeforeHookAction::Respond(response) => return Ok(response),
+                PluginBeforeHookAction::Respond(response) => {
+                    return finalize_response_async(&self.context, &finalize_request, response)
+                        .await;
+                }
             };
             let response = (endpoint.handler)(&self.context, request.clone()).await?;
             let response = run_after_hooks(
@@ -310,22 +354,30 @@ impl AuthRouter {
                 endpoint_operation_id(endpoint),
             )
             .await?;
-            return run_on_response_plugins(&self.context, &request, response);
+            return finalize_response_async(&self.context, &request, response).await;
         }
         if let Some((endpoint, params)) = sync_endpoint {
             set_current_request_path(path.clone())?;
             request.extensions_mut().insert(PathParams::new(params));
+            let finalize_request = request.clone();
             request = match run_before_hooks(&self.context, request, &endpoint.method, &path, None)?
             {
                 PluginBeforeHookAction::Continue(request) => request,
-                PluginBeforeHookAction::Respond(response) => return Ok(response),
+                PluginBeforeHookAction::Respond(response) => {
+                    return finalize_response_async(&self.context, &finalize_request, response)
+                        .await;
+                }
             };
+            let finalize_request = request.clone();
             request =
                 match run_async_before_hooks(&self.context, request, &endpoint.method, &path, None)
                     .await?
                 {
                     PluginBeforeHookAction::Continue(request) => request,
-                    PluginBeforeHookAction::Respond(response) => return Ok(response),
+                    PluginBeforeHookAction::Respond(response) => {
+                        return finalize_response_async(&self.context, &finalize_request, response)
+                            .await;
+                    }
                 };
             let response = (endpoint.handler)(&self.context, request.clone())?;
             let response = run_after_hooks(
@@ -345,9 +397,14 @@ impl AuthRouter {
                 None,
             )
             .await?;
-            return run_on_response_plugins(&self.context, &request, response);
+            return finalize_response_async(&self.context, &request, response).await;
         }
-        api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound)
+        finalize_response_async(
+            &self.context,
+            &request,
+            api_error(StatusCode::NOT_FOUND, ApiErrorCode::NotFound)?,
+        )
+        .await
     }
 }
 

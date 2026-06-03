@@ -7,8 +7,11 @@ use crate::error::OpenAuthError;
 use crate::plugin::{PluginAfterHookAction, PluginBeforeHookAction, PluginRequestAction};
 use crate::plugin::{PluginPasswordValidationInput, PluginPasswordValidationRejection};
 
+use crate::rate_limit::on_response_rate_limit;
+
 use super::endpoint::{ApiRequest, ApiResponse, AsyncAuthEndpoint, AuthEndpoint};
 use super::path::path_matches;
+use super::session_request_state::ensure_session_user_in_request_state;
 
 pub(super) fn run_on_request_plugins(
     context: &AuthContext,
@@ -72,6 +75,26 @@ pub(super) fn run_on_response_plugins(
         }
     }
     Ok(response)
+}
+
+/// Apply rate-limit bookkeeping and plugin `on_response` hooks before returning.
+pub(super) fn finalize_response(
+    context: &AuthContext,
+    request: &ApiRequest,
+    response: ApiResponse,
+) -> Result<ApiResponse, OpenAuthError> {
+    on_response_rate_limit(context, request)?;
+    run_on_response_plugins(context, request, response)
+}
+
+/// Async finalize: hydrate session user for i18n, then sync finalize.
+pub(super) async fn finalize_response_async(
+    context: &AuthContext,
+    request: &ApiRequest,
+    response: ApiResponse,
+) -> Result<ApiResponse, OpenAuthError> {
+    ensure_session_user_in_request_state(context, request).await?;
+    finalize_response(context, request, response)
 }
 
 pub(super) async fn run_password_validators(
