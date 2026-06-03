@@ -353,6 +353,7 @@ fn map_flow_result_to_parsed_response(
     })
 }
 
+#[allow(clippy::collapsible_match)]
 fn extract_assertion_attributes_from_xml(xml: &str) -> BTreeMap<String, String> {
     let mut attributes = BTreeMap::new();
     let mut reader = Reader::from_str(xml);
