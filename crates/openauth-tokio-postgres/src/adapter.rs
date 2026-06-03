@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use openauth_core::db::{
     auth_schema, AdapterCapabilities, AdapterFuture, AuthSchemaOptions, Count, Create, DbAdapter,
-    DbRecord, DbSchema, Delete, DeleteMany, FindMany, FindOne, JoinAdapter, SchemaCreation,
-    TransactionCallback, Update, UpdateMany,
+    DbRecord, DbSchema, Delete, DeleteMany, FindMany, FindOne, SchemaCreation, TransactionCallback,
+    Update, UpdateMany,
 };
 use openauth_core::error::OpenAuthError;
 use tokio::sync::RwLock;
@@ -109,7 +109,7 @@ impl DbAdapter for TokioPostgresAdapter {
             .with_uuid_ids()
             .with_json()
             .with_arrays()
-            .with_joins()
+            .with_native_joins()
             .with_transactions()
     }
 
@@ -129,14 +129,8 @@ impl DbAdapter for TokioPostgresAdapter {
 
     fn find_many<'a>(&'a self, query: FindMany) -> AdapterFuture<'a, Vec<DbRecord>> {
         Box::pin(async move {
-            if query.joins.len() <= 1 {
-                self.run_with_state(|state| Box::pin(state.find_many(query)))
-                    .await
-            } else {
-                let adapter =
-                    JoinAdapter::new(self.schema.as_ref().clone(), Arc::new(self.clone()), false);
-                adapter.find_many(query).await
-            }
+            self.run_with_state(|state| Box::pin(state.find_many(query)))
+                .await
         })
     }
 

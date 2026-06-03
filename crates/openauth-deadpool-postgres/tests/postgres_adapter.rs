@@ -110,6 +110,7 @@ async fn deadpool_postgres_adapter_reports_public_capabilities() -> Result<(), O
     assert!(capabilities.supports_json);
     assert!(capabilities.supports_arrays);
     assert!(capabilities.supports_joins);
+    assert!(capabilities.supports_native_joins);
     assert!(capabilities.supports_transactions);
     assert!(capabilities.supports_uuid_ids);
     Ok(())
