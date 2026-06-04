@@ -110,8 +110,15 @@ impl SecondaryStorage for FredSecondaryStorage {
         ttl_seconds: Option<u64>,
     ) -> SecondaryStorageFuture<'a, ()> {
         Box::pin(async move {
+            let redis_key = self.prefixed_key(key)?;
+            if ttl_seconds == Some(0) {
+                self.client
+                    .del::<u64, _>(redis_key)
+                    .await
+                    .map_err(|error| fred_error("secondary set", error))?;
+                return Ok(());
+            }
             let expire = ttl_seconds
-                .filter(|ttl| *ttl > 0)
                 .map(|ttl| {
                     i64::try_from(ttl).map(Expiration::EX).map_err(|_| {
                         OpenAuthError::InvalidConfig(
@@ -121,7 +128,7 @@ impl SecondaryStorage for FredSecondaryStorage {
                 })
                 .transpose()?;
             self.client
-                .set::<(), _, _>(self.prefixed_key(key)?, value, expire, None, false)
+                .set::<(), _, _>(redis_key, value, expire, None, false)
                 .await
                 .map_err(|error| fred_error("secondary set", error))
         })
@@ -134,8 +141,15 @@ impl SecondaryStorage for FredSecondaryStorage {
         ttl_seconds: Option<u64>,
     ) -> SecondaryStorageFuture<'a, bool> {
         Box::pin(async move {
+            let redis_key = self.prefixed_key(key)?;
+            if ttl_seconds == Some(0) {
+                self.client
+                    .del::<u64, _>(redis_key)
+                    .await
+                    .map_err(|error| fred_error("secondary set_if_not_exists", error))?;
+                return Ok(false);
+            }
             let expire = ttl_seconds
-                .filter(|ttl| *ttl > 0)
                 .map(|ttl| {
                     i64::try_from(ttl).map(Expiration::EX).map_err(|_| {
                         OpenAuthError::InvalidConfig(
@@ -145,13 +159,7 @@ impl SecondaryStorage for FredSecondaryStorage {
                 })
                 .transpose()?;
             self.client
-                .set::<bool, _, _>(
-                    self.prefixed_key(key)?,
-                    value,
-                    expire,
-                    Some(SetOptions::NX),
-                    false,
-                )
+                .set::<bool, _, _>(redis_key, value, expire, Some(SetOptions::NX), false)
                 .await
                 .map_err(|error| fred_error("secondary set_if_not_exists", error))
         })

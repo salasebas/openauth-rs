@@ -290,12 +290,12 @@ async fn redis_secondary_storage_supports_get_set_delete_list_and_clear(
         assert_eq!(keys, vec![key.clone()]);
 
         storage
+            .set("ttl-zero", "stale".to_owned(), Some(60))
+            .await?;
+        storage
             .set("ttl-zero", "persistent".to_owned(), Some(0))
             .await?;
-        assert_eq!(
-            storage.get("ttl-zero").await?.as_deref(),
-            Some("persistent")
-        );
+        assert_eq!(storage.get("ttl-zero").await?, None);
 
         storage.delete(&key).await?;
         assert!(storage.get(&key).await?.is_none());
