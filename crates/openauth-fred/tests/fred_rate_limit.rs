@@ -588,9 +588,11 @@ async fn fred_secondary_storage_supports_strings_ttl_delete_list_and_clear(
         storage.delete("session:token-1").await?;
         assert_eq!(storage.get("session:token-1").await?, None);
 
+        storage
+            .set("ttl-zero", "stale".to_owned(), Some(60))
+            .await?;
         storage.set("ttl-zero", "value".to_owned(), Some(0)).await?;
-        assert_eq!(storage.get("ttl-zero").await?, Some("value".to_owned()));
-        storage.delete("ttl-zero").await?;
+        assert_eq!(storage.get("ttl-zero").await?, None);
 
         storage
             .set("short-lived", "value".to_owned(), Some(1))

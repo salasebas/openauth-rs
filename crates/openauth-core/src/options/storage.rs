@@ -10,6 +10,8 @@ pub type SecondaryStorageFuture<'a, T> =
 pub trait SecondaryStorage: Send + Sync + 'static {
     fn get<'a>(&'a self, key: &'a str) -> SecondaryStorageFuture<'a, Option<String>>;
 
+    /// `ttl_seconds == Some(0)` means the value is already expired: implementations
+    /// must remove any existing key and must not store `value` without expiry.
     fn set<'a>(
         &'a self,
         key: &'a str,

@@ -17,8 +17,9 @@ All notable changes to `openauth-redis` are documented in this file.
 
 ### Changed
 
-- `set` with `Some(0)` now stores without expiration (aligned with Better Auth
-  and `openauth-fred`) instead of deleting the key.
+- `set` and `set_if_not_exists` with `Some(0)` delete the key instead of
+  storing without expiration, matching `openauth-core` expiry semantics and
+  `openauth-fred`.
 - Empty `key_prefix` is rejected for secondary storage and rate limit keys.
 - Rate limit Lua resets the bucket when `(now - last_request) > window` (was
   `>=`), matching Better Auth `onResponseRateLimit` window rollover.

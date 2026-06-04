@@ -114,13 +114,19 @@ impl SecondaryStorage for RedisSecondaryStorage {
             let redis_key = self.prefixed_key(key)?;
             let mut manager = self.manager.clone();
             match ttl_seconds {
-                Some(ttl_seconds) if ttl_seconds > 0 => {
+                Some(0) => {
+                    let _: usize = manager
+                        .del(redis_key)
+                        .await
+                        .map_err(|error| OpenAuthError::Adapter(error.to_string()))?;
+                }
+                Some(ttl_seconds) => {
                     let _: () = manager
                         .set_ex(redis_key, value, ttl_seconds)
                         .await
                         .map_err(|error| OpenAuthError::Adapter(error.to_string()))?;
                 }
-                _ => {
+                None => {
                     let _: () = manager
                         .set(redis_key, value)
                         .await
@@ -140,9 +146,16 @@ impl SecondaryStorage for RedisSecondaryStorage {
         Box::pin(async move {
             let redis_key = self.prefixed_key(key)?;
             let mut manager = self.manager.clone();
+            if ttl_seconds == Some(0) {
+                let _: usize = manager
+                    .del(redis_key)
+                    .await
+                    .map_err(|error| OpenAuthError::Adapter(error.to_string()))?;
+                return Ok(false);
+            }
             let mut command = redis::cmd("SET");
-            command.arg(redis_key).arg(value).arg("NX");
-            if let Some(ttl_seconds) = ttl_seconds.filter(|ttl| *ttl > 0) {
+            command.arg(&redis_key).arg(value).arg("NX");
+            if let Some(ttl_seconds) = ttl_seconds {
                 command.arg("EX").arg(ttl_seconds);
             }
             let created: Option<String> = command
