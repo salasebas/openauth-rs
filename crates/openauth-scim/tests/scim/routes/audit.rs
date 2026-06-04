@@ -17,7 +17,7 @@ async fn management_token_generation_emits_audit_event() {
                 }
             }
         })),
-        ..ScimOptions::default()
+        ..crate::scim_options_for_global_management()
     })
     .expect("router");
     let cookie = session_cookie(adapter.as_ref(), &context, "audit-owner@example.com")

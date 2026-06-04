@@ -10,6 +10,14 @@ pub(crate) fn scim_options_for_manual_provider_tokens() -> ScimOptions {
     }
 }
 
+/// Management routes for global (`organizationId`-less) providers require ownership.
+pub(crate) fn scim_options_for_global_management() -> ScimOptions {
+    ScimOptions {
+        provider_ownership: openauth_scim::ProviderOwnershipOptions { enabled: true },
+        ..ScimOptions::default()
+    }
+}
+
 #[path = "scim/db_adapters.rs"]
 mod db_adapters;
 #[path = "scim/errors.rs"]

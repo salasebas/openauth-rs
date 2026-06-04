@@ -152,13 +152,13 @@ pub(super) async fn provider_access_allowed(
             })
             .unwrap_or(false));
     }
-    if options.provider_ownership.enabled {
-        return Ok(match provider.user_id.as_deref() {
-            Some(user_id) => user_id == user.id,
-            None => true,
-        });
+    if !options.provider_ownership.enabled {
+        return Ok(false);
     }
-    Ok(true)
+    Ok(provider
+        .user_id
+        .as_deref()
+        .is_some_and(|user_id| user_id == user.id))
 }
 
 pub(super) async fn store_scim_token(

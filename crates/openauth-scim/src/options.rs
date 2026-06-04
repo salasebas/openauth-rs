@@ -274,7 +274,10 @@ impl ScimHookError {
 /// Provider ownership configuration.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderOwnershipOptions {
-    /// Enable user ownership for personal SCIM provider connections.
+    /// Enable user ownership for global SCIM provider connections.
+    ///
+    /// When disabled, management routes reject requests without `organizationId`.
+    /// Organization-scoped providers still use [`ScimOptions::required_role`].
     pub enabled: bool,
 }
 
