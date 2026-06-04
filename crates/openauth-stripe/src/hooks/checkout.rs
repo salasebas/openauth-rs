@@ -88,24 +88,22 @@ pub(super) async fn on_checkout_session_completed(
         );
         return Ok(());
     };
-    let customer_id = checkout_session
-        .metadata
-        .get("stripeCustomerId")
-        .cloned()
-        .or_else(|| {
-            checkout_session
-                .subscription
-                .as_ref()
-                .and_then(|_| customer_id_from_stripe_subscription(&stripe_subscription))
-        })
-        .or_else(|| {
-            event
-                .data
-                .object
-                .get("customer")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        });
+    // Never trust checkout metadata for Stripe customer IDs; attackers can inject
+    // `stripeCustomerId` via upgrade `metadata` (see OPE-28).
+    let customer_id = customer_id_from_stripe_subscription(&stripe_subscription).or_else(|| {
+        event
+            .data
+            .object
+            .get("customer")
+            .and_then(|value| match value {
+                serde_json::Value::String(id) => Some(id.clone()),
+                serde_json::Value::Object(object) => object
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                _ => None,
+            })
+    });
     let quantity = crate::utils::resolve_quantity(
         &stripe_subscription.items.data,
         resolved.item,

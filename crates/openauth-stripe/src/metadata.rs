@@ -7,8 +7,12 @@ const ORGANIZATION_ID: &str = "organizationId";
 const CUSTOMER_TYPE: &str = "customerType";
 const SUBSCRIPTION_ID: &str = "subscriptionId";
 const REFERENCE_ID: &str = "referenceId";
+const STRIPE_CUSTOMER_ID: &str = "stripeCustomerId";
+const STRIPE_CUSTOMER_ID_SNAKE: &str = "stripe_customer_id";
 
 const UNSAFE_KEYS: &[&str] = &["__proto__", "constructor", "prototype"];
+/// Keys that must never be accepted from client-supplied metadata (server/Stripe only).
+const USER_METADATA_DENYLIST: &[&str] = &[STRIPE_CUSTOMER_ID, STRIPE_CUSTOMER_ID_SNAKE];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CustomerMetadata {
@@ -102,7 +106,8 @@ fn merge_user_metadata(target: &mut BTreeMap<String, String>, metadata: Value) {
     let protected = target.clone();
     if let Value::Object(object) = metadata {
         for (key, value) in object {
-            if UNSAFE_KEYS.contains(&key.as_str()) {
+            if UNSAFE_KEYS.contains(&key.as_str()) || USER_METADATA_DENYLIST.contains(&key.as_str())
+            {
                 continue;
             }
             if let Some(value) = metadata_value_to_string(value) {

@@ -40,6 +40,21 @@ fn metadata_drops_prototype_pollution_keys() {
 }
 
 #[test]
+fn subscription_metadata_rejects_user_injected_stripe_customer_id() {
+    let metadata = SubscriptionMetadata::new("user-1", "sub-1", "ref-1")
+        .merge_user_metadata(json!({
+            "stripeCustomerId": "cus_victim",
+            "stripe_customer_id": "cus_victim_snake",
+            "campaign": "spring"
+        }))
+        .into_map();
+
+    assert!(!metadata.contains_key("stripeCustomerId"));
+    assert!(!metadata.contains_key("stripe_customer_id"));
+    assert_eq!(metadata.get("campaign").map(String::as_str), Some("spring"));
+}
+
+#[test]
 fn subscription_metadata_extracts_internal_fields() {
     let metadata = SubscriptionMetadata::new("user-1", "sub-1", "ref-1").into_map();
     let extracted = SubscriptionMetadata::get(&metadata);
