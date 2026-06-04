@@ -77,3 +77,40 @@ async fn upgrade_lazy_customer_create_forwards_request_metadata(
         .contains("metadata%5Btier%5D=enterprise"));
     Ok(())
 }
+
+#[tokio::test]
+async fn upgrade_strips_user_injected_stripe_customer_id_from_checkout_metadata(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CaptureTransport::default());
+    let plugin = stripe(stripe_options(Arc::clone(&transport)));
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, _adapter, cookie_header) = authenticated_context().await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"plan":"pro","successUrl":"/ok","cancelUrl":"/pricing","disableRedirect":true,"metadata":{"stripeCustomerId":"cus_victim","campaign":"q2"}}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = transport.requests()?;
+    let checkout_request = requests
+        .iter()
+        .find(|request| request.path == "/v1/checkout/sessions")
+        .ok_or("checkout request")?;
+    assert!(!checkout_request.body.contains("stripeCustomerId"));
+    assert!(!checkout_request.body.contains("cus_victim"));
+    assert!(checkout_request
+        .body
+        .contains("subscription_data%5Bmetadata%5D%5Bcampaign%5D=q2"));
+    Ok(())
+}
