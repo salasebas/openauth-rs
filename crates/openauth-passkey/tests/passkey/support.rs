@@ -655,6 +655,7 @@ pub async fn seed_passkey(
 #[derive(Default)]
 pub struct FakeWebAuthnBackend {
     pub registration_users: Mutex<Vec<String>>,
+    pub fail_finish_authentication: AtomicBool,
 }
 
 impl PasskeyWebAuthnBackend for FakeWebAuthnBackend {
@@ -753,6 +754,11 @@ impl PasskeyWebAuthnBackend for FakeWebAuthnBackend {
         _state: Value,
         _credential: Option<Value>,
     ) -> Result<VerifiedAuthentication, openauth_core::error::OpenAuthError> {
+        if self.fail_finish_authentication.load(Ordering::Relaxed) {
+            return Err(openauth_core::error::OpenAuthError::Adapter(
+                "authentication failed".to_owned(),
+            ));
+        }
         Ok(VerifiedAuthentication {
             credential: None,
             new_counter: 1,

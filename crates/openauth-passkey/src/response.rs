@@ -23,6 +23,15 @@ pub fn session_not_fresh() -> Result<ApiResponse, OpenAuthError> {
     )
 }
 
+/// Generic passkey authentication failure (unknown credential, bad proof, etc.).
+pub fn authentication_failed() -> Result<ApiResponse, OpenAuthError> {
+    error_response(
+        StatusCode::BAD_REQUEST,
+        "AUTHENTICATION_FAILED",
+        "Authentication failed",
+    )
+}
+
 pub fn internal_error(
     code: impl Into<String>,
     message: impl Into<String>,

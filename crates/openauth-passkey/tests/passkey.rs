@@ -6,6 +6,8 @@ mod cookie_config;
 mod management;
 #[path = "passkey/openapi.rs"]
 mod openapi;
+#[path = "passkey/rate_limit.rs"]
+mod rate_limit;
 #[path = "passkey/register.rs"]
 mod register;
 #[path = "passkey/schema.rs"]

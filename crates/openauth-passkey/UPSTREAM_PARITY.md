@@ -58,6 +58,12 @@ server contract.
 - Error handling intentionally favors explicit Rust errors over upstream's broad
   `try/catch` behavior in a few failure paths. Observable security boundaries
   and documented error codes are preserved where they matter.
+- Ceremony endpoints register plugin rate-limit rules (default `3` requests per
+  `10` seconds per client IP and path, configurable via `PasskeyOptions::rate_limit`).
+  Upstream passkey v1.6.9 relies only on the global Better Auth limiter.
+- `verify-authentication` returns a generic `AUTHENTICATION_FAILED` for unknown
+  credentials and invalid proofs to avoid credential-ID enumeration (upstream
+  still distinguishes `PASSKEY_NOT_FOUND` from `AUTHENTICATION_FAILED`).
 
 ## Out Of Scope
 
