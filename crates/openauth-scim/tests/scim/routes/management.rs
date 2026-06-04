@@ -2,7 +2,8 @@ use super::*;
 
 #[tokio::test]
 async fn management_default_token_storage_hashes_persisted_token() {
-    let (adapter, router, context) = router_with_context(ScimOptions::default()).expect("router");
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
     let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
         .await
         .expect("session cookie should create");
@@ -33,7 +34,8 @@ async fn management_default_token_storage_hashes_persisted_token() {
 
 #[tokio::test]
 async fn management_regenerating_token_preserves_provider_id() {
-    let (adapter, router, context) = router_with_context(ScimOptions::default()).expect("router");
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
     let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
         .await
         .expect("session cookie should create");
@@ -82,7 +84,8 @@ async fn management_regenerating_token_preserves_provider_id() {
 
 #[tokio::test]
 async fn management_generate_token_requires_session_and_token_can_provision_users() {
-    let (adapter, router, context) = router_with_context(ScimOptions::default()).expect("router");
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
 
     let anonymous = router
         .handle_async(session_json_request(
@@ -129,7 +132,7 @@ async fn management_generate_token_requires_session_and_token_can_provision_user
 async fn management_hashed_token_storage_can_authenticate_generated_token() {
     generated_token_can_provision_user_with_options(ScimOptions {
         token_storage: ScimTokenStorage::Hashed,
-        ..ScimOptions::default()
+        ..crate::scim_options_for_global_management()
     })
     .await;
 }
@@ -138,7 +141,7 @@ async fn management_hashed_token_storage_can_authenticate_generated_token() {
 async fn management_encrypted_token_storage_can_authenticate_generated_token() {
     generated_token_can_provision_user_with_options(ScimOptions {
         token_storage: ScimTokenStorage::Encrypted,
-        ..ScimOptions::default()
+        ..crate::scim_options_for_global_management()
     })
     .await;
 }
@@ -149,7 +152,7 @@ async fn management_custom_hash_token_storage_can_authenticate_generated_token()
         token_storage: ScimTokenStorage::custom_hash(|token| {
             Box::pin(async move { Ok(format!("{token}:hashed")) })
         }),
-        ..ScimOptions::default()
+        ..crate::scim_options_for_global_management()
     })
     .expect("router");
     let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
@@ -196,7 +199,7 @@ async fn management_custom_encryption_token_storage_can_authenticate_generated_t
             |token| Box::pin(async move { Ok(token.chars().rev().collect()) }),
             |token| Box::pin(async move { Ok(token.chars().rev().collect()) }),
         ),
-        ..ScimOptions::default()
+        ..crate::scim_options_for_global_management()
     })
     .expect("router");
     let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
@@ -245,7 +248,7 @@ async fn management_before_token_hook_failure_aborts_persistence() {
                 Err(ScimHookError::forbidden("blocked by hook"))
             })
         })),
-        ..ScimOptions::default()
+        ..crate::scim_options_for_global_management()
     })
     .expect("router");
     let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
@@ -278,21 +281,22 @@ async fn management_before_token_hook_failure_preserves_existing_provider() {
         before_token_generated: Some(Arc::new(|_input| {
             Box::pin(async { Err(ScimHookError::forbidden("blocked replacement")) })
         })),
-        ..ScimOptions::default()
+        ..crate::scim_options_for_global_management()
     })
     .expect("router");
+    let (cookie, owner_id) =
+        session_cookie_with_user(adapter.as_ref(), &context, "owner@example.com")
+            .await
+            .expect("session cookie should create");
     ScimProviderStore::new(adapter.as_ref())
         .create(CreateScimProviderInput {
             provider_id: "okta".to_owned(),
             scim_token: "existing-token".to_owned(),
             organization_id: None,
-            user_id: None,
+            user_id: Some(owner_id),
         })
         .await
         .expect("provider should create");
-    let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
-        .await
-        .expect("session cookie should create");
 
     let response = router
         .handle_async(session_json_request(
@@ -305,6 +309,7 @@ async fn management_before_token_hook_failure_preserves_existing_provider() {
         .expect("request should succeed");
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(json_body(response)["message"], "blocked replacement");
     let provider = ScimProviderStore::new(adapter.as_ref())
         .find_by_provider_id("okta")
         .await
@@ -332,7 +337,7 @@ async fn management_after_token_hook_receives_persisted_provider_and_returned_to
                 Ok(())
             })
         })),
-        ..ScimOptions::default()
+        ..crate::scim_options_for_global_management()
     })
     .expect("router");
     let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
@@ -363,11 +368,8 @@ async fn management_after_token_hook_receives_persisted_provider_and_returned_to
 
 #[tokio::test]
 async fn management_lists_gets_and_deletes_provider_connections() {
-    let (adapter, router, context) = router_with_context(ScimOptions {
-        provider_ownership: openauth_scim::ProviderOwnershipOptions { enabled: true },
-        ..ScimOptions::default()
-    })
-    .expect("router");
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
     let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
         .await
         .expect("session cookie should create");
@@ -435,7 +437,8 @@ async fn management_lists_gets_and_deletes_provider_connections() {
 
 #[tokio::test]
 async fn management_unknown_provider_get_and_delete_return_not_found() {
-    let (adapter, router, context) = router_with_context(ScimOptions::default()).expect("router");
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
     let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
         .await
         .expect("session cookie should create");
@@ -464,7 +467,8 @@ async fn management_unknown_provider_get_and_delete_return_not_found() {
 
 #[tokio::test]
 async fn management_token_replacement_invalidates_previous_token() {
-    let (adapter, router, context) = router_with_context(ScimOptions::default()).expect("router");
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
     let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
         .await
         .expect("session cookie should create");
@@ -515,7 +519,8 @@ async fn management_token_replacement_invalidates_previous_token() {
 
 #[tokio::test]
 async fn management_generate_token_rejects_provider_ids_with_colons() {
-    let (adapter, router, context) = router_with_context(ScimOptions::default()).expect("router");
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
     let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
         .await
         .expect("session cookie should create");
@@ -535,11 +540,8 @@ async fn management_generate_token_rejects_provider_ids_with_colons() {
 
 #[tokio::test]
 async fn management_provider_ownership_blocks_other_users() {
-    let (adapter, router, context) = router_with_context(ScimOptions {
-        provider_ownership: openauth_scim::ProviderOwnershipOptions { enabled: true },
-        ..ScimOptions::default()
-    })
-    .expect("router");
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
     let owner_cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
         .await
         .expect("owner session cookie should create");
@@ -578,4 +580,70 @@ async fn management_provider_ownership_blocks_other_users() {
         .await
         .expect("request should succeed");
     assert_eq!(regenerate.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn management_global_requires_provider_ownership_for_generate() {
+    let (adapter, router, context) = router_with_context(ScimOptions::default()).expect("router");
+    let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
+        .await
+        .expect("session cookie should create");
+
+    let response = router
+        .handle_async(session_json_request(
+            Method::POST,
+            "/scim/generate-token",
+            r#"{"providerId":"okta"}"#,
+            &cookie,
+        ))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        json_body(response)["message"],
+        "Global SCIM provider management requires provider ownership to be enabled"
+    );
+}
+
+#[tokio::test]
+async fn management_global_unowned_provider_is_inaccessible_with_ownership() {
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
+    ScimProviderStore::new(adapter.as_ref())
+        .create(CreateScimProviderInput {
+            provider_id: "legacy-okta".to_owned(),
+            scim_token: "legacy-token".to_owned(),
+            organization_id: None,
+            user_id: None,
+        })
+        .await
+        .expect("provider should create");
+    let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
+        .await
+        .expect("session cookie should create");
+
+    let list = router
+        .handle_async(session_request(
+            Method::GET,
+            "/scim/list-provider-connections",
+            &cookie,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(list.status(), StatusCode::OK);
+    assert!(json_body(list)["providers"]
+        .as_array()
+        .expect("providers should be array")
+        .is_empty());
+
+    let get = router
+        .handle_async(session_request(
+            Method::GET,
+            "/scim/get-provider-connection?providerId=legacy-okta",
+            &cookie,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(get.status(), StatusCode::FORBIDDEN);
 }

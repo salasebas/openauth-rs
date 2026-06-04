@@ -89,6 +89,12 @@ pub(super) fn generate_token_endpoint(
                         );
                     }
                     Some(member)
+                } else if !options.provider_ownership.enabled {
+                    return json_error(
+                        StatusCode::FORBIDDEN,
+                        "FORBIDDEN",
+                        "Global SCIM provider management requires provider ownership to be enabled",
+                    );
                 } else {
                     None
                 };

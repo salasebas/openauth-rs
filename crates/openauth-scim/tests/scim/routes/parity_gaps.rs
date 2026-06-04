@@ -17,7 +17,8 @@ async fn seed_plain_provider(adapter: &dyn DbAdapter, provider_id: &str, base_to
 #[tokio::test]
 async fn management_regenerate_rejects_different_organization_scope() {
     let (adapter, router, context) =
-        router_with_context_and_organization(ScimOptions::default()).expect("router");
+        router_with_context_and_organization(crate::scim_options_for_global_management())
+            .expect("router");
     seed_organization(adapter.as_ref(), "org_1")
         .await
         .expect("organization");

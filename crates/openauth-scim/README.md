@@ -82,6 +82,10 @@ Example body:
 `organizationId` is optional. When present, the organization plugin must be
 installed and the session user must have an allowed organization role.
 
+When omitted, set `provider_ownership.enabled` to `true` in `ScimOptions` so only
+the owning session user can create, list, rotate, or delete that global
+connection.
+
 ## Route Summary
 
 Management routes use regular OpenAuth JSON errors:
