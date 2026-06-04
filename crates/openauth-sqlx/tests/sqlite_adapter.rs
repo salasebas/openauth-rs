@@ -1,5 +1,8 @@
 #![cfg(feature = "sqlite")]
 
+#[path = "../../../tests/support/sqlx_migration_atomicity.rs"]
+mod sqlx_migration_atomicity;
+
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -26,6 +29,7 @@ use openauth_sqlx::migration::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_sqlx::{SqliteAdapter, SqliteRateLimitStore};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::Executor;
 use std::sync::Mutex as StdMutex;
 use time::OffsetDateTime;
 
@@ -42,6 +46,26 @@ async fn adapter() -> Result<SqliteAdapter, OpenAuthError> {
     let adapter = SqliteAdapter::with_schema(pool, schema.clone());
     adapter.create_schema(&schema, None).await?;
     Ok(adapter)
+}
+
+#[tokio::test]
+async fn sqlite_adapter_migration_plan_rolls_back_on_statement_failure() -> Result<(), OpenAuthError>
+{
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    pool.execute("PRAGMA foreign_keys = ON")
+        .await
+        .map_err(sql_error)?;
+    let schema = auth_schema(AuthSchemaOptions {
+        rate_limit_storage: RateLimitStorage::Database,
+        ..AuthSchemaOptions::default()
+    });
+    let adapter = SqliteAdapter::with_schema(pool.clone(), schema.clone());
+    sqlx_migration_atomicity::assert_sqlite_migration_plan_rolls_back(&adapter, &pool, &schema)
+        .await
 }
 
 #[tokio::test]

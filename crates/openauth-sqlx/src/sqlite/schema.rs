@@ -21,7 +21,12 @@ pub(super) async fn create_schema(
 ) -> Result<(), OpenAuthError> {
     let plan = build_migration_plan(&mut executor, schema).await?;
     crate::migration::ensure_executable(&plan)?;
-    execute_migration_plan(&mut executor, &plan).await
+    match executor {
+        SqliteExecutor::Pool(pool) => execute_migration_plan_on_pool(pool, &plan).await,
+        SqliteExecutor::Transaction(guard) => {
+            execute_migration_plan(&mut SqliteExecutor::Transaction(guard), &plan).await
+        }
+    }
 }
 
 async fn build_migration_plan(
@@ -75,6 +80,21 @@ pub(super) async fn execute_migration_plan(
     for statement in &plan.statements {
         execute_schema_sql(executor, &statement.sql).await?;
     }
+    Ok(())
+}
+
+pub(super) async fn execute_migration_plan_on_pool(
+    pool: &sqlx::SqlitePool,
+    plan: &SchemaMigrationPlan,
+) -> Result<(), OpenAuthError> {
+    let mut tx = pool.begin().await.map_err(sql_error)?;
+    for statement in &plan.statements {
+        sqlx::query(&statement.sql)
+            .execute(&mut *tx)
+            .await
+            .map_err(sql_error)?;
+    }
+    tx.commit().await.map_err(sql_error)?;
     Ok(())
 }
 

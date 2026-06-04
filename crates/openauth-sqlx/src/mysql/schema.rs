@@ -7,7 +7,7 @@ use openauth_core::error::OpenAuthError;
 use super::errors::{inactive_transaction, sql_error};
 use super::state::MySqlExecutor;
 use super::support::sanitize_identifier;
-use crate::migration::SchemaMigrationPlan;
+use crate::migration::{MigrationStatement, MigrationStatementKind, SchemaMigrationPlan};
 
 pub(super) async fn plan_migrations(
     mut executor: MySqlExecutor<'_, '_>,
@@ -22,7 +22,12 @@ pub(super) async fn create_schema(
 ) -> Result<(), OpenAuthError> {
     let plan = build_migration_plan(&mut executor, schema).await?;
     crate::migration::ensure_executable(&plan)?;
-    execute_migration_plan(&mut executor, &plan).await
+    match executor {
+        MySqlExecutor::Pool(pool) => execute_migration_plan_on_pool(pool, &plan).await,
+        MySqlExecutor::Transaction(guard) => {
+            execute_migration_plan(&mut MySqlExecutor::Transaction(guard), &plan).await
+        }
+    }
 }
 
 async fn build_migration_plan(
@@ -77,6 +82,67 @@ pub(super) async fn execute_migration_plan(
         execute_schema_sql(executor, &statement.sql).await?;
     }
     Ok(())
+}
+
+/// MySQL DDL performs implicit commits, so a SQL transaction cannot roll back a
+/// multi-statement migration. On failure we best-effort undo earlier statements.
+pub(super) async fn execute_migration_plan_on_pool(
+    pool: &sqlx::MySqlPool,
+    plan: &SchemaMigrationPlan,
+) -> Result<(), OpenAuthError> {
+    let mut applied = Vec::new();
+    for statement in &plan.statements {
+        match sqlx::query(&statement.sql).execute(pool).await {
+            Ok(_) => applied.push(statement),
+            Err(error) => {
+                compensate_mysql_applied_statements(pool, &applied).await;
+                return Err(sql_error(error));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn compensate_mysql_applied_statements(
+    pool: &sqlx::MySqlPool,
+    applied: &[&MigrationStatement],
+) {
+    for statement in applied.iter().rev() {
+        let Some(rollback_sql) = mysql_rollback_statement(statement) else {
+            continue;
+        };
+        let _ = sqlx::query(&rollback_sql).execute(pool).await;
+    }
+}
+
+fn mysql_rollback_statement(statement: &MigrationStatement) -> Option<String> {
+    match statement.kind {
+        MigrationStatementKind::CreateTable => {
+            let rest = statement.sql.strip_prefix("CREATE TABLE IF NOT EXISTS ")?;
+            let end = rest.find('(')?;
+            let table = rest[..end].trim();
+            Some(format!("DROP TABLE IF EXISTS {table}"))
+        }
+        MigrationStatementKind::AddColumn => {
+            let rest = statement.sql.strip_prefix("ALTER TABLE ")?;
+            let mut parts = rest.split_whitespace();
+            let table = parts.next()?;
+            if parts.next()? != "ADD" || parts.next()? != "COLUMN" {
+                return None;
+            }
+            let column = parts.next()?;
+            Some(format!("ALTER TABLE {table} DROP COLUMN {column}"))
+        }
+        MigrationStatementKind::CreateIndex => {
+            let rest = statement
+                .sql
+                .strip_prefix("CREATE UNIQUE INDEX ")
+                .or_else(|| statement.sql.strip_prefix("CREATE INDEX "))?;
+            let (index, table_and_columns) = rest.split_once(" ON ")?;
+            let table = table_and_columns.split('(').next()?.trim();
+            Some(format!("DROP INDEX {index} ON {table}"))
+        }
+    }
 }
 
 async fn table_exists(

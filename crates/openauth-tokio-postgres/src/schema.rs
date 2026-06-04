@@ -36,7 +36,35 @@ async fn execute_statements(
     client: &Client,
     plan: &SchemaMigrationPlan,
 ) -> Result<(), OpenAuthError> {
-    execute_schema_migration_plan(&mut PostgresSchemaExecutor { client }, plan).await
+    client
+        .batch_execute("BEGIN")
+        .await
+        .map_err(postgres_error)?;
+    let result = execute_schema_migration_plan(&mut PostgresSchemaExecutor { client }, plan).await;
+    match result {
+        Ok(()) => {
+            if let Err(error) = client.batch_execute("COMMIT").await {
+                let _rollback_result = client.batch_execute("ROLLBACK").await;
+                return Err(postgres_error(error));
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let _rollback_result = client.batch_execute("ROLLBACK").await;
+            Err(error)
+        }
+    }
+}
+
+/// Applies a prepared migration plan inside one Postgres transaction.
+///
+/// Exposed for integration tests that verify rollback behavior on failure.
+#[doc(hidden)]
+pub async fn apply_migration_plan(
+    client: &Client,
+    plan: &SchemaMigrationPlan,
+) -> Result<(), OpenAuthError> {
+    execute_statements(client, plan).await
 }
 
 async fn load_schema_snapshot(

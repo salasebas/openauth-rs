@@ -20,6 +20,9 @@ use serde_json::Value;
 #[path = "../../../tests/support/postgres_adapter_conformance.rs"]
 mod postgres_adapter_conformance;
 
+#[path = "../../../tests/support/postgres_migration_atomicity.rs"]
+mod postgres_migration_atomicity;
+
 use postgres_adapter_conformance as conformance;
 
 fn database_url() -> String {
@@ -198,6 +201,17 @@ async fn tokio_postgres_adapter_plans_and_runs_migrations() -> Result<(), OpenAu
     adapter.run_migrations(&schema).await?;
     assert!(adapter.plan_migrations(&schema).await?.is_empty());
     Ok(())
+}
+
+#[tokio::test]
+async fn tokio_postgres_adapter_migration_plan_rolls_back_on_statement_failure(
+) -> Result<(), OpenAuthError> {
+    let schema = test_schema();
+    let client = raw_client().await?;
+    postgres_migration_atomicity::assert_migration_plan_rolls_back_on_statement_failure(
+        &client, &schema,
+    )
+    .await
 }
 
 #[tokio::test]
