@@ -14,7 +14,8 @@ pub use crate::errors::{json_error, postgres_error};
 pub use crate::query::{param_refs, postgres_params};
 pub use crate::row::row_value_at;
 pub use crate::schema::{
-    create_schema, execute_migration_plan, plan_migrations, PostgresSchemaExecutor,
+    apply_migration_plan, create_schema, execute_migration_plan, plan_migrations,
+    PostgresSchemaExecutor,
 };
 
 /// Shared Postgres executor state for adapters backed by `tokio-postgres`.

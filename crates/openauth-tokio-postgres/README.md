@@ -58,6 +58,12 @@ driver task internally. If you construct the adapter with `new(client)` or
 `with_schema(client, schema)`, your application remains responsible for driving
 the connection task it created.
 
+## Migrations
+
+`create_schema` and `run_migrations` apply each generated plan inside a single
+Postgres transaction. If a later statement fails, earlier DDL in that plan is
+rolled back.
+
 ## Status
 
 Experimental beta. Adapter behavior, migration planning, and rate-limit store

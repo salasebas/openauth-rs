@@ -2,6 +2,9 @@
 
 mod common;
 
+#[path = "../../../tests/support/sqlx_migration_atomicity.rs"]
+mod sqlx_migration_atomicity;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -550,6 +553,16 @@ async fn postgres_rate_limit_store_uses_physical_column_names() -> Result<(), Op
             .map_err(sql_error)?;
     assert_eq!(stored_count, 1);
     Ok(())
+}
+
+#[tokio::test]
+async fn postgres_adapter_migration_plan_rolls_back_on_statement_failure(
+) -> Result<(), OpenAuthError> {
+    let pool = test_pool(1).await?;
+    let schema = test_schema();
+    let adapter = PostgresAdapter::with_schema(pool.clone(), schema.clone());
+    sqlx_migration_atomicity::assert_postgres_migration_plan_rolls_back(&adapter, &pool, &schema)
+        .await
 }
 
 #[tokio::test]

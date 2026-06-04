@@ -23,7 +23,9 @@ use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use tokio::sync::Mutex;
 
 use self::errors::sql_error;
-use self::schema::{create_schema, plan_migrations as plan_schema_migrations};
+use self::schema::{
+    create_schema, execute_migration_plan_on_pool, plan_migrations as plan_schema_migrations,
+};
 use self::state::{SqliteExecutor, SqliteState};
 use crate::migration::SchemaMigrationPlan;
 use crate::{consume_record, count_from_i64, count_to_i64, RateLimitSqlNames};
@@ -154,6 +156,16 @@ impl SqliteAdapter {
         Ok(self.plan_migrations(schema).await?.compile())
     }
 
+    /// Applies a prepared migration plan inside one database transaction.
+    #[doc(hidden)]
+    pub async fn apply_migration_plan(
+        &self,
+        plan: &SchemaMigrationPlan,
+    ) -> Result<(), OpenAuthError> {
+        crate::migration::ensure_executable(plan)?;
+        execute_migration_plan_on_pool(&self.pool, plan).await
+    }
+
     fn state(&self) -> SqliteState<'_, '_> {
         SqliteState {
             schema: &self.schema,
@@ -259,16 +271,7 @@ impl DbAdapter for SqliteAdapter {
         Box::pin(async move {
             let plan = plan_schema_migrations(SqliteExecutor::Pool(&self.pool), schema).await?;
             crate::migration::ensure_executable(&plan)?;
-            let mut tx = self.pool.begin().await.map_err(sql_error)?;
-            foreign_keys::enable_on_transaction(&mut tx).await?;
-            for statement in &plan.statements {
-                sqlx::query(&statement.sql)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(sql_error)?;
-            }
-            tx.commit().await.map_err(sql_error)?;
-            Ok(())
+            execute_migration_plan_on_pool(&self.pool, &plan).await
         })
     }
 }

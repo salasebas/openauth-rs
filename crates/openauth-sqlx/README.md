@@ -58,6 +58,22 @@ openauth-sqlx = { version = "0.0.6", features = ["sqlite"] }
   enforces foreign keys on each checkout even when the caller omitted pool
   options; prefer `sqlite_pool_options()` when building pools yourself.
 
+### Atomic schema application
+
+`create_schema` and `run_migrations` apply each generated plan as one unit so a
+mid-plan failure does not leave a partially applied OpenAuth schema:
+
+- **Postgres and SQLite** run the plan inside a single database transaction.
+  Failed statements roll back earlier DDL in that plan.
+- **MySQL** cannot roll back DDL through a transaction because MySQL performs
+  implicit commits for those statements. The adapter instead undoes successful
+  statements in reverse order on failure (for example `DROP TABLE` after a
+  failed later `CREATE TABLE`). This is best-effort; treat a failed migration as
+  requiring inspection before retrying.
+
+Postgres adapters in `openauth-tokio-postgres` and `openauth-deadpool-postgres`
+use the same transactional execution model as `PostgresAdapter`.
+
 ## Status
 
 Experimental beta. SQLite has the strongest local coverage. Postgres and MySQL

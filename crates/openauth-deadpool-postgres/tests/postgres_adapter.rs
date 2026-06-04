@@ -25,6 +25,9 @@ use tokio_postgres::NoTls;
 #[path = "../../../tests/support/postgres_adapter_conformance.rs"]
 mod postgres_adapter_conformance;
 
+#[path = "../../../tests/support/postgres_migration_atomicity.rs"]
+mod postgres_migration_atomicity;
+
 use postgres_adapter_conformance as conformance;
 use postgres_adapter_conformance::seed_user;
 
@@ -249,6 +252,17 @@ async fn deadpool_postgres_adapter_returns_database_generated_serial_ids(
     conformance::assert_returns_database_generated_serial_ids(
         &adapter,
         format!("serial-{prefix}@example.com"),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn deadpool_postgres_adapter_migration_plan_rolls_back_on_statement_failure(
+) -> Result<(), OpenAuthError> {
+    let schema = test_schema();
+    let client = conformance::raw_client().await?;
+    postgres_migration_atomicity::assert_migration_plan_rolls_back_on_statement_failure(
+        &client, &schema,
     )
     .await
 }

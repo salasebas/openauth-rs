@@ -2,6 +2,9 @@
 
 mod common;
 
+#[path = "../../../tests/support/sqlx_migration_atomicity.rs"]
+mod sqlx_migration_atomicity;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -69,6 +72,15 @@ async fn adapter() -> Result<MySqlAdapter, OpenAuthError> {
     let adapter = MySqlAdapter::with_schema(pool, schema.clone());
     adapter.create_schema(&schema, None).await?;
     Ok(adapter)
+}
+
+#[tokio::test]
+async fn mysql_adapter_migration_plan_rolls_back_on_statement_failure() -> Result<(), OpenAuthError>
+{
+    let pool = test_pool(1).await?;
+    let schema = test_schema();
+    let adapter = MySqlAdapter::with_schema(pool.clone(), schema.clone());
+    sqlx_migration_atomicity::assert_mysql_migration_plan_rolls_back(&adapter, &pool, &schema).await
 }
 
 #[tokio::test]
