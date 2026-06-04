@@ -482,24 +482,33 @@ async fn verify_authentication_unknown_and_invalid_proof_return_same_error(
         "credential-id",
     )
     .await?;
-    let options_response = router
+    let unknown_options = router
         .handle_async(empty_request(
             Method::GET,
             "/api/auth/passkey/generate-authenticate-options",
             None,
         )?)
         .await?;
-    let passkey_cookie = cookie_header_from_response(&options_response);
+    let unknown_cookie = cookie_header_from_response(&unknown_options);
 
     let unknown = router
         .handle_async(json_request_with_origin(
             Method::POST,
             "/api/auth/passkey/verify-authentication",
             r#"{"response":{"id":"unknown-credential-id"}}"#,
-            Some(&passkey_cookie),
+            Some(&unknown_cookie),
         )?)
         .await?;
     let unknown_body: Value = serde_json::from_slice(unknown.body())?;
+
+    let invalid_proof_options = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-authenticate-options",
+            None,
+        )?)
+        .await?;
+    let invalid_proof_cookie = cookie_header_from_response(&invalid_proof_options);
 
     backend
         .fail_finish_authentication
@@ -509,7 +518,7 @@ async fn verify_authentication_unknown_and_invalid_proof_return_same_error(
             Method::POST,
             "/api/auth/passkey/verify-authentication",
             r#"{"response":{"id":"credential-id"}}"#,
-            Some(&passkey_cookie),
+            Some(&invalid_proof_cookie),
         )?)
         .await?;
     let invalid_proof_body: Value = serde_json::from_slice(invalid_proof.body())?;
