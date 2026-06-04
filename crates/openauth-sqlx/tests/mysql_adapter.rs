@@ -2,7 +2,7 @@
 
 mod common;
 
-#[path = "../../../tests/support/sqlx_migration_atomicity.rs"]
+#[path = "../../../tests/support/sqlx_migration_atomicity_mysql.rs"]
 mod sqlx_migration_atomicity;
 
 use std::sync::atomic::{AtomicU64, Ordering};

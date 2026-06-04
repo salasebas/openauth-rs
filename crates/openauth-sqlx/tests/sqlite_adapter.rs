@@ -1,6 +1,6 @@
 #![cfg(feature = "sqlite")]
 
-#[path = "../../../tests/support/sqlx_migration_atomicity.rs"]
+#[path = "../../../tests/support/sqlx_migration_atomicity_sqlite.rs"]
 mod sqlx_migration_atomicity;
 
 use std::sync::Arc;
