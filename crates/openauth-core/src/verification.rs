@@ -304,7 +304,7 @@ impl<'a> DbVerificationStore<'a> {
             return Ok(taken.lock().await.take());
         }
 
-        let take_lock = verification_take_lock(self.adapter, &stored_identifier);
+        let take_lock = verification_take_lock(self.adapter, &stored_identifier)?;
         let _guard = take_lock.lock().await;
         let Some(verification) = self.find_verification(identifier).await? else {
             return Ok(None);
@@ -498,17 +498,23 @@ impl<'a> VerificationStore<'a> {
 static VERIFICATION_TAKE_LOCKS: LazyLock<StdMutex<HashMap<u64, Arc<Mutex<()>>>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
 
-fn verification_take_lock(adapter: &dyn DbAdapter, stored_identifier: &str) -> Arc<Mutex<()>> {
+fn verification_take_lock(
+    adapter: &dyn DbAdapter,
+    stored_identifier: &str,
+) -> Result<Arc<Mutex<()>>, OpenAuthError> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     (adapter as *const dyn DbAdapter).hash(&mut hasher);
     stored_identifier.hash(&mut hasher);
     let key = hasher.finish();
-    VERIFICATION_TAKE_LOCKS
+    let mut table = VERIFICATION_TAKE_LOCKS
         .lock()
-        .expect("verification take lock table poisoned")
+        .map_err(|_| OpenAuthError::LockPoisoned {
+            context: "verification take lock table",
+        })?;
+    Ok(table
         .entry(key)
         .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
+        .clone())
 }
 
 fn identifier_where(identifier: &str) -> Where {
