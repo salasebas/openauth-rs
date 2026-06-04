@@ -19,7 +19,7 @@ use crate::options::{
     AfterAuthenticationVerificationInput, PasskeyExtensionsInput, PasskeyOptions,
     PasskeyRegistrationUser,
 };
-use crate::response::{error_response, internal_error, json_response};
+use crate::response::{authentication_failed, error_response, internal_error, json_response};
 use crate::routes::{
     adapter, resolve_extensions, verification_webauthn_config, webauthn_config,
     VerifyAuthenticationBody,
@@ -166,30 +166,18 @@ pub(super) fn verify_authentication_endpoint(options: Arc<PasskeyOptions>) -> As
                 let Some(credential_id) =
                     body.response.get("id").and_then(serde_json::Value::as_str)
                 else {
-                    return error_response(
-                        StatusCode::BAD_REQUEST,
-                        "AUTHENTICATION_FAILED",
-                        "Authentication failed",
-                    );
+                    return authentication_failed();
                 };
                 let store = PasskeyStore::new(adapter.as_ref());
                 let Some(passkey) = store.find_by_credential_id(credential_id).await? else {
-                    return error_response(
-                        StatusCode::UNAUTHORIZED,
-                        "PASSKEY_NOT_FOUND",
-                        "Passkey not found",
-                    );
+                    return authentication_failed();
                 };
                 if challenge
                     .user
                     .as_ref()
                     .is_some_and(|user| user.id != passkey.user_id)
                 {
-                    return error_response(
-                        StatusCode::UNAUTHORIZED,
-                        "PASSKEY_NOT_FOUND",
-                        "Passkey not found",
-                    );
+                    return authentication_failed();
                 }
                 let Some(config) = verification_webauthn_config(context, &options, &request)?
                 else {
@@ -206,13 +194,7 @@ pub(super) fn verify_authentication_endpoint(options: Arc<PasskeyOptions>) -> As
                     Some(passkey.webauthn_credential.clone()),
                 ) {
                     Ok(verified) => verified,
-                    Err(_) => {
-                        return error_response(
-                            StatusCode::BAD_REQUEST,
-                            "AUTHENTICATION_FAILED",
-                            "Authentication failed",
-                        )
-                    }
+                    Err(_) => return authentication_failed(),
                 };
                 if let Some(callback) = &options.authentication.after_verification {
                     callback(AfterAuthenticationVerificationInput {

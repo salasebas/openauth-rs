@@ -35,7 +35,7 @@ pub use errors::PASSKEY_ERROR_CODES;
 pub use options::{
     AfterAuthenticationVerificationInput, AfterRegistrationVerificationInput,
     AuthenticatorAttachment, AuthenticatorSelection, PasskeyAdvancedOptions,
-    PasskeyAuthenticationOptions, PasskeyExtensionsInput, PasskeyOptions,
+    PasskeyAuthenticationOptions, PasskeyExtensionsInput, PasskeyOptions, PasskeyRateLimit,
     PasskeyRegistrationOptions, PasskeyRegistrationUser, RegistrationWebAuthnOptions,
     ResidentKeyRequirement, ResolveRegistrationUserInput, UserVerificationRequirement,
 };
@@ -45,14 +45,26 @@ pub use webauthn::{
     RealPasskeyWebAuthnBackend, VerifiedAuthentication, VerifiedPasskeyCredential, WebAuthnConfig,
 };
 
-use openauth_core::plugin::AuthPlugin;
+use openauth_core::plugin::{AuthPlugin, PluginRateLimitRule};
 
 pub const UPSTREAM_PLUGIN_ID: &str = "passkey";
 
+/// Ceremony endpoints that mint or consume WebAuthn challenges.
+pub const RATE_LIMITED_CEREMONY_PATHS: &[&str] = &[
+    "/passkey/generate-authenticate-options",
+    "/passkey/verify-authentication",
+    "/passkey/generate-register-options",
+    "/passkey/verify-registration",
+];
+
 /// Build the server-side passkey plugin.
 pub fn passkey(options: PasskeyOptions) -> AuthPlugin {
+    let rate_limit_rule = options.rate_limit_rule();
     let options = std::sync::Arc::new(options);
     let mut plugin = AuthPlugin::new(UPSTREAM_PLUGIN_ID).with_version(env!("CARGO_PKG_VERSION"));
+    for path in RATE_LIMITED_CEREMONY_PATHS {
+        plugin = plugin.with_rate_limit(PluginRateLimitRule::new(*path, rate_limit_rule.clone()));
+    }
     for contribution in schema::contributions(&options.passkey_table) {
         plugin = plugin.with_schema(contribution);
     }

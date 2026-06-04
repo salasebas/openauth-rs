@@ -2,10 +2,44 @@ use std::future::{ready, Future};
 use std::pin::Pin;
 use std::sync::Arc;
 
+use openauth_core::options::RateLimitRule;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::webauthn::{PasskeyWebAuthnBackend, RealPasskeyWebAuthnBackend};
+
+/// Rate limit settings for passkey ceremony endpoints (challenge generation and verification).
+///
+/// Defaults match OpenAuth core's strict sign-in policy (`3` requests per `10` seconds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PasskeyRateLimit {
+    pub window: u64,
+    pub max: u64,
+}
+
+impl Default for PasskeyRateLimit {
+    fn default() -> Self {
+        Self { window: 10, max: 3 }
+    }
+}
+
+impl PasskeyRateLimit {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn window(mut self, window: u64) -> Self {
+        self.window = window;
+        self
+    }
+
+    #[must_use]
+    pub fn max(mut self, max: u64) -> Self {
+        self.max = max;
+        self
+    }
+}
 
 /// Advanced passkey plugin settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +66,7 @@ pub struct PasskeyOptions {
     pub registration: PasskeyRegistrationOptions,
     pub authentication: PasskeyAuthenticationOptions,
     pub advanced: PasskeyAdvancedOptions,
+    pub rate_limit: PasskeyRateLimit,
     pub backend: Arc<dyn PasskeyWebAuthnBackend>,
 }
 
@@ -46,6 +81,7 @@ impl Default for PasskeyOptions {
             registration: PasskeyRegistrationOptions::default(),
             authentication: PasskeyAuthenticationOptions::default(),
             advanced: PasskeyAdvancedOptions::default(),
+            rate_limit: PasskeyRateLimit::default(),
             backend: Arc::new(RealPasskeyWebAuthnBackend),
         }
     }
@@ -105,9 +141,22 @@ impl PasskeyOptions {
     }
 
     #[must_use]
+    pub fn rate_limit(mut self, rate_limit: PasskeyRateLimit) -> Self {
+        self.rate_limit = rate_limit;
+        self
+    }
+
+    #[must_use]
     pub fn backend(mut self, backend: Arc<dyn PasskeyWebAuthnBackend>) -> Self {
         self.backend = backend;
         self
+    }
+
+    pub(crate) fn rate_limit_rule(&self) -> RateLimitRule {
+        RateLimitRule {
+            window: self.rate_limit.window,
+            max: self.rate_limit.max,
+        }
     }
 }
 

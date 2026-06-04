@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use http::{HeaderValue, Method, StatusCode};
@@ -461,7 +462,62 @@ async fn verify_authentication_rejects_credential_outside_session_challenge(
         )?)
         .await?;
 
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "AUTHENTICATION_FAILED");
+    Ok(())
+}
+
+/// Unknown credential IDs and invalid proofs must not be distinguishable by
+/// status code or error code (credential ID enumeration, OPE-32).
+#[tokio::test]
+async fn verify_authentication_unknown_and_invalid_proof_return_same_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router, backend) = seeded_router(PasskeyOptions::default()).await?;
+    seed_passkey(
+        adapter.as_ref(),
+        "passkey_1",
+        "user_1",
+        "Laptop",
+        "credential-id",
+    )
+    .await?;
+    let options_response = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-authenticate-options",
+            None,
+        )?)
+        .await?;
+    let passkey_cookie = cookie_header_from_response(&options_response);
+
+    let unknown = router
+        .handle_async(json_request_with_origin(
+            Method::POST,
+            "/api/auth/passkey/verify-authentication",
+            r#"{"response":{"id":"unknown-credential-id"}}"#,
+            Some(&passkey_cookie),
+        )?)
+        .await?;
+    let unknown_body: Value = serde_json::from_slice(unknown.body())?;
+
+    backend
+        .fail_finish_authentication
+        .store(true, Ordering::Relaxed);
+    let invalid_proof = router
+        .handle_async(json_request_with_origin(
+            Method::POST,
+            "/api/auth/passkey/verify-authentication",
+            r#"{"response":{"id":"credential-id"}}"#,
+            Some(&passkey_cookie),
+        )?)
+        .await?;
+    let invalid_proof_body: Value = serde_json::from_slice(invalid_proof.body())?;
+
+    assert_eq!(unknown.status(), invalid_proof.status());
+    assert_eq!(unknown_body["code"], invalid_proof_body["code"]);
+    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(unknown_body["code"], "AUTHENTICATION_FAILED");
     Ok(())
 }
 
