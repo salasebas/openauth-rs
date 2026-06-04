@@ -16,6 +16,10 @@ All notable changes to `openauth-tokio-postgres` are documented in this file.
   is dropped before explicit `COMMIT`/`ROLLBACK` (cancellation, task abort, or
   panic), holding the shared connection gate until cleanup completes so later
   operations cannot commit orphaned writes.
+- Require database-backed rate limiting to share the adapter transaction gate.
+  `TokioPostgresRateLimitStore::from` and `TokioPostgresAdapter::rate_limit_store`
+  now document and test the safe path, while `new`/`with_table` are deprecated in
+  favor of `exclusive` for dedicated clients that are not shared with an adapter.
 
 ## [0.0.6] - 2026-05-24
 

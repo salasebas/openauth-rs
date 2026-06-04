@@ -31,16 +31,40 @@ impl fmt::Debug for TokioPostgresRateLimitStore {
 }
 
 impl TokioPostgresRateLimitStore {
-    pub fn new(client: Client) -> Self {
-        Self::with_table(client, "rate_limits")
+    /// Creates a rate-limit store for a client that is not shared with a
+    /// [`TokioPostgresAdapter`].
+    ///
+    /// Use [`TokioPostgresRateLimitStore::from`] or
+    /// [`TokioPostgresAdapter::rate_limit_store`] when the same Postgres
+    /// connection is also used by an adapter so both share the transaction
+    /// gate.
+    pub fn exclusive(client: Client) -> Self {
+        Self::exclusive_with_table(client, "rate_limits")
     }
 
-    pub fn with_table(client: Client, table: impl Into<String>) -> Self {
+    /// Same as [`Self::exclusive`], but with a custom rate-limit table name.
+    pub fn exclusive_with_table(client: Client, table: impl Into<String>) -> Self {
         Self {
             client: Arc::new(client),
             tx_gate: Arc::new(RwLock::new(())),
             names: SqlRateLimitNames::new(table),
         }
+    }
+
+    #[deprecated(
+        since = "0.0.7",
+        note = "use `exclusive` for dedicated clients or `TokioPostgresRateLimitStore::from` / `TokioPostgresAdapter::rate_limit_store` when sharing a client with the adapter"
+    )]
+    pub fn new(client: Client) -> Self {
+        Self::exclusive(client)
+    }
+
+    #[deprecated(
+        since = "0.0.7",
+        note = "use `exclusive_with_table` for dedicated clients or `TokioPostgresRateLimitStore::from` / `TokioPostgresAdapter::rate_limit_store` when sharing a client with the adapter"
+    )]
+    pub fn with_table(client: Client, table: impl Into<String>) -> Self {
+        Self::exclusive_with_table(client, table)
     }
 }
 

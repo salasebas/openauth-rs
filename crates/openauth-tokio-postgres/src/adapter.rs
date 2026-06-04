@@ -12,6 +12,7 @@ use tokio_postgres::{Client, NoTls};
 
 use crate::driver::PostgresSqlState;
 use crate::errors::postgres_error;
+use crate::rate_limit::TokioPostgresRateLimitStore;
 use crate::schema::{
     create_schema, execute_migration_plan, plan_migrations as plan_schema_migrations,
 };
@@ -80,6 +81,12 @@ impl TokioPostgresAdapter {
 
     pub async fn compile_migrations(&self, schema: &DbSchema) -> Result<String, OpenAuthError> {
         Ok(self.plan_migrations(schema).await?.compile())
+    }
+
+    /// Returns a database-backed rate-limit store that shares this adapter's
+    /// transaction gate and schema-derived rate-limit table names.
+    pub fn rate_limit_store(&self) -> TokioPostgresRateLimitStore {
+        TokioPostgresRateLimitStore::from(self)
     }
 
     async fn run_with_state<T>(

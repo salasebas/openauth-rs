@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
@@ -787,6 +788,71 @@ async fn tokio_postgres_rate_limit_store_is_atomic_and_uses_physical_names(
     );
     assert_eq!(adapter.count(Count::new("rate_limit")).await?, 1);
     Ok(())
+}
+
+#[tokio::test]
+async fn tokio_postgres_rate_limit_store_from_adapter_shares_transaction_gate(
+) -> Result<(), OpenAuthError> {
+    let client = raw_client().await?;
+    let schema = test_schema();
+    let adapter = TokioPostgresAdapter::with_schema(client, schema.clone());
+    adapter.create_schema(&schema, None).await?;
+    let store = TokioPostgresRateLimitStore::from(&adapter);
+
+    let elapsed = time_rate_limit_while_adapter_holds_transaction(&adapter, &store).await?;
+    assert!(
+        elapsed >= Duration::from_millis(150),
+        "expected shared gate to serialize rate-limit consume behind adapter transaction, got {elapsed:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tokio_postgres_adapter_rate_limit_store_shares_transaction_gate(
+) -> Result<(), OpenAuthError> {
+    let client = raw_client().await?;
+    let schema = test_schema();
+    let adapter = TokioPostgresAdapter::with_schema(client, schema.clone());
+    adapter.create_schema(&schema, None).await?;
+    let store = adapter.rate_limit_store();
+
+    let elapsed = time_rate_limit_while_adapter_holds_transaction(&adapter, &store).await?;
+    assert!(
+        elapsed >= Duration::from_millis(150),
+        "expected adapter.rate_limit_store() to share the transaction gate, got {elapsed:?}"
+    );
+    Ok(())
+}
+
+async fn time_rate_limit_while_adapter_holds_transaction(
+    adapter: &TokioPostgresAdapter,
+    store: &TokioPostgresRateLimitStore,
+) -> Result<Duration, OpenAuthError> {
+    let adapter = adapter.clone();
+    let store = store.clone();
+    let hold = tokio::spawn(async move {
+        adapter
+            .transaction(Box::new(|_tx| {
+                Box::pin(async move {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    Ok(())
+                })
+            }))
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let start = Instant::now();
+    store
+        .consume(RateLimitConsumeInput {
+            key: "ip:/gate-serialization".to_owned(),
+            rule: RateLimitRule { window: 60, max: 1 },
+            now_ms: 1_700_000_000_000,
+        })
+        .await?;
+    let elapsed = start.elapsed();
+    hold.await
+        .map_err(|error| OpenAuthError::Adapter(format!("transaction task failed: {error}")))??;
+    Ok(elapsed)
 }
 
 #[tokio::test]

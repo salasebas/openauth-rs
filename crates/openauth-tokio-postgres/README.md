@@ -12,7 +12,10 @@ not a pool; production applications that need pooling should usually prefer
 ## What It Provides
 
 - `TokioPostgresAdapter` for OpenAuth primary storage.
-- `TokioPostgresRateLimitStore` for SQL-backed rate limiting.
+- `TokioPostgresRateLimitStore` for SQL-backed rate limiting. Construct it with
+  [`TokioPostgresAdapter::rate_limit_store`] or
+  [`TokioPostgresRateLimitStore::from`] so rate-limit transactions share the
+  adapter's connection gate.
 - Shared Postgres schema, query, row, migration, and transaction helpers.
 - Native Postgres arrays for OpenAuth `StringArray` and `NumberArray` fields.
 
