@@ -210,10 +210,17 @@ pub(in crate::api) async fn delete_user_with_token(
 ) -> Result<(), DeleteUserErrorOrOpenAuth> {
     let identifier = format!("delete-account-{token}");
     let verifications = VerificationStore::new(adapter, context);
-    let Some(verification) = verifications.find_verification(&identifier).await? else {
+    let Some(verification) = verifications
+        .find_verification_including_expired(&identifier)
+        .await?
+    else {
         return Err(DeleteUserError::InvalidToken.into());
     };
     if verification.value != user.id {
+        return Err(DeleteUserError::InvalidToken.into());
+    }
+    if verification.expires_at <= OffsetDateTime::now_utc() {
+        verifications.delete_verification(&identifier).await?;
         return Err(DeleteUserError::InvalidToken.into());
     }
     perform_delete(adapter, context, request, user).await?;
