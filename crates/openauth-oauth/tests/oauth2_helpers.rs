@@ -10,7 +10,7 @@ use std::net::TcpListener;
 use std::thread;
 
 use josekit::jwk::Jwk;
-use josekit::jwk::{Ed25519, JwkSet, P_256};
+use josekit::jwk::{Ed25519, P_256};
 use josekit::jws::alg::ecdsa::EcdsaJwsAlgorithm::Es256;
 use josekit::jws::alg::eddsa::EddsaJwsAlgorithm::Eddsa;
 use josekit::jws::alg::hmac::HmacJwsAlgorithm::Hs256;
@@ -33,8 +33,8 @@ use openauth_oauth::oauth2::{
     TokenValidationOptions, TokenValidationResult, VerifyAccessTokenOptions,
     VerifyAccessTokenRemote,
 };
-use serde_json::json;
-use serde_json::Number;
+use serde_json::{json, Number, Value};
+use std::str::FromStr;
 use std::time::Duration;
 use time::OffsetDateTime;
 
@@ -1258,6 +1258,82 @@ async fn validate_token_accepts_hmac_algorithms_when_explicitly_allowed() {
 }
 
 #[tokio::test]
+async fn verify_jws_with_jwks_rejects_non_integer_temporal_claims() {
+    let cases = [
+        ("exp", json!(0.1)),
+        (
+            "nbf",
+            json!(OffsetDateTime::now_utc().unix_timestamp() as f64 + 0.5),
+        ),
+        (
+            "iat",
+            json!(OffsetDateTime::now_utc().unix_timestamp() as f64 + 0.5),
+        ),
+        (
+            "exp",
+            Value::Number(
+                Number::from_str("9223372036854775808")
+                    .expect("oversized exp should parse as JSON number"),
+            ),
+        ),
+    ];
+
+    for (claim_name, claim_value) in cases {
+        let mut claims = serde_json::Map::new();
+        claims.insert("sub".to_owned(), json!("user-123"));
+        claims.insert(claim_name.to_owned(), claim_value);
+        let (token, jwk) = signed_hs256_token("fractional-exp-key", Value::Object(claims.clone()));
+        let jwks =
+            josekit::jwk::JwkSet::from_bytes(json!({ "keys": [jwk] }).to_string().as_bytes())
+                .expect("jwks should parse");
+
+        let error = verify_jws_with_jwks(
+            &token,
+            &jwks,
+            &TokenValidationOptions::default().allow_hmac_algorithms(),
+        )
+        .expect_err("non-integer temporal claim should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("invalid OAuth claim `{claim_name}`")),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn validate_token_rejects_required_exp_with_unparseable_numeric_value() {
+    let (token, jwk) = signed_hs256_token(
+        "fractional-required-exp",
+        json!({
+            "sub": "user-123",
+            "iss": "https://issuer.example.com",
+            "aud": "client-id",
+            "exp": 1.5
+        }),
+    );
+    let server = JsonServer::spawn(json!({ "keys": [jwk] }));
+
+    let error = validate_token_with_client(
+        &token,
+        &server.url(),
+        TokenValidationOptions {
+            audience: vec!["client-id".to_owned()],
+            issuer: vec!["https://issuer.example.com".to_owned()],
+            ..TokenValidationOptions::default().require_standard_claims()
+        }
+        .allow_hmac_algorithms(),
+        &permissive_client(),
+    )
+    .await
+    .expect_err("required exp with fractional value should be rejected");
+
+    assert!(error.to_string().contains("invalid OAuth claim `exp`"));
+}
+
+#[tokio::test]
 async fn validate_token_rejects_expired_tokens() {
     let (token, jwk) = signed_hs256_token(
         "expired-key",
@@ -1281,63 +1357,6 @@ async fn validate_token_rejects_expired_tokens() {
     )
     .await
     .is_err());
-}
-
-#[test]
-fn verify_jws_with_jwks_rejects_non_integer_temporal_claims() {
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    let options = TokenValidationOptions::default().allow_hmac_algorithms();
-    let oversized_exp = Number::from((i64::MAX as u64) + 1);
-
-    for (claim, value) in [
-        ("exp", json!(0.1)),
-        ("exp", json!(oversized_exp)),
-        ("nbf", json!(1.5)),
-        ("iat", json!(2.7)),
-    ] {
-        let mut claims = json!({
-            "sub": "user-123",
-            "exp": now + 3600,
-            "iat": now,
-        });
-        claims
-            .as_object_mut()
-            .expect("claims should be an object")
-            .insert(claim.to_owned(), value);
-        let (token, jwk) = signed_hs256_token("temporal-key", claims);
-        let jwks = jwks_from_key(jwk);
-
-        let error = verify_jws_with_jwks(&token, &jwks, &options)
-            .expect_err("non-integer temporal claim should be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains(&format!("invalid OAuth claim `{claim}`")),
-            "unexpected error for claim `{claim}`: {error}"
-        );
-    }
-}
-
-#[test]
-fn verify_jws_with_jwks_requires_parseable_exp_when_required() {
-    let (token, jwk) = signed_hs256_token(
-        "required-exp-key",
-        json!({
-            "sub": "user-123",
-            "iss": "https://issuer.example.com",
-            "aud": "client-id",
-            "exp": 0.1
-        }),
-    );
-    let jwks = jwks_from_key(jwk);
-    let options = TokenValidationOptions {
-        require_expiration: true,
-        ..TokenValidationOptions::default().allow_hmac_algorithms()
-    };
-
-    let error = verify_jws_with_jwks(&token, &jwks, &options)
-        .expect_err("required exp must be an integer numeric timestamp");
-    assert!(error.to_string().contains("invalid OAuth claim `exp`"));
 }
 
 #[tokio::test]
@@ -1853,11 +1872,6 @@ fn signed_hs256_token(kid: &str, claims: serde_json::Value) -> (String, Jwk) {
         jwt::encode_with_signer(payload, header, &signer)
     });
     (token, jwk)
-}
-
-fn jwks_from_key(jwk: Jwk) -> JwkSet {
-    let bytes = json!({ "keys": [jwk] }).to_string();
-    JwkSet::from_bytes(bytes.as_bytes()).expect("jwks should parse")
 }
 
 fn signed_asymmetric_token(algorithm: &str, kid: &str) -> (String, Jwk) {
