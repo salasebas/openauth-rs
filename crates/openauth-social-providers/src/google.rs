@@ -12,10 +12,10 @@ use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::{Rs256, Rs384, Rs512};
 use josekit::jws::JwsHeader;
 use josekit::jwt;
 use openauth_oauth::oauth2::{
-    create_authorization_url, get_jwks, get_primary_client_id, refresh_access_token,
-    validate_authorization_code, AuthorizationCodeRequest, AuthorizationUrlRequest,
-    ClientAuthentication, ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError,
-    OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
+    create_authorization_url, get_jwks, get_primary_client_id, parse_numeric_timestamp_claim,
+    refresh_access_token, validate_authorization_code, AuthorizationCodeRequest,
+    AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest, OAuth2Tokens,
+    OAuth2UserInfo, OAuthError, OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -408,17 +408,17 @@ fn audience_matches(value: Option<&Value>, expected: &[String]) -> bool {
 
 fn validate_temporal_claims(claims: &serde_json::Map<String, Value>) -> Result<(), OAuthError> {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    if let Some(expiration) = numeric_claim(claims.get("exp")) {
+    if let Some(expiration) = parse_numeric_timestamp_claim(claims.get("exp"), "exp", false)? {
         if expiration <= now {
             return Err(OAuthError::TokenVerification("token expired".to_owned()));
         }
     }
-    if let Some(not_before) = numeric_claim(claims.get("nbf")) {
+    if let Some(not_before) = parse_numeric_timestamp_claim(claims.get("nbf"), "nbf", false)? {
         if not_before > now {
             return Err(OAuthError::TokenVerification("token not active".to_owned()));
         }
     }
-    if let Some(issued_at) = numeric_claim(claims.get("iat")) {
+    if let Some(issued_at) = parse_numeric_timestamp_claim(claims.get("iat"), "iat", false)? {
         if issued_at > now + 60 {
             return Err(OAuthError::TokenVerification(
                 "token issued in the future".to_owned(),
@@ -426,15 +426,6 @@ fn validate_temporal_claims(claims: &serde_json::Map<String, Value>) -> Result<(
         }
     }
     Ok(())
-}
-
-fn numeric_claim(value: Option<&Value>) -> Option<i64> {
-    match value {
-        Some(Value::Number(number)) => number
-            .as_i64()
-            .or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok())),
-        _ => None,
-    }
 }
 
 fn id_token_is_fresh(payload: &Value) -> bool {
@@ -495,6 +486,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn verify_id_token_rejects_non_integer_temporal_claims() {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+
+        for (claim_name, claim_value) in [
+            ("exp", json!(0.1)),
+            ("nbf", json!(now as f64 + 0.5)),
+            ("iat", json!(now as f64 + 0.5)),
+        ] {
+            let (token, jwk) = signed_google_id_token_with_claims(
+                "web-client",
+                GOOGLE_ISSUER_HTTPS,
+                Some("n"),
+                [(claim_name, claim_value)],
+            );
+            let jwks = jwks_with_key(jwk);
+            let error = verify_google_id_token_jws(&token, &jwks, &["web-client".to_owned()])
+                .expect_err("non-integer temporal claim should fail verification");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("invalid OAuth claim `{claim_name}`")),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn verify_id_token_rejects_unknown_audience_wrong_issuer_nonce_and_disabled_sign_in() {
         let (token, jwk) = signed_google_id_token("unknown-client", GOOGLE_ISSUER_HTTPS, Some("n"));
         let jwks = jwks_with_key(jwk);
@@ -535,7 +553,12 @@ mod tests {
         })
     }
 
-    fn signed_google_id_token(audience: &str, issuer: &str, nonce: Option<&str>) -> (String, Jwk) {
+    fn signed_google_id_token_with_claims(
+        audience: &str,
+        issuer: &str,
+        nonce: Option<&str>,
+        extra_claims: impl IntoIterator<Item = (&'static str, Value)>,
+    ) -> (String, Jwk) {
         let kid = "google-test-key";
         let mut jwk = Jwk::generate_rsa_key(2048).expect("rsa key should generate");
         jwk.set_key_id(kid);
@@ -573,6 +596,11 @@ mod tests {
         payload
             .set_claim("exp", Some(json!(now + 3600)))
             .expect("exp claim");
+        for (claim, value) in extra_claims {
+            payload
+                .set_claim(claim, Some(value))
+                .expect("temporal claim should set");
+        }
 
         let mut header = JwsHeader::new();
         header.set_algorithm("RS256");
@@ -584,6 +612,10 @@ mod tests {
         public_jwk.set_algorithm("RS256");
         public_jwk.set_key_use("sig");
         (token, public_jwk)
+    }
+
+    fn signed_google_id_token(audience: &str, issuer: &str, nonce: Option<&str>) -> (String, Jwk) {
+        signed_google_id_token_with_claims(audience, issuer, nonce, [])
     }
 
     fn jwks_with_key(jwk: Jwk) -> JwkSet {

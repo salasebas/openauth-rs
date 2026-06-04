@@ -24,16 +24,17 @@ use openauth_oauth::oauth2::{
     get_primary_client_id, refresh_access_token_with_client, validate_code_verifier,
     validate_token_with_client, verify_access_token_with_client,
     verify_jws_access_token_with_client, verify_jws_access_token_with_client_and_cache_config,
-    AuthorizationCodeRequest, AuthorizationEndpoint, AuthorizationUrlRequest, ClientAuthentication,
-    ClientCredentialsGrant, ClientCredentialsTokenRequest, ClientId, ClientTokenRequest,
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthHttpClient,
-    OAuthHttpClientConfig, OAuthJwksCacheConfig, ProviderOptions, RedirectUri,
+    verify_jws_with_jwks, AuthorizationCodeRequest, AuthorizationEndpoint, AuthorizationUrlRequest,
+    ClientAuthentication, ClientCredentialsGrant, ClientCredentialsTokenRequest, ClientId,
+    ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest,
+    OAuthHttpClient, OAuthHttpClientConfig, OAuthJwksCacheConfig, ProviderOptions, RedirectUri,
     RefreshAccessTokenRequest, SocialAuthorizationCodeRequest, SocialAuthorizationUrlRequest,
     SocialIdTokenRequest, SocialOAuthProvider, SocialProviderFuture, TokenEndpoint,
     TokenValidationOptions, TokenValidationResult, VerifyAccessTokenOptions,
     VerifyAccessTokenRemote,
 };
-use serde_json::json;
+use serde_json::{json, Number, Value};
+use std::str::FromStr;
 use std::time::Duration;
 use time::OffsetDateTime;
 
@@ -1254,6 +1255,82 @@ async fn validate_token_accepts_hmac_algorithms_when_explicitly_allowed() {
     .expect("explicit HMAC opt-in should verify");
 
     assert_eq!(result.payload["sub"], "user-123");
+}
+
+#[tokio::test]
+async fn verify_jws_with_jwks_rejects_non_integer_temporal_claims() {
+    let cases = [
+        ("exp", json!(0.1)),
+        (
+            "nbf",
+            json!(OffsetDateTime::now_utc().unix_timestamp() as f64 + 0.5),
+        ),
+        (
+            "iat",
+            json!(OffsetDateTime::now_utc().unix_timestamp() as f64 + 0.5),
+        ),
+        (
+            "exp",
+            Value::Number(
+                Number::from_str("9223372036854775808")
+                    .expect("oversized exp should parse as JSON number"),
+            ),
+        ),
+    ];
+
+    for (claim_name, claim_value) in cases {
+        let mut claims = serde_json::Map::new();
+        claims.insert("sub".to_owned(), json!("user-123"));
+        claims.insert(claim_name.to_owned(), claim_value);
+        let (token, jwk) = signed_hs256_token("fractional-exp-key", Value::Object(claims.clone()));
+        let jwks =
+            josekit::jwk::JwkSet::from_bytes(json!({ "keys": [jwk] }).to_string().as_bytes())
+                .expect("jwks should parse");
+
+        let error = verify_jws_with_jwks(
+            &token,
+            &jwks,
+            &TokenValidationOptions::default().allow_hmac_algorithms(),
+        )
+        .expect_err("non-integer temporal claim should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("invalid OAuth claim `{claim_name}`")),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn validate_token_rejects_required_exp_with_unparseable_numeric_value() {
+    let (token, jwk) = signed_hs256_token(
+        "fractional-required-exp",
+        json!({
+            "sub": "user-123",
+            "iss": "https://issuer.example.com",
+            "aud": "client-id",
+            "exp": 1.5
+        }),
+    );
+    let server = JsonServer::spawn(json!({ "keys": [jwk] }));
+
+    let error = validate_token_with_client(
+        &token,
+        &server.url(),
+        TokenValidationOptions {
+            audience: vec!["client-id".to_owned()],
+            issuer: vec!["https://issuer.example.com".to_owned()],
+            ..TokenValidationOptions::default().require_standard_claims()
+        }
+        .allow_hmac_algorithms(),
+        &permissive_client(),
+    )
+    .await
+    .expect_err("required exp with fractional value should be rejected");
+
+    assert!(error.to_string().contains("invalid OAuth claim `exp`"));
 }
 
 #[tokio::test]

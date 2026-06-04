@@ -27,7 +27,7 @@ pub mod verify;
 
 pub use authorization_url::{create_authorization_url, AuthorizationUrlRequest};
 #[cfg(feature = "jose")]
-pub use claims::TokenValidationOptions;
+pub use claims::{parse_numeric_timestamp_claim, TokenValidationOptions};
 pub use client_credentials_token::{
     client_credentials_token, client_credentials_token_request,
     client_credentials_token_with_client, create_client_credentials_token_request,

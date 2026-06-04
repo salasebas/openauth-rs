@@ -193,15 +193,27 @@ fn required_audience_claim(claims: &serde_json::Map<String, Value>) -> Result<()
     }
 }
 
-fn required_numeric_claim(
-    claims: &serde_json::Map<String, Value>,
+const INVALID_NUMERIC_TIMESTAMP_REASON: &str = "must be an integer NumericDate timestamp";
+
+pub fn parse_numeric_timestamp_claim(
+    value: Option<&Value>,
     claim: &'static str,
     required: bool,
 ) -> Result<Option<i64>, OAuthError> {
-    match claims.get(claim) {
-        Some(Value::Number(number)) => Ok(number
-            .as_i64()
-            .or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok()))),
+    match value {
+        Some(Value::Number(number)) => {
+            if let Some(timestamp) = number
+                .as_i64()
+                .or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok()))
+            {
+                Ok(Some(timestamp))
+            } else {
+                Err(OAuthError::InvalidClaim {
+                    claim,
+                    reason: INVALID_NUMERIC_TIMESTAMP_REASON.to_owned(),
+                })
+            }
+        }
         Some(_) => Err(OAuthError::InvalidClaim {
             claim,
             reason: "must be a numeric timestamp".to_owned(),
@@ -211,5 +223,87 @@ fn required_numeric_claim(
             reason: "missing required claim".to_owned(),
         }),
         None => Ok(None),
+    }
+}
+
+fn required_numeric_claim(
+    claims: &serde_json::Map<String, Value>,
+    claim: &'static str,
+    required: bool,
+) -> Result<Option<i64>, OAuthError> {
+    parse_numeric_timestamp_claim(claims.get(claim), claim, required)
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::str::FromStr;
+
+    #[test]
+    fn validate_temporal_claims_rejects_fractional_exp_nbf_and_iat() {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        for (claim_name, value) in [
+            ("exp", json!(0.1)),
+            ("nbf", json!(now as f64 + 0.5)),
+            ("iat", json!(now as f64 + 0.5)),
+        ] {
+            let mut claims = serde_json::Map::new();
+            claims.insert(claim_name.to_owned(), value);
+            let error = validate_temporal_claims_with_leeway(&claims, 0)
+                .expect_err("fractional temporal claim should be rejected");
+            assert!(matches!(
+                error,
+                OAuthError::InvalidClaim { claim, .. } if *claim == *claim_name
+            ));
+        }
+    }
+
+    #[test]
+    fn validate_temporal_claims_rejects_oversized_exp() {
+        let mut claims = serde_json::Map::new();
+        claims.insert(
+            "exp".to_owned(),
+            Value::Number(
+                serde_json::Number::from_str("9223372036854775808")
+                    .expect("oversized exp should parse as JSON number"),
+            ),
+        );
+        let error = validate_temporal_claims_with_leeway(&claims, 0)
+            .expect_err("oversized exp should be rejected");
+        assert!(matches!(
+            error,
+            OAuthError::InvalidClaim { claim: "exp", .. }
+        ));
+    }
+
+    #[test]
+    fn validate_required_claims_rejects_unparseable_exp_when_required() {
+        let mut claims = serde_json::Map::new();
+        claims.insert("exp".to_owned(), json!(1.5));
+        let error = validate_required_claims(
+            &claims,
+            &TokenValidationOptions {
+                require_expiration: true,
+                ..TokenValidationOptions::default()
+            },
+        )
+        .expect_err("required exp must be an integer timestamp");
+        assert!(matches!(
+            error,
+            OAuthError::InvalidClaim { claim: "exp", .. }
+        ));
+    }
+
+    #[test]
+    fn validate_temporal_claims_accepts_integer_timestamps() {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let claims = serde_json::Map::from_iter([
+            ("exp".to_owned(), json!(now + 3600)),
+            ("nbf".to_owned(), json!(now - 60)),
+            ("iat".to_owned(), json!(now)),
+        ]);
+        validate_temporal_claims_with_leeway(&claims, 60).expect("integer timestamps should pass");
     }
 }
