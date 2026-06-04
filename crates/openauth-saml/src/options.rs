@@ -31,6 +31,7 @@ pub struct SamlProviderConfig {
     /// Provider attribute mapping.
     pub mapping: Option<SamlMapping>,
     /// Require valid XMLDSig over the SAML Assertion.
+    #[serde(default = "default_want_assertions_signed")]
     pub want_assertions_signed: bool,
     /// Sign outbound AuthnRequest messages.
     pub authn_requests_signed: bool,
@@ -56,6 +57,10 @@ pub struct SamlProviderConfig {
 
 /// Backward-compatible SAML config alias.
 pub type SamlConfig = SamlProviderConfig;
+
+const fn default_want_assertions_signed() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

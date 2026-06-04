@@ -654,6 +654,7 @@ pub struct SamlConfig {
     /// Provider attribute mapping.
     pub mapping: Option<SamlMapping>,
     /// Require valid XMLDSig over the SAML Assertion.
+    #[serde(default = "default_want_assertions_signed")]
     pub want_assertions_signed: bool,
     /// Sign outbound AuthnRequest messages.
     pub authn_requests_signed: bool,
@@ -675,6 +676,11 @@ pub struct SamlConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Additional AuthnRequest parameters sent to the IdP.
     pub additional_params: Option<BTreeMap<String, serde_json::Value>>,
+}
+
+#[cfg(not(feature = "saml"))]
+const fn default_want_assertions_signed() -> bool {
+    true
 }
 
 #[cfg(not(feature = "saml"))]

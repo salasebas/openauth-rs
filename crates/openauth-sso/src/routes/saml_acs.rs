@@ -521,6 +521,27 @@ async fn verify_saml_signature(
         };
         return Ok(Ok(Some(VerifiedSamlSignature { element })));
     }
+    if parsed.has_signature {
+        return match verify_signed_saml_response(saml_response, parsed.signature, &config.cert)
+            .await
+        {
+            Ok(signature) => Ok(Ok(Some(signature))),
+            Err(error) => {
+                audit::emit(
+                    context,
+                    options,
+                    SsoAuditEvent::new(
+                        SsoAuditEventKind::SamlSignatureFailed,
+                        SsoAuditSeverity::Warn,
+                    )
+                    .provider_id(provider.provider_id.clone())
+                    .reason(error.code()),
+                )
+                .await;
+                Ok(Err(super::saml_signature_error_response(error)?))
+            }
+        };
+    }
     if !parsed.signature.is_signed() {
         return Ok(Ok(None));
     }
@@ -848,10 +869,10 @@ fn validate_parsed_saml_response(
     authn_record: Option<&super::sign_in::SamlAuthnRequestRecord>,
     verified_signature: Option<&VerifiedSamlSignature>,
 ) -> Result<(), &'static str> {
-    if config.want_assertions_signed
-        && !verified_signature
-            .is_some_and(|signature| signature.element == SamlSignedElement::Assertion)
-    {
+    if parsed.has_signature && verified_signature.is_none() {
+        return Err("SAML_SIGNATURE_INVALID");
+    }
+    if config.want_assertions_signed && verified_signature.is_none() {
         return Err("SAML_ASSERTION_SIGNATURE_REQUIRED");
     }
     if parsed
