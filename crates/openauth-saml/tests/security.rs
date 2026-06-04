@@ -192,6 +192,21 @@ fn parse_saml_response_extracts_audience_restrictions() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn saml_config_defaults_want_assertions_signed_to_true() -> Result<(), Box<dyn std::error::Error>> {
+    let config: SamlConfig = serde_json::from_value(serde_json::json!({
+        "issuer": "https://sp.example.com/metadata",
+        "entryPoint": "https://idp.example.com/sso",
+        "cert": "CERTIFICATE",
+        "callbackUrl": "https://sp.example.com/acs",
+        "spMetadata": { "entityID": "https://sp.example.com/entity" },
+        "authnRequestsSigned": false
+    }))?;
+
+    assert!(config.want_assertions_signed);
+    Ok(())
+}
+
+#[test]
 fn saml_config_uses_upstream_acronym_wire_names_and_accepts_legacy_aliases(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = serde_json::json!({

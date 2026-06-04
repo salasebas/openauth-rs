@@ -40,11 +40,18 @@ pub fn parse_saml_login_response(
             ENCRYPTED_ASSERTION_UNSUPPORTED,
         ));
     }
-    if requires_opensaml_parse(&xml) {
+    if requires_opensaml_login_parse(&xml, context.config) {
         parse_saml_response_via_opensaml(encoded_response, context)
     } else {
         parse_saml_response_xml_detailed(&xml)
     }
+}
+
+fn requires_opensaml_login_parse(xml: &str, config: &SamlConfig) -> bool {
+    config.want_assertions_signed
+        || xml.contains("EncryptedAssertion")
+        || xml.contains("<Signature")
+        || xml.contains(":Signature")
 }
 
 fn has_decryption_key(config: &SamlConfig) -> bool {
@@ -253,10 +260,6 @@ pub fn parse_saml_response_with_decryption_detailed(
     parse_saml_response_xml_detailed(&xml)
 }
 
-fn requires_opensaml_parse(xml: &str) -> bool {
-    xml.contains("EncryptedAssertion") || xml.contains("<Signature") || xml.contains(":Signature")
-}
-
 #[cfg(feature = "saml-signed")]
 fn parse_saml_response_via_opensaml(
     encoded_response: &str,
@@ -334,7 +337,7 @@ fn map_flow_result_to_parsed_response(
         status_code: flow.extract.get_str("response.status").map(str::to_owned),
         has_signature: signature.is_signed(),
         signature,
-        signature_verified: signature_checked && (flow.sig_alg.is_some() || signature.is_signed()),
+        signature_verified: signature_checked,
         algorithms: runtime_algorithms_from_sig(flow.sig_alg.as_deref(), algorithms),
         assertion: ParsedSamlAssertion {
             id: assertion_id,
