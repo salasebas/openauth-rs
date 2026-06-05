@@ -177,19 +177,10 @@ impl SecondaryStorage for FredSecondaryStorage {
 
     fn take<'a>(&'a self, key: &'a str) -> SecondaryStorageFuture<'a, Option<String>> {
         Box::pin(async move {
-            let redis_key = self.prefixed_key(key)?;
-            let value = self
-                .client
-                .get::<Option<String>, _>(redis_key.clone())
+            self.client
+                .getdel::<Option<String>, _>(self.prefixed_key(key)?)
                 .await
-                .map_err(|error| fred_error("secondary take", error))?;
-            if value.is_some() {
-                self.client
-                    .del::<u64, _>(redis_key)
-                    .await
-                    .map_err(|error| fred_error("secondary take", error))?;
-            }
-            Ok(value)
+                .map_err(|error| fred_error("secondary take", error))
         })
     }
 }
@@ -390,6 +381,15 @@ mod tests {
     async fn delete_rejects_empty_prefix_before_calling_redis() {
         assert!(matches!(
             empty_prefix_storage().delete("session").await,
+            Err(OpenAuthError::InvalidConfig(message))
+                if message == "secondary storage key prefix must not be empty"
+        ));
+    }
+
+    #[tokio::test]
+    async fn take_rejects_empty_prefix_before_calling_redis() {
+        assert!(matches!(
+            empty_prefix_storage().take("session").await,
             Err(OpenAuthError::InvalidConfig(message))
                 if message == "secondary storage key prefix must not be empty"
         ));

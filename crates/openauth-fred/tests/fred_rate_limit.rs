@@ -589,6 +589,15 @@ async fn fred_secondary_storage_supports_strings_ttl_delete_list_and_clear(
         assert_eq!(storage.get("session:token-1").await?, None);
 
         storage
+            .set("take-once", "consumed".to_owned(), None)
+            .await?;
+        assert_eq!(
+            storage.take("take-once").await?,
+            Some("consumed".to_owned())
+        );
+        assert_eq!(storage.take("take-once").await?, None);
+
+        storage
             .set("ttl-zero", "stale".to_owned(), Some(60))
             .await?;
         storage.set("ttl-zero", "value".to_owned(), Some(0)).await?;
@@ -620,6 +629,103 @@ async fn fred_open_auth_stores_share_one_client() -> Result<(), Box<dyn std::err
             Some("from-bundle")
         );
         stores.secondary_storage.delete(&key).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn fred_secondary_storage_take_returns_value_at_most_once_under_concurrency(
+) -> Result<(), Box<dyn std::error::Error>> {
+    for target in available_fred_targets().await? {
+        let storage = FredSecondaryStorage::connect_with_options(
+            &target.url,
+            FredSecondaryStorageOptions {
+                key_prefix: format!("openauth:test:{}:{}:take-once:", target.name, now_ms()),
+                scan_count: 10,
+            },
+        )
+        .await?;
+        let key = "verification:token";
+        storage
+            .set(key, "one-time-payload".to_owned(), None)
+            .await?;
+
+        let first_storage = storage.clone();
+        let second_storage = storage.clone();
+        let first_key = key.to_owned();
+        let second_key = key.to_owned();
+        let (first, second) = tokio::join!(
+            first_storage.take(&first_key),
+            second_storage.take(&second_key),
+        );
+
+        let mut payloads = [first?, second?].into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(
+            payloads.len(),
+            1,
+            "{} concurrent take() must return the payload at most once",
+            target.name
+        );
+        assert_eq!(payloads.pop(), Some("one-time-payload".to_owned()));
+        assert_eq!(storage.get(key).await?, None);
+        storage.clear().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn fred_secondary_storage_take_does_not_delete_value_written_during_take(
+) -> Result<(), Box<dyn std::error::Error>> {
+    for target in available_fred_targets().await? {
+        let storage = FredSecondaryStorage::connect_with_options(
+            &target.url,
+            FredSecondaryStorageOptions {
+                key_prefix: format!("openauth:test:{}:{}:take-race:", target.name, now_ms()),
+                scan_count: 10,
+            },
+        )
+        .await?;
+        let key = "verification:race";
+
+        for attempt in 0..50 {
+            storage.set(key, "old".to_owned(), None).await?;
+            let racing = storage.clone();
+            let racing_key = key.to_owned();
+            let take = tokio::spawn(async move { racing.take(&racing_key).await });
+            storage.set(key, "new".to_owned(), None).await?;
+            let taken = take.await??;
+            if taken.as_deref() == Some("old") {
+                assert_eq!(
+                    storage.get(key).await?.as_deref(),
+                    Some("new"),
+                    "{} attempt {attempt}: take() must not delete a newer value written after read",
+                    target.name
+                );
+            }
+            storage.delete(key).await?;
+        }
+        storage.clear().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn fred_and_redis_secondary_storage_take_match_for_same_key(
+) -> Result<(), Box<dyn std::error::Error>> {
+    for target in available_fred_targets().await? {
+        let fred = FredSecondaryStorage::connect(&target.url).await?;
+        let redis = RedisSecondaryStorage::connect(&target.url).await?;
+        let key = format!("take-parity:{}:{}", target.name, now_ms());
+
+        redis.set(&key, "shared-payload".to_owned(), None).await?;
+        assert_eq!(fred.take(&key).await?, Some("shared-payload".to_owned()));
+        assert_eq!(redis.take(&key).await?, None);
+
+        fred.set(&key, "fred-payload".to_owned(), None).await?;
+        assert_eq!(redis.take(&key).await?, Some("fred-payload".to_owned()));
+        assert_eq!(fred.take(&key).await?, None);
+
+        redis.delete(&key).await?;
     }
     Ok(())
 }
