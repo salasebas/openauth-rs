@@ -43,7 +43,7 @@ fn lock_ambiguous_env() -> (MutexGuard<'static, ()>, EnvRestore) {
     let guard = env_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let restore = EnvRestore::unset(&["RUST_ENV", "RUST_TEST_THREADS", "TEST"]);
+    let restore = EnvRestore::unset(&["RUST_ENV", "RUST_TEST_THREADS", "TEST", "NEXTEST"]);
     (guard, restore)
 }
 

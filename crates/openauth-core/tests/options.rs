@@ -128,7 +128,7 @@ fn is_production_is_false_when_rust_env_is_unset() {
 #[test]
 fn is_production_only_accepts_exact_production_rust_env() {
     let _guard = lock_env();
-    let _restore = EnvRestore::unset(&["RUST_ENV", "RUST_TEST_THREADS", "TEST"]);
+    let _restore = EnvRestore::unset(&["RUST_ENV", "RUST_TEST_THREADS", "TEST", "NEXTEST"]);
 
     std::env::set_var("RUST_ENV", "development");
     assert!(!is_production());
@@ -140,7 +140,7 @@ fn is_production_only_accepts_exact_production_rust_env() {
 #[test]
 fn ambiguous_deployment_fails_closed_without_explicit_development() {
     let _guard = lock_env();
-    let _restore = EnvRestore::unset(&["RUST_ENV", "RUST_TEST_THREADS", "TEST"]);
+    let _restore = EnvRestore::unset(&["RUST_ENV", "RUST_TEST_THREADS", "TEST", "NEXTEST"]);
 
     let options = OpenAuthOptions::default();
     assert!(is_production_posture(&options));
@@ -150,7 +150,7 @@ fn ambiguous_deployment_fails_closed_without_explicit_development() {
 #[test]
 fn explicit_development_option_allows_development_defaults() {
     let _guard = lock_env();
-    let _restore = EnvRestore::unset(&["RUST_ENV", "RUST_TEST_THREADS", "TEST"]);
+    let _restore = EnvRestore::unset(&["RUST_ENV", "RUST_TEST_THREADS", "TEST", "NEXTEST"]);
 
     let options = OpenAuthOptions::default().development(true);
     assert!(!is_production_posture(&options));
@@ -160,7 +160,7 @@ fn explicit_development_option_allows_development_defaults() {
 #[test]
 fn production_option_overrides_development_flag() {
     let _guard = lock_env();
-    let _restore = EnvRestore::unset(&["RUST_ENV", "RUST_TEST_THREADS", "TEST"]);
+    let _restore = EnvRestore::unset(&["RUST_ENV", "RUST_TEST_THREADS", "TEST", "NEXTEST"]);
 
     let options = OpenAuthOptions::default()
         .development(true)
