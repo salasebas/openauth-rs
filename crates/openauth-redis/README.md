@@ -84,8 +84,24 @@ Without a TLS feature, opening a `rediss://` or `valkeys://` URL fails with an
 Experimental beta. URL handling, key layout, Lua script behavior, and storage
 contracts may change before stable release.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
+Upstream: `@better-auth/redis-storage` (ioredis). Sibling crate: `openauth-fred`
+(same contract, `fred` client).
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Secondary storage (`get`/`set`/`delete`) | **High** | Prefix + `secondary:` namespace; `ttl=0` → `SET` without TTL |
+| `list_keys` / `clear` | **High** | `SCAN` (not upstream `KEYS`) |
+| Rate limit Redis | **Extension** | `RedisRateLimitStore` + Lua; upstream reuses secondary KV as JSON |
+| Session data interchange | **Low** | Key layout and JSON differ in `openauth-core` |
+| Auto rate limit on secondary only | **Gap (core)** | Upstream defaults RL to secondary; OpenAuth requires explicit wiring |
+
+**Tests:** 19 `nextest` in this crate; email sign-up E2E with Redis in `openauth-fred`.
+See [PARITY.md](./PARITY.md).
+
 ## Links
 
-- [Paridad vs `@better-auth/redis-storage`](../../docs/parity/openauth-redis/README.md)
 - [Root README](../../README.md)
 - [Repository](https://github.com/sebasxsala/openauth-rs)

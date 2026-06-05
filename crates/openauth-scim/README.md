@@ -222,14 +222,35 @@ Experimental beta. The server provisioning surface is implemented and covered,
 but API details, schema shape, and parity choices may change before stable
 release.
 
-## Better Auth comparison
+## Upstream parity (Better Auth 1.6.9)
 
-Parity documentation (server-only, Better Auth **1.6.9**):
+Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md)
+(commit `f484269`). Upstream package: `@better-auth/scim` at
+`packages/scim/`. One npm package maps to one Rust crate; OpenAuth extends the
+same plugin with extra tables (`scim_user_profiles`, `scim_group_profiles`) and
+routes not present in upstream 1.6.9.
 
-- **[docs/parity/openauth-scim/](../../docs/parity/openauth-scim/README.md)** — canonical index (endpoints, features, tests, design decisions)
-- [PARITY.md](PARITY.md) — short pointer
-- [docs/better-auth-design-differences.md](docs/better-auth-design-differences.md) — legacy detailed notes in-crate
-- [tests/support/scim_parity.md](tests/support/scim_parity.md) — test module → upstream file map
+| Area | Parity | Notes |
+| --- | --- | --- |
+| Management (4 routes) | High | Token rotation via upsert instead of delete-then-create |
+| Users CRUD + metadata | High | DELETE removes global user row |
+| `userName eq` list filter | High | SQL pushdown on `users.email` |
+| PATCH Users | High | OpenAuth also supports `remove` operations |
+| Token storage | High | Default differs: plain (BA) vs hashed (OpenAuth) |
+| Groups / Bulk / `.search` | Superset | Not in upstream 1.6.9 |
+| `scimClient()` | N/A | TypeScript client only |
+| ServiceProviderConfig | Honest divergence | OpenAuth advertises implemented capabilities |
+
+**Test coverage:** ~189 Rust tests (40 sync + 149 async) across 28 modules under
+`tests/scim/` vs ~87 upstream Vitest runs (75 `it()` + 6 `it.for()`). ~75 upstream
+scenarios are mapped; ~100+ OpenAuth-only tests cover groups, bulk, adapters, and
+ETags.
+
+**Open gaps / design differences:** `userName` must be a valid email (upstream
+allows non-email usernames); regenerating a token when a `before` hook fails keeps
+the provider row (upstream deletes it); transactional PATCH; `email_verified: true`
+on create. Legacy notes: [docs/better-auth-design-differences.md](docs/better-auth-design-differences.md),
+[tests/support/scim_parity.md](tests/support/scim_parity.md). Short pointer: [PARITY.md](PARITY.md).
 
 ## Links
 

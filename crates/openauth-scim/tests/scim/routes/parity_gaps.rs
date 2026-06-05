@@ -1,4 +1,4 @@
-//! Regression tests for parity gaps documented in `docs/parity/openauth-scim/`.
+//! Regression tests for parity gaps documented in `crates/openauth-scim/README.md`.
 
 use super::*;
 

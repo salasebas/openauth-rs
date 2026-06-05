@@ -71,5 +71,5 @@ openauth-sso = { version = "...", features = ["saml"] }
 ## Links
 
 - [Root README](../../README.md)
-- [Gap analysis](../../docs/superpowers/specs/openauth-sso/gap-analysis.md)
+- [SSO upstream parity](../openauth-sso/README.md#upstream-parity-better-auth-169)
 - [Repository](https://github.com/sebasxsala/openauth-rs)

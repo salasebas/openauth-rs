@@ -46,6 +46,22 @@ defines server-side OAuth provider behavior.
 Experimental beta. Provider coverage, scopes, profile mapping, and provider
 edge-case behavior may change before stable release.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
+Upstream: `@better-auth/core` → `packages/core/src/social-providers/` (35 built-in
+providers). HTTP routes (`/sign-in/social`, callbacks) live in `openauth-core`.
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Provider registry | **High** | All **35** providers; `PROVIDER_IDS` matches upstream order |
+| Wire parity (URLs, scopes, defaults) | **High (33/35)** | Discord/Roblox `+` scopes, Railway optional PKCE fixed |
+| Provider unit tests | **Beyond upstream** | **310** Rust tests; upstream has **0** in `social-providers/` |
+| Hook overrides (`mapProfileToUser`, etc.) | **Partial** | Typed overrides on **10/35**; architectural vs upstream `ProviderOptions` |
+| Open gaps (wire) | **Minor** | Facebook opaque token verify (stricter); Twitch JWKS verify (stricter) |
+
+Social E2E from upstream `social.test.ts` belongs in `openauth-core`, not this crate.
+
 ## Links
 
 - [Root README](../../README.md)

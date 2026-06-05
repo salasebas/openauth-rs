@@ -69,6 +69,42 @@ JOSE or social provider support.
 Experimental beta. Adapter, plugin, option, and route contracts may change
 before stable release.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md)
+(commit `f484269`). Upstream splits contracts (`@better-auth/core`) from runtime
+(`packages/better-auth/src`); OpenAuth merges both into this crate. The `openauth`
+facade re-exports core plus optional integrations.
+
+| Upstream | OpenAuth |
+| --- | --- |
+| `@better-auth/core` (types, DB, endpoints, utils) | `openauth-core` modules |
+| `better-auth` server runtime (routes, cookies, crypto) | `openauth-core` (`api`, `cookies`, `crypto`, …) |
+| `@better-auth/core/oauth2` | `openauth-oauth` (feature `oauth`) |
+| `@better-auth/core/social-providers` | `openauth-social-providers` |
+| Product plugins (`admin`, `organization`, …) | `openauth-plugins` and sibling crates |
+| `@better-auth/core/instrumentation` | Not in core (`openauth-telemetry` is separate) |
+| JS/React/Vue clients | N/A (server-only) |
+
+**Parity level (server, in-scope):** High for email/password, session, cookies,
+crypto, DB adapter traits, rate limiting, and plugin pipeline. Medium for some
+top-level options and OpenAPI exposure. Low/N/A for OpenTelemetry spans in core
+and browser client SDKs.
+
+**Test coverage:** ~501 Rust tests total (~453 in-scope excluding oauth/social);
+76 files under `tests/` plus 2 unit tests in `src/`. Upstream in-scope baseline is
+~50 `.test.ts` files with ~184 `it()` in `@better-auth/core` and ~770+ in
+better-auth server tests. Every in-scope HTTP route has at least one test, but
+many routes have shallow coverage compared with upstream suites such as
+`session-api.test.ts`.
+
+**Open gaps:** Deeper test matrices for session revocation and account routes;
+route tests run with CSRF/origin checks disabled; social/OAuth token routes live
+in other crates; `trustedProviders` dynamic callbacks not yet public; user
+lifecycle hooks (`sendDeleteAccountVerification`, fresh-session delete semantics)
+partially diverge. See `SERVER_PARITY.md` and `SQL_ADAPTER_PARITY.md` for detailed
+notes.
+
 ## Links
 
 - [Root README](../../README.md)

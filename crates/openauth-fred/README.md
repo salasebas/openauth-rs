@@ -64,9 +64,26 @@ let auth = OpenAuth::builder()
 Experimental beta. URL handling, key layout, Lua script behavior, and
 rate-limit/secondary-storage contracts may change before stable release.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
+Upstream: `@better-auth/redis-storage` (ioredis). This crate is the Fred-client
+variant; see `openauth-redis` for the `redis-rs` sibling.
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Secondary storage CRUD + TTL | **High (~95%)** | Default prefix `openauth:`; `secondary:` namespace |
+| `list_keys` / `clear` | **High** | `SCAN` vs upstream `KEYS`; empty prefix rejected |
+| Rate limit Redis | **Extension** | `FredRateLimitStore` + Lua; not in upstream npm package |
+| Shared client | **Supported** | `FredOpenAuthStores` bundles both stores on one `fred::Client` |
+| Session data interchange | **Low** | Core key layout differs from Better Auth |
+| Auto rate limit on secondary only | **Gap (core)** | Requires explicit `RateLimitOptions::secondary_storage` |
+
+**Tests:** 34 `nextest`; includes email sign-up and session flows with real Redis.
+See [PARITY.md](./PARITY.md).
+
 ## Links
 
-- [Paridad vs `@better-auth/redis-storage`](../../docs/parity/openauth-fred/README.md)
-- [Crate hermano `openauth-redis`](../../docs/parity/openauth-redis/README.md)
+- [Sibling crate `openauth-redis`](../openauth-redis/README.md)
 - [Root README](../../README.md)
 - [Repository](https://github.com/sebasxsala/openauth-rs)

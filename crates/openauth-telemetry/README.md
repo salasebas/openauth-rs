@@ -66,8 +66,24 @@ endpoint or custom sink exists (see above).
 Experimental beta. Payload shape, detection behavior, environment variables,
 and transport hooks may change before stable release.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
+Upstream package: `@better-auth/telemetry` (one npm package → one Rust crate). Re-exported
+from `openauth` with feature `telemetry`; CLI events from `openauth-cli`.
+
+| Area | Server parity | Notes |
+| --- | --- | --- |
+| Publisher / enablement / noop | High | `OPENAUTH_TELEMETRY` hard opt-out; noop without endpoint or `custom_track` |
+| `init` event shape | High | Runtime `rust`, package manager `cargo` by design |
+| Config snapshot | Medium–high | Better Auth-shaped JSON; some branches fixed until `openauth-core` grows |
+| Host detectors | Medium | Deploy vendors aligned; `cpuModel` / `memory` null without sysinfo |
+| JS detectors (Next, Prisma, npm) | N/A | Cargo / Rust equivalents |
+| Package tests | Superset | 6 upstream Vitest → 33 Rust (34 with `--features oauth`) |
+
+Verify: `cargo test -p openauth-telemetry` (add `--features oauth` for OAuth snapshot branches).
+
 ## Links
 
-- [Parity vs Better Auth 1.6.9](../../docs/parity/openauth-telemetry/README.md)
 - [Root README](../../README.md)
 - [Repository](https://github.com/sebasxsala/openauth-rs)

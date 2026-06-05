@@ -1,6 +1,6 @@
 # OAuth Provider Upstream Test Mapping
 
-> Documentación de paridad: [`docs/parity/openauth-oauth-provider/`](../../../docs/parity/openauth-oauth-provider/README.md) — cierre servidor jun 2026: [08-parity-closeout-2026-06.md](../../../docs/parity/openauth-oauth-provider/08-parity-closeout-2026-06.md).
+> Parity notes: [`crates/openauth-oauth-provider/README.md`](../README.md#upstream-parity-better-auth-169) — server closeout June 2026.
 
 Reference: `reference/upstream-src/1.6.9/repository/packages/oauth-provider`.
 

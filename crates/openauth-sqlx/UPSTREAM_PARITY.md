@@ -1,21 +1,14 @@
 # SQLx Server-Side Upstream Parity
 
-This document tracks the server-side parity status of `openauth-sqlx` against
-the Better Auth SQL/Kysely adapter behavior inspected under
-`reference/upstream-src/1.6.9/repository/`.
+Full notes: [README.md § Upstream parity](./README.md#upstream-parity-better-auth-169).
 
-The Rust adapter is not a line-by-line TypeScript port. Parity means matching
-observable server behavior where it matters while preserving OpenAuth's typed
-query contract, explicit errors, additive migration safety, and SQLx-native
-storage choices.
+This document tracks intentional differences and remaining risks for `openauth-sqlx`
+against Better Auth **1.6.9** Kysely SQL behavior
+(`reference/upstream-src/1.6.9/repository/`).
 
-## Current Assessment
-
-Estimated server-only parity: **95%**.
-
-The remaining gap is mostly intentional Rust/OpenAuth design, TypeScript-only
-adapter factory behavior, or behavior that would reduce safety if copied
-literally.
+Estimated server-only parity: **~95%**. Remaining gap is mostly intentional
+Rust/OpenAuth design, TypeScript-only factory behavior, or unsafe upstream patterns
+we do not copy.
 
 ## Implemented Parity
 

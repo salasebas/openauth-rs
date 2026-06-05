@@ -57,8 +57,25 @@ Beta. The plugin is usable for controlled integrations, but validate it against
 the browsers, authenticators, RP ID, and origins used by your deployment before
 production rollout.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
+Upstream: `@better-auth/passkey` (server routes only; no TS client in this crate).
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| HTTP endpoints | **High (~99%)** | Same **7** routes (method + path) |
+| Challenge state | **High** | Verification store + `better-auth-passkey` cookie, 5 min TTL |
+| WebAuthn | **High** | `webauthn-rs` vs `@simplewebauthn/server`; observable contract aligned |
+| Error codes | **High** | 14 `PASSKEY_ERROR_CODES` matched |
+| Tests | **Beyond upstream** | **60+** Rust tests vs 19 upstream server Vitest cases |
+| Open gaps | **Minor** | No `mergeSchema` field rename; legacy `publicKey`-only verify not ported |
+
+Intentional extras: discoverable auth without session, per-challenge rate limits,
+hidden `webauthn_credential` field, stricter session-scoped auth challenge checks.
+See [UPSTREAM_PARITY.md](./UPSTREAM_PARITY.md).
+
 ## Links
 
-- [Better Auth 1.6.9 parity](../../docs/parity/crates/openauth-passkey/README.md)
 - [Root README](../../README.md)
 - [Repository](https://github.com/sebasxsala/openauth-rs)

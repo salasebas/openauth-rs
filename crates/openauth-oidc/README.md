@@ -108,6 +108,33 @@ verification, and account linking.
 - `openauth-oauth-provider`: OpenAuth plugin that turns your app into an
   OAuth/OIDC provider.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Reference: `@better-auth/sso@1.6.9` → `packages/sso/src/oidc/` (discovery and
+types only). Parity pin:
+[`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
+
+**Scope:** OIDC **relying-party** helpers — discovery, config types, endpoint
+validation, `oidc_redirect_uri`. Full SSO HTTP flow (sign-in, callback, ID token,
+UserInfo) lives in `openauth-sso`; authorization-server behavior in
+`openauth-oauth-provider`.
+
+| Area | Parity | Notes |
+| --- | --- | --- |
+| Discovery URL + fetch/validation | High | Caller-supplied `reqwest::Client` |
+| URL normalization / trusted origins | High | Re-validates origins after override merge |
+| Runtime discovery | High | Merges revocation/end_session/introspection |
+| Optional endpoints in DB | Superset | Persists revoke/end_session/introspection upstream omits |
+| Authorization code / ID token / UserInfo | N/A here | `openauth-sso` + `openauth-oauth` |
+| `ssoClient()` browser SDK | N/A | TypeScript-only |
+
+**26** crate tests (discovery/types); **22** upstream OIDC E2E `it` cases are
+covered in `openauth-sso`. No SAML/XML dependency surface in this crate.
+
+```bash
+cargo nextest run -p openauth-oidc
+```
+
 ## Status
 
 Experimental beta. Discovery, validation, and configuration types are usable,
@@ -116,6 +143,5 @@ but public API details may change before stable release.
 ## Links
 
 - [Root README](../../README.md)
-- [Better Auth 1.6.9 parity (`openauth-oidc`)](../../docs/parity/openauth-oidc/README.md)
-- [SSO HTTP flow parity (`openauth-sso`)](../../docs/parity/openauth-sso/README.md)
+- [SSO HTTP flow parity (`openauth-sso`)](../openauth-sso/README.md#upstream-parity-better-auth-169)
 - [Repository](https://github.com/sebasxsala/openauth-rs)

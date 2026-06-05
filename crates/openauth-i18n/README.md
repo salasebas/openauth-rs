@@ -64,6 +64,25 @@ let auth = OpenAuth::builder()
 Experimental beta. Locale detection, translation keys, and plugin behavior may
 change before stable release.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
+Upstream package: `@better-auth/i18n` (server plugin only; `@better-auth/i18n/client` is
+N/A for this server-only crate). Re-exported from `openauth` with feature `i18n`.
+
+| Area | Server parity | Notes |
+| --- | --- | --- |
+| API error translation (`code` → `message`, `originalMessage`) | High | Same JSON shape as upstream |
+| Locale detection (`header`, `cookie`, `session`, `callback`) | High | Same strategy order |
+| `Accept-Language` parsing | High | Case-insensitive; exact region before base tag |
+| Router early exits + rate limit / 404 / `INVALID_ORIGIN` | High | `finalize_response` applies `on_response` |
+| Session locale hydration | High | Async user lookup with `user_output_value` |
+| `getLocale` async | Partial | Response hooks are synchronous in Rust today |
+| `i18nClient` | N/A | Client-only TypeScript |
+| Package tests | Superset | 15 upstream Vitest → 64 Rust tests |
+
+Verify: `cargo nextest run -p openauth-i18n`.
+
 ## Links
 
 - [Root README](../../README.md)

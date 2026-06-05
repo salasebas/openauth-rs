@@ -1,10 +1,9 @@
 # Passkey Upstream Parity
 
-> **Documentación completa:** [docs/parity/crates/openauth-passkey/README.md](../../docs/parity/crates/openauth-passkey/README.md)  
-> Incluye auditoría de código fuente: [08-implementation-audit.md](../../docs/parity/crates/openauth-passkey/08-implementation-audit.md).
+Full notes: [README.md § Upstream parity](./README.md#upstream-parity-better-auth-169).
 
 This document records server-side parity decisions for `openauth-passkey`
-against Better Auth's passkey plugin.
+against Better Auth's passkey plugin @ 1.6.9.
 
 ## Status
 

@@ -80,6 +80,24 @@ Experimental beta. SQLite has the strongest local coverage. Postgres and MySQL
 are covered by integration tests and should be validated against your
 production schema and privileges before rollout.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
+Primary upstream: `@better-auth/kysely-adapter` + `getMigrations` in `better-auth`.
+Not a port of Drizzle, Prisma, or Mongo adapters.
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| CRUD, joins, transactions | **High (~95%)** | SQLite, Postgres, MySQL via SQLx |
+| Migrations (additive) | **High** | Blocks unsafe plans; missing-index repair beyond upstream |
+| Rate limit SQL stores | **High** | Single-tx consume; denied requests do not increment |
+| `delete` | **Intentional** | One row; use `delete_many` for bulk (upstream deletes all matches) |
+| `findMany` default limit | **Intentional** | No default limit (upstream factory defaults to 100) |
+| LIKE wildcards | **Intentional** | Escapes `%`, `_`, `\` + `ESCAPE` clause |
+| MSSQL / D1 / Bun sqlite | **Gap** | Not implemented in this crate |
+
+See [UPSTREAM_PARITY.md](./UPSTREAM_PARITY.md) for intentional differences and risks.
+
 ## Links
 
 - [Root README](../../README.md)

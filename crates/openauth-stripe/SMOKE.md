@@ -18,7 +18,7 @@ Server-side manual validation for Stripe **test mode**. No example app UI is req
 
 **Out of scope for this runbook:** example app UI, `groupId`.
 
-**In scope (implemented):** webhook idempotency by Stripe `event.id` via table `stripeWebhookEvent` (see [UPSTREAM](./UPSTREAM.md), [parity tests doc](../../docs/parity/openauth-stripe/upstream-test-catalog.md)).
+**In scope (implemented):** webhook idempotency by Stripe `event.id` via table `stripeWebhookEvent` (see [README parity section](./README.md#upstream-parity-better-auth-169)).
 
 ---
 

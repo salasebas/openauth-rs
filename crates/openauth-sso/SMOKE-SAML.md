@@ -3,7 +3,7 @@
 Manual and semi-automated validation for SAML SP flows (signed assertions, encrypted
 assertions, SLO). **Not run in CI** — use `scripts/saml-smoke.sh` locally.
 
-**Related:** [gap-analysis](../../docs/superpowers/specs/openauth-sso/gap-analysis.md) ·
+**Related:** [openauth-sso upstream parity](./README.md#upstream-parity-better-auth-169) ·
 `scripts/saml-smoke.sh` · `.env.saml-smoke.example`
 
 ---
@@ -99,9 +99,9 @@ All SAML integration logic lives in `openauth-saml` and `openauth-sso`.
 
 ---
 
-## 5. Upstream parity vs gap-analysis
+## 5. Upstream parity
 
-See [gap-analysis § Upstream parity](../../docs/superpowers/specs/openauth-sso/gap-analysis.md).
+See [README — Upstream parity](./README.md#upstream-parity-better-auth-169).
 Most `saml.test.ts` themes are **Covered** in Rust. Remaining differences are upstream-only
 (browser mock IdP chain, `defaultSSO` array ordering, Better Auth client callback names).
 

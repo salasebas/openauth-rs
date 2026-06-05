@@ -62,6 +62,35 @@ authorization policy.
 Experimental beta. Individual plugin APIs, schemas, endpoints, hooks, and
 error codes may change before stable release.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md)
+(commit `f484269`). Upstream server plugins live under
+`packages/better-auth/src/plugins/` (26 modules) plus `@better-auth/api-key` as a
+separate npm package. OpenAuth consolidates **27 server plugins** in this crate.
+The deprecated upstream `oidc-provider` plugin is replaced by `openauth-oauth-provider`.
+SSO, SCIM, Stripe, and Electron/Expo surfaces are out of scope here.
+
+**Parity level:** High for HTTP routes (~130) and schema/hook wiring; June 2026
+work closed server gaps for `generateTOTP`, organization access-control options,
+api-key `defaultPermissions` and schema merge, two-factor custom OTP storage,
+jwt/phone-number/username schema options, and `verification.storeIdentifier: hashed`
+(in `openauth-core`). Remaining gaps are mostly test depth and a few organization
+options (`allowUserToCreateOrganization` callback, `organizationHooks` async,
+session field renames).
+
+**Test coverage:** **610** integration tests under `tests/<plugin>/` vs **986**
+upstream `it()` declarations (excluding `test-utils` and `oidc-provider`). Largest
+gaps: organization (−150), api-key (−124), email-otp (−42), two-factor (−34).
+Several plugins exceed upstream counts (access, bearer, multi_session, one_tap).
+
+**Open gaps:** Partial test parity vs upstream Vitest suites; some organization
+permission merge semantics; plugin rate limits not always exposed as options;
+client-only `client.ts` exports and TypeScript inference helpers are N/A.
+Inventory guard: `tests/plugins.rs`
+(`upstream_server_plugin_parity_is_explicit_about_replaced_oidc_provider`).
+See `SERVER_PARITY.md` for per-plugin design notes.
+
 ## Links
 
 - [Root README](../../README.md)

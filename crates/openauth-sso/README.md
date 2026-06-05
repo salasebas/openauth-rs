@@ -58,9 +58,31 @@ integrations.
 Experimental beta. OIDC is the recommended path. SAML remains WIP until XML
 signature/encryption support is backed by an auditable implementation.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md)
+(commit `f484269`). Upstream package: `@better-auth/sso` at `packages/sso/`.
+OpenAuth splits OIDC discovery/types into `openauth-oidc` and SAML into
+`openauth-saml` (feature `saml`); this crate owns HTTP routes, DB storage,
+callbacks, and provisioning. TypeScript `ssoClient()` is N/A (server-only).
+
+**Parity level (OIDC E2E):** High for provider registration, sign-in (email,
+domain, `providerId`), callback with ID token and UserInfo, shared `redirectURI`
+and `/sso/callback`, `defaultSSO`, and `provisionUser` first/every login.
+Organization slug sign-in is partial (requires `organization` plugin). SAML is
+documented separately and remains experimental.
+
+**Test coverage:** All **22** scenarios in upstream `oidc.test.ts` are covered
+across `tests/sso/endpoints/` plus `oidc_upstream_parity.rs` (six explicit
+upstream-alignment tests added June 2026). OIDC discovery has **71** upstream
+Vitest cases in `openauth-oidc`. Run: `cargo nextest run -p openauth-sso --test sso`.
+
+**Open gaps:** SAML production readiness (signing/encryption); duplicate
+maintenance between `tests/sso/oidc.rs` and `openauth-oidc/tests/flow.rs`; no
+typed browser client. SCIM and full SAML parity live in sibling crates.
+
 ## Links
 
 - [Root README](../../README.md)
-- [Better Auth 1.6.9 parity (`openauth-sso` OIDC E2E)](../../docs/parity/openauth-sso/README.md)
-- [OIDC discovery crate parity](../../docs/parity/openauth-oidc/README.md)
+- [openauth-oidc](../../crates/openauth-oidc/README.md) — discovery and OIDC types
 - [Repository](https://github.com/sebasxsala/openauth-rs)

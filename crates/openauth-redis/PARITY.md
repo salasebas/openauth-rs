@@ -1,11 +1,10 @@
-# openauth-redis — paridad servidor
+# openauth-redis — upstream parity
 
-Documentación: [`docs/parity/openauth-redis/README.md`](../../docs/parity/openauth-redis/README.md).
+Full notes: [README.md § Upstream parity](./README.md#upstream-parity-better-auth-169).
 
-| Upstream | `@better-auth/redis-storage` @ 1.6.9 |
-| Hermano | `openauth-fred` (mismo contrato; `list_keys`/`clear`; TTL 0 ≈ upstream) |
+Upstream: `@better-auth/redis-storage` @ 1.6.9. Sibling: `openauth-fred`.
 
-**Adaptador KV:** alta paridad (`get`/`set`/`delete`, `ttl=0`, `list_keys`/`clear`, `connect_with_options`). **Datos de sesión:** layout distinto en core ([08](../../docs/parity/openauth-redis/08-logical-keys-and-payloads.md)). **Rate limit:** Lua alineado con upstream en borde `>` ([11](../../docs/parity/openauth-redis/11-gap-closure-status.md)). **Tests:** 19 aquí; E2E sign-up en `openauth-fred`.
+**KV adapter:** high parity. **Session payloads:** not portable to Better Auth without core migration. **Rate limit:** OpenAuth Lua extension; wire separately from secondary storage.
 
 ```bash
 cargo nextest run -p openauth-redis

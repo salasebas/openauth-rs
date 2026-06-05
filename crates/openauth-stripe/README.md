@@ -124,6 +124,32 @@ For end-to-end validation against Stripe **test mode** (real API + Checkout + we
 
 Database hooks and built-in webhook handlers are **best-effort** (logged, non-fatal). During smoke, grep logs for the messages listed in SMOKE.md §10.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Reference: `@better-auth/stripe@1.6.9` → `packages/stripe/`. Parity pin:
+[`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
+
+**Scope:** Server-side Stripe billing plugin only — no `@better-auth/stripe/client`
+port.
+
+| Area | Parity | Notes |
+| --- | --- | --- |
+| HTTP routes (7) | High | Same webhook + subscription endpoints |
+| Customers, checkout, subscriptions | High | User/org linking, seats, scheduling, metered |
+| Webhooks | High | Best-effort built-in handlers; strict `on_event` |
+| DB hooks | High | Best-effort sign-up customer, email/seat sync |
+| Webhook idempotency | Extension | Durable `stripeWebhookEvent` by `event.id` |
+| `group` on subscription list | Extension | When plan defines `group` |
+
+June 2026 gap closure (G1–G12) closed remaining runtime parity gaps. **174** Rust
+tests vs **150** upstream Vitest `it`. Intentional differences: custom
+`StripeClient` + `StripeTransport`, no deprecated error aliases, stricter
+`/subscription/success` validation. See [ROADMAP.md](./ROADMAP.md) for pending work.
+
+```bash
+cargo nextest run -p openauth-stripe
+```
+
 ## Status
 
 Experimental beta. Customer, subscription, billing portal, and webhook behavior
@@ -133,8 +159,6 @@ Stripe failures during **database hooks** (sign-up customer, email sync, seat sy
 **built-in webhook handlers** are best-effort: they are logged and do not fail the
 underlying user operation or return an error to Stripe, matching Better Auth 1.6.9.
 The optional `on_event` hook can still fail the webhook response if it returns an error.
-
-See [UPSTREAM.md](./UPSTREAM.md) and [ROADMAP.md](./ROADMAP.md) for parity notes, intentional differences, and pending work.
 
 ### Webhook events handled
 

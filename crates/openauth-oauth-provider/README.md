@@ -54,6 +54,35 @@ consent, access-token, and refresh-token tables exist.
 - `openauth-oidc`: relying-party helpers for external IdPs.
 - `openauth-sso`: enterprise login plugin that consumes external OIDC/SAML IdPs.
 
+## Upstream parity (Better Auth 1.6.9)
+
+Reference: `@better-auth/oauth-provider@1.6.9` → `packages/oauth-provider/`.
+Parity pin:
+[`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
+
+**Scope:** OAuth 2.1 / OIDC **authorization server** — authorize, token,
+introspection, revocation, metadata, userinfo, DCR, and client/consent management.
+OAuth **client** primitives are in `openauth-oauth`; JWT/JWKS merge via
+`openauth-plugins::jwt`.
+
+| Area | Parity | Notes |
+| --- | --- | --- |
+| OAuth/OIDC endpoints | High | 25 upstream routes; Rust adds `GET /oauth2/continue` |
+| Grants (code, refresh, M2M) | High | PKCE, rotation, replay, `resource` → JWT |
+| Introspection / revocation | High | RFC 7662/7009; client auth required |
+| Metadata / discovery | High | OIDC metadata when `openid`; `oauth_provider_with_jwt()` |
+| DCR + client/consent CRUD | High | Admin + session; `client_privileges` |
+| MCP helpers | Partial | `src/mcp.rs` without routes; full MCP in `openauth-plugins::mcp` |
+| Browser `client.ts` / resource-client | N/A | Server-only |
+
+June 2026 closeout added UserInfo `given_name`/`family_name`, `no-store` on
+token/DCR, SPA JSON redirects, `prompt=none` handling, and advertised JWKS
+metadata. **96** Rust tests vs **261** upstream `it`.
+
+```bash
+cargo nextest run -p openauth-oauth-provider
+```
+
 ## Status
 
 Experimental beta. The provider is implemented server-side and has focused
