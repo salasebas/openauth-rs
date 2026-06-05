@@ -13,6 +13,9 @@ coverage/
 .tmp/
 tmp/
 temp/
+*.sqlite
+*.sqlite3
+*.sqlite-journal
 
 # Environment secrets (never commit). Example templates stay tracked.
 .env
