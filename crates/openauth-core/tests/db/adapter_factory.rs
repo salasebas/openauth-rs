@@ -553,7 +553,9 @@ async fn hooked_adapter_delete_fails_when_snapshot_preload_fails() {
             PluginDatabaseHook::before_delete("before-delete", {
                 let hook_ran = Arc::clone(&hook_ran);
                 move |_context, query, snapshots| {
-                    *hook_ran.lock().unwrap() = true;
+                    *hook_ran
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
                     Ok(PluginDatabaseBeforeAction::Continue(
                         PluginDatabaseBeforeInput::Delete { query, snapshots },
                     ))
@@ -562,7 +564,9 @@ async fn hooked_adapter_delete_fails_when_snapshot_preload_fails() {
             PluginDatabaseHook::after_delete("after-delete", {
                 let hook_ran = Arc::clone(&hook_ran);
                 move |_context, _query, _snapshots| {
-                    *hook_ran.lock().unwrap() = true;
+                    *hook_ran
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
                     Ok(())
                 }
             }),
@@ -576,7 +580,9 @@ async fn hooked_adapter_delete_fails_when_snapshot_preload_fails() {
         Err(OpenAuthError::Adapter(message))
             if message == "find_many failed during delete snapshot preload"
     ));
-    assert!(!*hook_ran.lock().unwrap());
+    assert!(!*hook_ran
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()));
     assert!(inner.delete.lock().await.is_none());
 }
 
@@ -591,7 +597,9 @@ async fn hooked_adapter_delete_many_fails_when_snapshot_preload_fails() {
             PluginDatabaseHook::before_delete_many("before-delete-many", {
                 let hook_ran = Arc::clone(&hook_ran);
                 move |_context, query, snapshots| {
-                    *hook_ran.lock().unwrap() = true;
+                    *hook_ran
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
                     Ok(PluginDatabaseBeforeAction::Continue(
                         PluginDatabaseBeforeInput::DeleteMany { query, snapshots },
                     ))
@@ -600,7 +608,9 @@ async fn hooked_adapter_delete_many_fails_when_snapshot_preload_fails() {
             PluginDatabaseHook::after_delete_many("after-delete-many", {
                 let hook_ran = Arc::clone(&hook_ran);
                 move |_context, _query, _snapshots, _result| {
-                    *hook_ran.lock().unwrap() = true;
+                    *hook_ran
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
                     Ok(())
                 }
             }),
@@ -614,7 +624,9 @@ async fn hooked_adapter_delete_many_fails_when_snapshot_preload_fails() {
         Err(OpenAuthError::Adapter(message))
             if message == "find_many failed during delete snapshot preload"
     ));
-    assert!(!*hook_ran.lock().unwrap());
+    assert!(!*hook_ran
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()));
     assert!(inner.delete_many.lock().await.is_none());
 }
 
