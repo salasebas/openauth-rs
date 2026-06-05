@@ -11,9 +11,11 @@ use crate::openapi::{
     id_body_schema, json_openapi_response, passkey_openapi_schema, update_passkey_body_schema,
 };
 use crate::options::PasskeyOptions;
-use crate::response::{error_response, json_response, not_allowed, unauthorized};
+use crate::response::{
+    error_response, json_response, not_allowed, session_not_fresh, unauthorized,
+};
 use crate::routes::{adapter, IdBody, UpdatePasskeyBody};
-use crate::session::current_session;
+use crate::session::{current_session, session_is_fresh};
 use crate::store::PasskeyStore;
 
 pub(super) fn list_passkeys_endpoint(_options: Arc<PasskeyOptions>) -> AsyncAuthEndpoint {
@@ -50,7 +52,7 @@ pub(super) fn list_passkeys_endpoint(_options: Arc<PasskeyOptions>) -> AsyncAuth
     )
 }
 
-pub(super) fn delete_passkey_endpoint(_options: Arc<PasskeyOptions>) -> AsyncAuthEndpoint {
+pub(super) fn delete_passkey_endpoint(options: Arc<PasskeyOptions>) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/passkey/delete-passkey",
         Method::POST,
@@ -76,12 +78,18 @@ pub(super) fn delete_passkey_endpoint(_options: Arc<PasskeyOptions>) -> AsyncAut
                     ),
             ),
         move |context, request| {
+            let options = Arc::clone(&options);
             Box::pin(async move {
                 let adapter = adapter(context)?;
                 let body: IdBody = parse_request_body(&request)?;
-                let Some((_, user, cookies)) = current_session(context, &request).await? else {
+                let Some((session, user, cookies)) = current_session(context, &request).await?
+                else {
                     return unauthorized();
                 };
+                if options.management.require_fresh_session && !session_is_fresh(context, &session)
+                {
+                    return session_not_fresh();
+                }
                 let store = PasskeyStore::new(adapter.as_ref());
                 let Some(passkey) = store.find_by_id(&body.id).await? else {
                     return error_response(
@@ -100,7 +108,7 @@ pub(super) fn delete_passkey_endpoint(_options: Arc<PasskeyOptions>) -> AsyncAut
     )
 }
 
-pub(super) fn update_passkey_endpoint(_options: Arc<PasskeyOptions>) -> AsyncAuthEndpoint {
+pub(super) fn update_passkey_endpoint(options: Arc<PasskeyOptions>) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/passkey/update-passkey",
         Method::POST,
@@ -126,12 +134,18 @@ pub(super) fn update_passkey_endpoint(_options: Arc<PasskeyOptions>) -> AsyncAut
                     ),
             ),
         move |context, request| {
+            let options = Arc::clone(&options);
             Box::pin(async move {
                 let adapter = adapter(context)?;
                 let body: UpdatePasskeyBody = parse_request_body(&request)?;
-                let Some((_, user, cookies)) = current_session(context, &request).await? else {
+                let Some((session, user, cookies)) = current_session(context, &request).await?
+                else {
                     return unauthorized();
                 };
+                if options.management.require_fresh_session && !session_is_fresh(context, &session)
+                {
+                    return session_not_fresh();
+                }
                 let store = PasskeyStore::new(adapter.as_ref());
                 let Some(existing) = store.find_by_id(&body.id).await? else {
                     return error_response(

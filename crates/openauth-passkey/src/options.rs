@@ -110,6 +110,33 @@ impl Default for PasskeyAdvancedOptions {
     }
 }
 
+/// Passkey management mutation settings (delete, rename).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PasskeyManagementOptions {
+    /// Require a fresh session before passkey management mutations.
+    pub require_fresh_session: bool,
+}
+
+impl Default for PasskeyManagementOptions {
+    fn default() -> Self {
+        Self {
+            require_fresh_session: true,
+        }
+    }
+}
+
+impl PasskeyManagementOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn require_fresh_session(mut self, require_fresh_session: bool) -> Self {
+        self.require_fresh_session = require_fresh_session;
+        self
+    }
+}
+
 /// Passkey plugin settings.
 #[derive(Clone)]
 pub struct PasskeyOptions {
@@ -120,6 +147,7 @@ pub struct PasskeyOptions {
     pub authenticator_selection: AuthenticatorSelection,
     pub registration: PasskeyRegistrationOptions,
     pub authentication: PasskeyAuthenticationOptions,
+    pub management: PasskeyManagementOptions,
     pub advanced: PasskeyAdvancedOptions,
     pub rate_limit: PasskeyRateLimit,
     pub challenge_rate_limit: PasskeyChallengeRateLimit,
@@ -136,6 +164,7 @@ impl Default for PasskeyOptions {
             authenticator_selection: AuthenticatorSelection::default(),
             registration: PasskeyRegistrationOptions::default(),
             authentication: PasskeyAuthenticationOptions::default(),
+            management: PasskeyManagementOptions::default(),
             advanced: PasskeyAdvancedOptions::default(),
             rate_limit: PasskeyRateLimit::default(),
             challenge_rate_limit: PasskeyChallengeRateLimit::default(),
@@ -188,6 +217,12 @@ impl PasskeyOptions {
     #[must_use]
     pub fn authentication(mut self, authentication: PasskeyAuthenticationOptions) -> Self {
         self.authentication = authentication;
+        self
+    }
+
+    #[must_use]
+    pub fn management(mut self, management: PasskeyManagementOptions) -> Self {
+        self.management = management;
         self
     }
 
