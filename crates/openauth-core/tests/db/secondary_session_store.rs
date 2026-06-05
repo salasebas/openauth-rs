@@ -25,7 +25,10 @@ impl TtlAwareSecondaryStorage {
             .entries
             .lock()
             .map_err(|_| OpenAuthError::Adapter("secondary storage mutex poisoned".to_owned()))?;
-        entries.retain(|_, entry| entry.expires_at.is_none_or(|expires_at| expires_at > now));
+        entries.retain(|_, entry| match entry.expires_at {
+            None => true,
+            Some(expires_at) => expires_at > now,
+        });
         Ok(())
     }
 
