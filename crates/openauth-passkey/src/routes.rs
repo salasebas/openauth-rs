@@ -173,6 +173,8 @@ pub(crate) async fn resolve_extensions(
 
 #[cfg(test)]
 mod config_tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
     use http::{Method, Request};
     use openauth_core::context::create_auth_context;
     use openauth_core::error::OpenAuthError;
