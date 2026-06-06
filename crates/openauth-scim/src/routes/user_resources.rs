@@ -974,6 +974,23 @@ pub(super) async fn delete_scim_user(
         .await
 }
 
+async fn user_has_org_scoped_scim_account(
+    adapter: &dyn DbAdapter,
+    accounts: &[Account],
+    organization_id: &str,
+) -> Result<bool, OpenAuthError> {
+    let store = ScimProviderStore::new(adapter);
+    for account in accounts {
+        let Some(provider) = store.find_by_provider_id(&account.provider_id).await? else {
+            continue;
+        };
+        if provider.organization_id.as_deref() == Some(organization_id) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 async fn unlink_scim_user(
     adapter: &dyn DbAdapter,
     user_id: &str,
@@ -996,21 +1013,6 @@ async fn unlink_scim_user(
                             )),
                     )
                     .await?;
-                if let Some(organization_id) = organization_id.as_deref() {
-                    transaction
-                        .delete(
-                            Delete::new("member")
-                                .where_clause(Where::new(
-                                    "organization_id",
-                                    DbValue::String(organization_id.to_owned()),
-                                ))
-                                .where_clause(Where::new(
-                                    "user_id",
-                                    DbValue::String(user_id.clone()),
-                                )),
-                        )
-                        .await?;
-                }
                 let users = DbUserStore::new(transaction.as_ref());
                 let accounts = users.list_accounts_for_user(&user_id).await?;
                 if let Some(account) = accounts
@@ -1020,6 +1022,29 @@ async fn unlink_scim_user(
                     users.delete_account(&account.id).await?;
                 }
                 let remaining = users.list_accounts_for_user(&user_id).await?;
+                if let Some(organization_id) = organization_id.as_deref() {
+                    let keep_membership = user_has_org_scoped_scim_account(
+                        transaction.as_ref(),
+                        &remaining,
+                        organization_id,
+                    )
+                    .await?;
+                    if !keep_membership {
+                        transaction
+                            .delete(
+                                Delete::new("member")
+                                    .where_clause(Where::new(
+                                        "organization_id",
+                                        DbValue::String(organization_id.to_owned()),
+                                    ))
+                                    .where_clause(Where::new(
+                                        "user_id",
+                                        DbValue::String(user_id.clone()),
+                                    )),
+                            )
+                            .await?;
+                    }
+                }
                 if remaining.is_empty() {
                     transaction
                         .delete_many(
