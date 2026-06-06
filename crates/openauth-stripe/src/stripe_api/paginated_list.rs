@@ -32,6 +32,51 @@ impl StripeClient {
         .await
     }
 
+    /// List every customer page for `params` and return a single merged list object.
+    pub async fn list_customers_all(&self, mut params: Value) -> Result<Value, StripeApiError> {
+        self.paginate_list(|page_params| self.list_customers(page_params), &mut params)
+            .await
+    }
+
+    /// Walk customer list pages until `predicate` matches or the list is exhausted.
+    pub async fn find_customer<F>(
+        &self,
+        mut params: Value,
+        mut predicate: F,
+    ) -> Result<Option<Value>, StripeApiError>
+    where
+        F: FnMut(&Value) -> bool,
+    {
+        let mut pages = 0usize;
+        loop {
+            if pages >= MAX_STRIPE_LIST_PAGES {
+                return Ok(None);
+            }
+            pages += 1;
+            set_list_page_params(&mut params);
+            let page = self.list_customers(params.clone()).await?;
+            if let Some(found) = page
+                .get("data")
+                .and_then(Value::as_array)
+                .and_then(|customers| {
+                    customers
+                        .iter()
+                        .find(|customer| predicate(customer))
+                        .cloned()
+                })
+            {
+                return Ok(Some(found));
+            }
+            if !stripe_list_has_more(&page) {
+                return Ok(None);
+            }
+            let Some(last_id) = last_list_item_id(&page) else {
+                return Ok(None);
+            };
+            set_starting_after(&mut params, last_id);
+        }
+    }
+
     /// Walk subscription list pages until `predicate` matches or the list is exhausted.
     pub async fn find_subscription<F>(
         &self,

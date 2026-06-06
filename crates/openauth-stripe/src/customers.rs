@@ -297,13 +297,22 @@ async fn find_existing_organization_customer(
                 "Stripe customers.search failed, falling back to customers.list",
                 &[&error.to_string()],
             );
-            let list_result = stripe_client
-                .list_customers(json!({ "limit": 100 }))
+            stripe_client
+                .find_customer(json!({}), |customer| {
+                    matches_organization_customer(customer, organization_id)
+                })
                 .await
-                .map_err(CustomerEnsureError::Stripe)?;
-            Ok(find_organization_customer(&list_result, organization_id))
+                .map_err(CustomerEnsureError::Stripe)
         }
     }
+}
+
+fn matches_organization_customer(customer: &Value, organization_id: &str) -> bool {
+    let Some(metadata) = customer.get("metadata") else {
+        return false;
+    };
+    metadata.get("organizationId").and_then(Value::as_str) == Some(organization_id)
+        && metadata.get("customerType").and_then(Value::as_str) == Some("organization")
 }
 
 fn find_organization_customer(customers: &Value, organization_id: &str) -> Option<Value> {
@@ -311,18 +320,8 @@ fn find_organization_customer(customers: &Value, organization_id: &str) -> Optio
         .get("data")?
         .as_array()?
         .iter()
-        .find_map(|customer| {
-            let metadata = customer.get("metadata")?;
-            let matches_organization =
-                metadata.get("organizationId").and_then(Value::as_str) == Some(organization_id);
-            let matches_type =
-                metadata.get("customerType").and_then(Value::as_str) == Some("organization");
-            if matches_organization && matches_type {
-                Some(customer.clone())
-            } else {
-                None
-            }
-        })
+        .find(|customer| matches_organization_customer(customer, organization_id))
+        .cloned()
 }
 
 fn organization_customer_create_params(
@@ -390,47 +389,45 @@ async fn find_existing_user_customer(
                 "Stripe customers.search failed, falling back to customers.list",
                 &[&error.to_string()],
             );
-            let list_result = stripe_client
-                .list_customers(json!({
-                    "email": email,
-                    "limit": 100,
-                }))
+            return stripe_client
+                .find_customer(json!({ "email": email }), |customer| {
+                    matches_user_customer(customer, user_id)
+                })
                 .await
-                .map_err(CustomerEnsureError::Stripe)?;
-            if let Some(customer) = find_user_customer(&list_result, user_id) {
-                return Ok(Some(customer));
-            }
+                .map_err(CustomerEnsureError::Stripe);
         }
     }
     Ok(None)
 }
 
-/// Selects a Stripe customer that is safe to link to `user_id`.
+/// Returns true when `customer` is safe to link to `user_id`.
 ///
 /// Skips organization customers and refuses any customer whose
 /// `metadata.userId` identifies a different OpenAuth user, only allowing reuse
 /// of the user's own customer or a metadata-less dashboard customer.
+fn matches_user_customer(customer: &Value, user_id: &str) -> bool {
+    let metadata = customer.get("metadata");
+    let customer_type = metadata
+        .and_then(|metadata| metadata.get("customerType"))
+        .and_then(Value::as_str);
+    if customer_type == Some("organization") {
+        return false;
+    }
+    !matches!(
+        metadata
+            .and_then(|metadata| metadata.get("userId"))
+            .and_then(Value::as_str),
+        Some(existing) if existing != user_id
+    )
+}
+
 fn find_user_customer(customers: &Value, user_id: &str) -> Option<Value> {
     customers
         .get("data")?
         .as_array()?
         .iter()
-        .find_map(|customer| {
-            let metadata = customer.get("metadata");
-            let customer_type = metadata
-                .and_then(|metadata| metadata.get("customerType"))
-                .and_then(Value::as_str);
-            if customer_type == Some("organization") {
-                return None;
-            }
-            match metadata
-                .and_then(|metadata| metadata.get("userId"))
-                .and_then(Value::as_str)
-            {
-                Some(existing) if existing != user_id => None,
-                _ => Some(customer.clone()),
-            }
-        })
+        .find(|customer| matches_user_customer(customer, user_id))
+        .cloned()
 }
 
 async fn persist_user_customer_id(
