@@ -192,3 +192,215 @@ async fn unlink_deprovision_keeps_user_when_another_provider_account_exists() {
         .expect("request should succeed");
     assert_eq!(entra_get.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn unlink_deprovision_preserves_org_membership_when_another_org_scoped_provider_remains() {
+    let (adapter, router, context) = router_with_context_and_organization(ScimOptions {
+        deprovision_mode: ScimDeprovisionMode::UnlinkAccount,
+        ..crate::scim_options_for_manual_provider_tokens()
+    })
+    .expect("router");
+    let (admin_cookie, admin_id) =
+        session_cookie_with_user(adapter.as_ref(), &context, "admin@example.com")
+            .await
+            .expect("admin session");
+    seed_organization(adapter.as_ref(), "org_1")
+        .await
+        .expect("org");
+    seed_member(adapter.as_ref(), "org_1", &admin_id, "admin")
+        .await
+        .expect("admin member");
+
+    let token_a = generate_scim_token(&router, &admin_cookie, "provider-a", Some("org_1")).await;
+    let token_b = generate_scim_token(&router, &admin_cookie, "provider-b", Some("org_1")).await;
+
+    let user_id = create_scim_user(
+        &router,
+        &token_a,
+        "dual-provider@example.com",
+        "Dual Provider",
+    )
+    .await;
+
+    let linked = router
+        .handle_async(json_request(
+            Method::POST,
+            "/scim/v2/Users",
+            r#"{"userName":"dual-provider@example.com"}"#,
+            Some(&token_b),
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(linked.status(), StatusCode::CREATED);
+    assert_eq!(json_body(linked)["id"], user_id);
+
+    let deleted = router
+        .handle_async(auth_request(
+            Method::DELETE,
+            &format!("/scim/v2/Users/{user_id}"),
+            &token_a,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+
+    let member = adapter
+        .find_one(
+            FindOne::new("member")
+                .where_clause(Where::new(
+                    "organization_id",
+                    DbValue::String("org_1".to_owned()),
+                ))
+                .where_clause(Where::new("user_id", DbValue::String(user_id.clone()))),
+        )
+        .await
+        .expect("member lookup should succeed");
+    assert!(member.is_some());
+
+    let provider_a_get = router
+        .handle_async(auth_request(
+            Method::GET,
+            &format!("/scim/v2/Users/{user_id}"),
+            &token_a,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(provider_a_get.status(), StatusCode::NOT_FOUND);
+
+    let provider_b_get = router
+        .handle_async(auth_request(
+            Method::GET,
+            &format!("/scim/v2/Users/{user_id}"),
+            &token_b,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(provider_b_get.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn delete_user_deprovision_preserves_org_membership_when_another_org_scoped_provider_remains()
+{
+    let (adapter, router, context) = router_with_context_and_organization(ScimOptions {
+        deprovision_mode: ScimDeprovisionMode::DeleteUser,
+        ..crate::scim_options_for_manual_provider_tokens()
+    })
+    .expect("router");
+    let (admin_cookie, admin_id) =
+        session_cookie_with_user(adapter.as_ref(), &context, "admin@example.com")
+            .await
+            .expect("admin session");
+    seed_organization(adapter.as_ref(), "org_1")
+        .await
+        .expect("org");
+    seed_member(adapter.as_ref(), "org_1", &admin_id, "admin")
+        .await
+        .expect("admin member");
+
+    let token_a = generate_scim_token(&router, &admin_cookie, "provider-a", Some("org_1")).await;
+    let token_b = generate_scim_token(&router, &admin_cookie, "provider-b", Some("org_1")).await;
+
+    let user_id = create_scim_user(
+        &router,
+        &token_a,
+        "delete-dual-provider@example.com",
+        "Delete Dual Provider",
+    )
+    .await;
+
+    let linked = router
+        .handle_async(json_request(
+            Method::POST,
+            "/scim/v2/Users",
+            r#"{"userName":"delete-dual-provider@example.com"}"#,
+            Some(&token_b),
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(linked.status(), StatusCode::CREATED);
+    assert_eq!(json_body(linked)["id"], user_id);
+
+    let deleted = router
+        .handle_async(auth_request(
+            Method::DELETE,
+            &format!("/scim/v2/Users/{user_id}"),
+            &token_a,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+
+    let member = adapter
+        .find_one(
+            FindOne::new("member")
+                .where_clause(Where::new(
+                    "organization_id",
+                    DbValue::String("org_1".to_owned()),
+                ))
+                .where_clause(Where::new("user_id", DbValue::String(user_id.clone()))),
+        )
+        .await
+        .expect("member lookup should succeed");
+    assert!(member.is_some());
+
+    let provider_b_get = router
+        .handle_async(auth_request(
+            Method::GET,
+            &format!("/scim/v2/Users/{user_id}"),
+            &token_b,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(provider_b_get.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn unlink_deprovision_removes_org_membership_when_last_org_scoped_provider_is_unlinked() {
+    let (adapter, router, context) = router_with_context_and_organization(ScimOptions {
+        deprovision_mode: ScimDeprovisionMode::UnlinkAccount,
+        ..crate::scim_options_for_manual_provider_tokens()
+    })
+    .expect("router");
+    let (admin_cookie, admin_id) =
+        session_cookie_with_user(adapter.as_ref(), &context, "admin@example.com")
+            .await
+            .expect("admin session");
+    seed_organization(adapter.as_ref(), "org_1")
+        .await
+        .expect("org");
+    seed_member(adapter.as_ref(), "org_1", &admin_id, "admin")
+        .await
+        .expect("admin member");
+
+    let token = generate_scim_token(&router, &admin_cookie, "provider-a", Some("org_1")).await;
+    let user_id = create_scim_user(
+        &router,
+        &token,
+        "single-provider@example.com",
+        "Single Provider",
+    )
+    .await;
+
+    let deleted = router
+        .handle_async(auth_request(
+            Method::DELETE,
+            &format!("/scim/v2/Users/{user_id}"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+
+    let member = adapter
+        .find_one(
+            FindOne::new("member")
+                .where_clause(Where::new(
+                    "organization_id",
+                    DbValue::String("org_1".to_owned()),
+                ))
+                .where_clause(Where::new("user_id", DbValue::String(user_id))),
+        )
+        .await
+        .expect("member lookup should succeed");
+    assert!(member.is_none());
+}
