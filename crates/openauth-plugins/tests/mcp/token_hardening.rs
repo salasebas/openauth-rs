@@ -306,6 +306,15 @@ async fn refresh_token_confidential_client_accepts_post_and_basic_secret(
         "openid",
     )
     .await?;
+    seed_access_token(
+        &adapter,
+        "access_2",
+        "refresh_2",
+        "client_1",
+        "user_1",
+        "openid",
+    )
+    .await?;
 
     let post = auth
         .handle_async(form_request(
@@ -327,11 +336,116 @@ async fn refresh_token_confidential_client_accepts_post_and_basic_secret(
                     header::AUTHORIZATION,
                     format!("Basic {}", STANDARD.encode("client_1:secret_1")),
                 )
-                .body(b"grant_type=refresh_token&refresh_token=refresh_1".to_vec())?,
+                .body(b"grant_type=refresh_token&refresh_token=refresh_2".to_vec())?,
         )
         .await?;
     assert_eq!(basic.status(), StatusCode::OK);
     assert!(json_body(&basic)?["access_token"].as_str().is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn refresh_token_rotation_invalidates_presented_token(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (auth, adapter) = seeded_router().await?;
+    seed_client(
+        &adapter,
+        "client_1",
+        "secret_1",
+        "https://client.example/callback",
+        "web",
+    )
+    .await?;
+    seed_access_token(
+        &adapter,
+        "access_1",
+        "refresh_1",
+        "client_1",
+        "user_1",
+        "openid",
+    )
+    .await?;
+
+    let first = auth
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/mcp/token",
+            "grant_type=refresh_token&client_id=client_1&client_secret=secret_1&refresh_token=refresh_1",
+        )?)
+        .await?;
+    assert_eq!(first.status(), StatusCode::OK);
+    let refresh_2 = json_body(&first)?["refresh_token"]
+        .as_str()
+        .ok_or("missing refresh token")?
+        .to_owned();
+
+    let replay = auth
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/mcp/token",
+            "grant_type=refresh_token&client_id=client_1&client_secret=secret_1&refresh_token=refresh_1",
+        )?)
+        .await?;
+    assert_oauth_error(&replay, StatusCode::UNAUTHORIZED, "invalid_grant")?;
+
+    let second = auth
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/mcp/token",
+            &format!(
+                "grant_type=refresh_token&client_id=client_1&client_secret=secret_1&refresh_token={refresh_2}"
+            ),
+        )?)
+        .await?;
+    assert_eq!(second.status(), StatusCode::OK);
+    assert!(json_body(&second)?["access_token"].as_str().is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn refresh_token_concurrent_rotation_allows_single_success(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (auth, adapter) = seeded_router().await?;
+    seed_client(
+        &adapter,
+        "client_1",
+        "secret_1",
+        "https://client.example/callback",
+        "web",
+    )
+    .await?;
+    seed_access_token(
+        &adapter,
+        "access_1",
+        "refresh_1",
+        "client_1",
+        "user_1",
+        "openid",
+    )
+    .await?;
+
+    let auth = std::sync::Arc::new(auth);
+    let request_body = "grant_type=refresh_token&client_id=client_1&client_secret=secret_1&refresh_token=refresh_1";
+    let auth_left = auth.clone();
+    let auth_right = auth.clone();
+    let (left, right) = tokio::join!(
+        auth_left.handle_async(form_request(
+            Method::POST,
+            "/api/auth/mcp/token",
+            request_body,
+        )?),
+        auth_right.handle_async(form_request(
+            Method::POST,
+            "/api/auth/mcp/token",
+            request_body,
+        )?)
+    );
+
+    let successes = [left?, right?]
+        .iter()
+        .filter(|response| response.status() == StatusCode::OK)
+        .count();
+    assert_eq!(successes, 1);
     Ok(())
 }
 

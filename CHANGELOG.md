@@ -52,6 +52,10 @@ Versioning while the API is still pre-1.0.
   assertion ID cannot both mint sessions. Replay markers are now claimed
   atomically via `SsoStateStore::try_create` (Redis/Valkey `SET NX` when
   secondary storage is configured, serialized verification writes otherwise).
+- Fixed MCP OAuth refresh grants so presented refresh tokens are single-use.
+  Refresh now atomically rotates the stored access/refresh token pair in place
+  instead of inserting a new row and leaving the previous tokens valid until
+  expiry.
 - Fixed `rememberMe: false` sessions becoming persistent after sensitive
   account flows. `/change-password` with `revokeOtherSessions: true` and
   `/change-email` immediate email updates now preserve the non-remembered
