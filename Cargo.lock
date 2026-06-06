@@ -3055,6 +3055,7 @@ dependencies = [
  "time",
  "tokio",
  "tower",
+ "url",
 ]
 
 [[package]]
