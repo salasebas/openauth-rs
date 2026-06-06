@@ -6,7 +6,7 @@ use openauth_core::api::{
     BodySchema, JsonSchemaType,
 };
 use openauth_core::crypto::jwt::sign_jwt;
-use openauth_core::db::{Create, DbValue, Delete, FindOne, Where};
+use openauth_core::db::{Create, DbValue, Delete, FindOne, Update, Where};
 use openauth_core::error::OpenAuthError;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -141,16 +141,16 @@ async fn refresh_token(
     client_secret: Option<String>,
     body: &Value,
 ) -> Result<TokenResponse, TokenEndpointError> {
-    let Some(refresh_token) = string_field(body, "refresh_token") else {
+    let Some(presented_refresh_token) = string_field(body, "refresh_token") else {
         return Err(TokenEndpointError::invalid_request(
             "refresh_token is required",
         ));
     };
     let Some(token) = adapter
-        .find_one(
-            FindOne::new(OAUTH_TOKEN_MODEL)
-                .where_clause(Where::new("refreshToken", DbValue::String(refresh_token))),
-        )
+        .find_one(FindOne::new(OAUTH_TOKEN_MODEL).where_clause(Where::new(
+            "refreshToken",
+            DbValue::String(presented_refresh_token.clone()),
+        )))
         .await?
     else {
         return Err(TokenEndpointError::invalid_grant("invalid refresh token"));
@@ -175,14 +175,18 @@ async fn refresh_token(
         return Err(TokenEndpointError::invalid_grant("refresh token expired"));
     }
     let access_token = random_token();
-    let refresh_token = random_token();
+    let new_refresh_token = random_token();
     let now = OffsetDateTime::now_utc();
     let scopes = required_string(&token, "scopes")?;
-    adapter
-        .create(
-            Create::new(OAUTH_TOKEN_MODEL)
+    let updated = adapter
+        .update(
+            Update::new(OAUTH_TOKEN_MODEL)
+                .where_clause(Where::new(
+                    "refreshToken",
+                    DbValue::String(presented_refresh_token),
+                ))
                 .data("accessToken", DbValue::String(access_token.clone()))
-                .data("refreshToken", DbValue::String(refresh_token.clone()))
+                .data("refreshToken", DbValue::String(new_refresh_token.clone()))
                 .data(
                     "accessTokenExpiresAt",
                     DbValue::Timestamp(
@@ -195,21 +199,17 @@ async fn refresh_token(
                         now + Duration::seconds(options.refresh_token_expires_in as i64),
                     ),
                 )
-                .data("clientId", DbValue::String(token_client_id))
-                .data(
-                    "userId",
-                    token.get("userId").cloned().unwrap_or(DbValue::Null),
-                )
-                .data("scopes", DbValue::String(scopes.clone()))
-                .data("createdAt", DbValue::Timestamp(now))
                 .data("updatedAt", DbValue::Timestamp(now)),
         )
         .await?;
+    if updated.is_none() {
+        return Err(TokenEndpointError::invalid_grant("invalid refresh token"));
+    }
     Ok(TokenResponse {
         access_token,
         token_type: "bearer".to_owned(),
         expires_in: options.access_token_expires_in,
-        refresh_token: Some(refresh_token),
+        refresh_token: Some(new_refresh_token),
         scope: scopes,
         id_token: None,
     })

@@ -463,7 +463,30 @@ async fn mcp_token_exchanges_authorization_code_and_refresh_token(
         )?)
         .await?;
     assert_eq!(refreshed.status(), StatusCode::OK);
-    assert!(json_body(&refreshed)?["access_token"].as_str().is_some());
+    let refreshed_body = json_body(&refreshed)?;
+    assert!(refreshed_body["access_token"].as_str().is_some());
+    let new_refresh_token = refreshed_body["refresh_token"]
+        .as_str()
+        .ok_or("missing rotated refresh token")?;
+
+    let replay = auth
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/mcp/token",
+            &format!("grant_type=refresh_token&client_id=client_1&client_secret=secret_1&refresh_token={refresh_token}"),
+        )?)
+        .await?;
+    assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json_body(&replay)?["error"], "invalid_grant");
+
+    let rotated = auth
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/mcp/token",
+            &format!("grant_type=refresh_token&client_id=client_1&client_secret=secret_1&refresh_token={new_refresh_token}"),
+        )?)
+        .await?;
+    assert_eq!(rotated.status(), StatusCode::OK);
     Ok(())
 }
 
