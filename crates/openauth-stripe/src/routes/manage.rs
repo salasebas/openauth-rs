@@ -3,7 +3,7 @@ use openauth_core::api::{
     create_auth_endpoint, parse_request_body, AuthEndpointOptions, BodyField, BodySchema,
     JsonSchemaType, OpenApiOperation,
 };
-use openauth_core::db::{DbAdapter, DbValue, DeleteMany, Update, Where};
+use openauth_core::db::{DbAdapter, DbValue, Update, Where};
 use openauth_core::error::OpenAuthError;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -156,12 +156,6 @@ pub fn cancel_subscription(options: StripeOptions) -> openauth_core::api::AsyncA
                     }
                 };
                 if !stripe_list_has_any_active_subscription(&active_subscriptions) {
-                    adapter
-                        .delete_many(DeleteMany::new("subscription").where_clause(Where::new(
-                            "reference_id",
-                            DbValue::String(reference_id),
-                        )))
-                        .await?;
                     return error_response(
                         StatusCode::BAD_REQUEST,
                         StripeErrorCode::SubscriptionNotFound,

@@ -329,7 +329,7 @@ async fn cancel_subscription_syncs_pending_cancel_when_portal_says_already_cance
 }
 
 #[tokio::test]
-async fn cancel_subscription_deletes_stale_local_subscriptions_when_stripe_has_no_active(
+async fn cancel_subscription_preserves_local_subscriptions_when_stripe_has_no_active(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let transport = Arc::new(EmptySubscriptionListTransport::default());
     let options = StripeOptions::new(
@@ -362,7 +362,12 @@ async fn cancel_subscription_deletes_stale_local_subscriptions_when_stripe_has_n
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body: Value = serde_json::from_slice(response.body())?;
     assert_eq!(body["code"], "SUBSCRIPTION_NOT_FOUND");
-    assert!(adapter.records("subscription").await.is_empty());
+    let records = adapter.records("subscription").await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].get("id"),
+        Some(&DbValue::String("sub_active".to_owned()))
+    );
     let requests = transport.requests()?;
     assert!(requests
         .iter()
@@ -370,6 +375,139 @@ async fn cancel_subscription_deletes_stale_local_subscriptions_when_stripe_has_n
     assert!(!requests
         .iter()
         .any(|request| request.path == "/v1/billing_portal/sessions"));
+    Ok(())
+}
+
+#[derive(Default)]
+struct EmptyListCheckoutTransport {
+    requests: Mutex<Vec<StripeRequest>>,
+}
+
+impl EmptyListCheckoutTransport {
+    fn requests(&self) -> Result<Vec<StripeRequest>, String> {
+        self.requests
+            .lock()
+            .map(|requests| requests.clone())
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl StripeTransport for EmptyListCheckoutTransport {
+    fn send<'a>(&'a self, request: StripeRequest) -> StripeTransportFuture<'a> {
+        let response = match request.path.as_str() {
+            "/v1/subscriptions" => json!({ "object": "list", "data": [] }),
+            "/v1/checkout/sessions" => json!({
+                "id": "cs_test_123",
+                "object": "checkout.session",
+                "url": "https://checkout.stripe.test/session"
+            }),
+            _ => json!({ "id": "ok" }),
+        };
+        if let Err(error) = self
+            .requests
+            .lock()
+            .map(|mut requests| requests.push(request))
+        {
+            let message = error.to_string();
+            return Box::pin(async move {
+                Err(openauth_stripe::stripe_api::StripeApiError::Transport(
+                    message,
+                ))
+            });
+        }
+        Box::pin(async move {
+            Ok(StripeResponse {
+                status: 200,
+                body: response,
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn cancel_subscription_preserves_trial_history_for_upgrade_guard(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(EmptyListCheckoutTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![StripePlan::new("pro")
+        .price_id("price_pro")
+        .free_trial(openauth_stripe::options::FreeTrialOptions::new(7))]));
+    let plugin = stripe(options);
+    let cancel_endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/cancel")
+        .ok_or("cancel endpoint")?;
+    let upgrade_endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    create_subscription_record(
+        &adapter,
+        "sub_canceled_trial",
+        "user_1",
+        "canceled",
+        Some("cus_123"),
+    )
+    .await?;
+    openauth_core::db::DbAdapter::update(
+        &adapter,
+        openauth_core::db::Update::new("subscription")
+            .where_clause(openauth_core::db::Where::new(
+                "id",
+                DbValue::String("sub_canceled_trial".to_owned()),
+            ))
+            .data("trial_start", DbValue::Timestamp(OffsetDateTime::now_utc())),
+    )
+    .await?;
+    create_subscription_record(&adapter, "sub_active", "user_1", "active", Some("cus_123")).await?;
+    let cancel_request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/cancel")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header.clone())
+        .body(br#"{"returnUrl":"/account"}"#.to_vec())?;
+
+    let cancel_response = (cancel_endpoint.handler)(&context, cancel_request).await?;
+
+    assert_eq!(cancel_response.status(), StatusCode::BAD_REQUEST);
+    let cancel_body: Value = serde_json::from_slice(cancel_response.body())?;
+    assert_eq!(cancel_body["code"], "SUBSCRIPTION_NOT_FOUND");
+    let records = adapter.records("subscription").await;
+    assert!(records
+        .iter()
+        .any(|record| record.get("id") == Some(&DbValue::String("sub_canceled_trial".to_owned()))));
+    let historical = records
+        .iter()
+        .find(|record| record.get("id") == Some(&DbValue::String("sub_canceled_trial".to_owned())))
+        .ok_or("historical trial subscription")?;
+    assert!(historical
+        .get("trial_start")
+        .is_some_and(|value| !matches!(value, DbValue::Null)));
+    let upgrade_request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(br#"{"plan":"pro","successUrl":"/ok","cancelUrl":"/pricing"}"#.to_vec())?;
+
+    let upgrade_response = (upgrade_endpoint.handler)(&context, upgrade_request).await?;
+
+    assert_eq!(upgrade_response.status(), StatusCode::OK);
+    let checkout_request = transport
+        .requests()?
+        .into_iter()
+        .find(|request| request.path == "/v1/checkout/sessions")
+        .ok_or("checkout request")?;
+    assert!(!checkout_request.body.contains("trial_period_days"));
     Ok(())
 }
 
