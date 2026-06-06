@@ -358,6 +358,65 @@ async fn disable_two_factor_clears_user_flag_and_row() -> Result<(), Box<dyn std
 }
 
 #[tokio::test]
+async fn concurrent_verify_totp_mints_only_one_session() -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = seeded_router().await?;
+    let _cookie = enable_totp(&adapter, &router).await?;
+    let record = two_factor_record(adapter.as_ref()).await?;
+    let secret = symmetric_decrypt(secret(), string_field(&record, "secret")?)?;
+    let code = totp_code(&secret, 6, 30, OffsetDateTime::now_utc().unix_timestamp());
+    let (challenge_cookie, _body) = two_factor_challenge_cookie(&router).await?;
+    let sessions_before = adapter.len("session").await;
+
+    let body = format!(r#"{{"code":"{code}"}}"#);
+    let (first, second) = tokio::join!(
+        router.handle_async(json_request(
+            Method::POST,
+            "/api/auth/two-factor/verify-totp",
+            &body,
+            Some(&challenge_cookie),
+        )?),
+        router.handle_async(json_request(
+            Method::POST,
+            "/api/auth/two-factor/verify-totp",
+            &body,
+            Some(&challenge_cookie),
+        )?),
+    );
+    let responses = [first?, second?];
+    let ok = responses
+        .iter()
+        .filter(|response| response.status() == StatusCode::OK)
+        .count();
+    let rejected = responses
+        .iter()
+        .filter(|response| response.status() == StatusCode::UNAUTHORIZED)
+        .count();
+
+    assert_eq!(
+        ok, 1,
+        "only one concurrent verify should mint a post-2FA session"
+    );
+    assert_eq!(
+        rejected, 1,
+        "the losing concurrent verify should reject the consumed challenge"
+    );
+    let rejected_body: Value = serde_json::from_slice(
+        responses
+            .iter()
+            .find(|response| response.status() == StatusCode::UNAUTHORIZED)
+            .ok_or("missing rejected response")?
+            .body(),
+    )?;
+    assert_eq!(rejected_body["code"], "INVALID_TWO_FACTOR_COOKIE");
+    assert_eq!(
+        adapter.len("session").await,
+        sessions_before + 1,
+        "only one new session row should be created by concurrent verification"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn verify_totp_without_two_factor_cookie_returns_plugin_error(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = seeded_router().await?;
