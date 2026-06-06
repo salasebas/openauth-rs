@@ -125,7 +125,10 @@ pub(super) fn verify_totp_endpoint(
                         .await?;
                 }
                 flow.trust_device = body.trust_device.unwrap_or(false);
-                flow.valid(context, &options).await
+                match flow.valid(context, &options).await {
+                    Ok(response) => Ok(response),
+                    Err(error) => flow_error_response(error),
+                }
             })
         },
     )

@@ -143,7 +143,10 @@ pub(super) fn verify_backup_code_endpoint(
                         Vec::new(),
                     );
                 }
-                flow.valid(context, &options).await
+                match flow.valid(context, &options).await {
+                    Ok(response) => Ok(response),
+                    Err(error) => flow_error_response(error),
+                }
             })
         },
     )

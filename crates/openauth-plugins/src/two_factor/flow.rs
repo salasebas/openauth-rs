@@ -156,6 +156,13 @@ impl VerifyFlow {
                 Vec::new(),
             );
         }
+        let verification_store = DbVerificationStore::new(self.adapter.as_ref());
+        let Some(verification) = verification_store.take_verification(&self.key).await? else {
+            return Err(OpenAuthError::Api("INVALID_TWO_FACTOR_COOKIE".to_owned()));
+        };
+        if verification.value != self.user.id {
+            return Err(OpenAuthError::Api("INVALID_TWO_FACTOR_COOKIE".to_owned()));
+        }
         let expires_in = if self.dont_remember {
             60 * 60 * 24
         } else {
@@ -164,9 +171,6 @@ impl VerifyFlow {
         let expires_at = OffsetDateTime::now_utc() + Duration::seconds(expires_in as i64);
         let session = DbSessionStore::new(self.adapter.as_ref())
             .create_session(CreateSessionInput::new(&self.user.id, expires_at))
-            .await?;
-        DbVerificationStore::new(self.adapter.as_ref())
-            .delete_verification(&self.key)
             .await?;
         let mut cookies = set_session_cookie(
             &context.auth_cookies,
