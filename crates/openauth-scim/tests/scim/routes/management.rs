@@ -607,6 +607,360 @@ async fn management_global_requires_provider_ownership_for_generate() {
 }
 
 #[tokio::test]
+async fn management_delete_provider_purges_users_and_blocks_provider_id_reuse() {
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
+    let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
+        .await
+        .expect("session cookie should create");
+
+    let generated = router
+        .handle_async(session_json_request(
+            Method::POST,
+            "/scim/generate-token",
+            r#"{"providerId":"okta"}"#,
+            &cookie,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(generated.status(), StatusCode::CREATED);
+    let first_token = json_body(generated)["scimToken"]
+        .as_str()
+        .expect("token should be string")
+        .to_owned();
+    let user_id = create_scim_user(
+        &router,
+        &first_token,
+        "reused-provider@example.com",
+        "Reused Provider",
+    )
+    .await;
+
+    let deleted = router
+        .handle_async(session_json_request(
+            Method::POST,
+            "/scim/delete-provider-connection",
+            r#"{"providerId":"okta"}"#,
+            &cookie,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(deleted.status(), StatusCode::OK);
+
+    let old_token_response = router
+        .handle_async(auth_request(Method::GET, "/scim/v2/Users", &first_token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(old_token_response.status(), StatusCode::UNAUTHORIZED);
+
+    let regenerated = router
+        .handle_async(session_json_request(
+            Method::POST,
+            "/scim/generate-token",
+            r#"{"providerId":"okta"}"#,
+            &cookie,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(regenerated.status(), StatusCode::CREATED);
+    let second_token = json_body(regenerated)["scimToken"]
+        .as_str()
+        .expect("token should be string")
+        .to_owned();
+    assert_ne!(first_token, second_token);
+
+    let listed = router
+        .handle_async(auth_request(Method::GET, "/scim/v2/Users", &second_token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(json_body(listed)["totalResults"], 0);
+
+    let stale_user = router
+        .handle_async(auth_request(
+            Method::GET,
+            &format!("/scim/v2/Users/{user_id}"),
+            &second_token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(stale_user.status(), StatusCode::NOT_FOUND);
+
+    let profile = adapter
+        .find_one(
+            FindOne::new("scimUserProfile")
+                .where_clause(Where::new("providerId", DbValue::String("okta".to_owned())))
+                .where_clause(Where::new("userId", DbValue::String(user_id.clone()))),
+        )
+        .await
+        .expect("profile lookup should succeed");
+    assert!(profile.is_none());
+
+    let account = adapter
+        .find_one(
+            FindOne::new("account")
+                .where_clause(Where::new(
+                    "provider_id",
+                    DbValue::String("okta".to_owned()),
+                ))
+                .where_clause(Where::new("user_id", DbValue::String(user_id))),
+        )
+        .await
+        .expect("account lookup should succeed");
+    assert!(account.is_none());
+}
+
+#[tokio::test]
+async fn management_delete_provider_purges_groups_without_touching_native_teams() {
+    let (adapter, router, context) =
+        router_with_context_and_organization(crate::scim_options_for_global_management())
+            .expect("router");
+    let (owner_cookie, owner_id) =
+        session_cookie_with_user(adapter.as_ref(), &context, "owner@example.com")
+            .await
+            .expect("owner session");
+    seed_organization(adapter.as_ref(), "org_1")
+        .await
+        .expect("org");
+    seed_member(adapter.as_ref(), "org_1", &owner_id, "owner")
+        .await
+        .expect("owner member");
+
+    let token = generate_scim_token(&router, &owner_cookie, "okta", Some("org_1")).await;
+    let user_id = create_scim_user(&router, &token, "group-purge@example.com", "Group Purge").await;
+    let scim_group_id =
+        create_scim_group(&router, &token, "SCIM Group", "scim-group", &[&user_id]).await;
+
+    let now = OffsetDateTime::now_utc();
+    adapter
+        .create(
+            Create::new("team")
+                .data("id", DbValue::String("native_team_1".to_owned()))
+                .data("name", DbValue::String("Native Team".to_owned()))
+                .data("organization_id", DbValue::String("org_1".to_owned()))
+                .data("created_at", DbValue::Timestamp(now))
+                .data("updated_at", DbValue::Timestamp(now))
+                .force_allow_id(),
+        )
+        .await
+        .expect("native team should create");
+
+    let deleted = router
+        .handle_async(session_json_request(
+            Method::POST,
+            "/scim/delete-provider-connection",
+            r#"{"providerId":"okta"}"#,
+            &owner_cookie,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(deleted.status(), StatusCode::OK);
+
+    let native_team = adapter
+        .find_one(FindOne::new("team").where_clause(Where::new(
+            "id",
+            DbValue::String("native_team_1".to_owned()),
+        )))
+        .await
+        .expect("native team lookup should succeed");
+    assert!(native_team.is_some());
+
+    let scim_team = adapter
+        .find_one(
+            FindOne::new("team").where_clause(Where::new("id", DbValue::String(scim_group_id))),
+        )
+        .await
+        .expect("scim team lookup should succeed");
+    assert!(scim_team.is_none());
+
+    let scim_profile = adapter
+        .find_one(
+            FindOne::new("scimGroupProfile")
+                .where_clause(Where::new("providerId", DbValue::String("okta".to_owned()))),
+        )
+        .await
+        .expect("group profile lookup should succeed");
+    assert!(scim_profile.is_none());
+
+    let second_token = generate_scim_token(&router, &owner_cookie, "okta", Some("org_1")).await;
+    let listed = router
+        .handle_async(auth_request(Method::GET, "/scim/v2/Groups", &second_token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(json_body(listed)["totalResults"], 0);
+}
+
+#[tokio::test]
+async fn management_delete_provider_does_not_touch_other_providers() {
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
+    let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
+        .await
+        .expect("session cookie should create");
+
+    for provider_id in ["okta", "entra"] {
+        router
+            .handle_async(session_json_request(
+                Method::POST,
+                "/scim/generate-token",
+                &format!(r#"{{"providerId":"{provider_id}"}}"#),
+                &cookie,
+            ))
+            .await
+            .expect("request should succeed");
+    }
+
+    let okta_token = router
+        .handle_async(session_json_request(
+            Method::POST,
+            "/scim/generate-token",
+            r#"{"providerId":"okta"}"#,
+            &cookie,
+        ))
+        .await
+        .expect("request should succeed");
+    let okta_token = json_body(okta_token)["scimToken"]
+        .as_str()
+        .expect("token should be string")
+        .to_owned();
+    let entra_token = router
+        .handle_async(session_json_request(
+            Method::POST,
+            "/scim/generate-token",
+            r#"{"providerId":"entra"}"#,
+            &cookie,
+        ))
+        .await
+        .expect("request should succeed");
+    let entra_token = json_body(entra_token)["scimToken"]
+        .as_str()
+        .expect("token should be string")
+        .to_owned();
+
+    let okta_user_id =
+        create_scim_user(&router, &okta_token, "okta-only@example.com", "Okta Only").await;
+    let entra_user_id = create_scim_user(
+        &router,
+        &entra_token,
+        "entra-only@example.com",
+        "Entra Only",
+    )
+    .await;
+
+    let deleted = router
+        .handle_async(session_json_request(
+            Method::POST,
+            "/scim/delete-provider-connection",
+            r#"{"providerId":"okta"}"#,
+            &cookie,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(deleted.status(), StatusCode::OK);
+
+    let entra_list = router
+        .handle_async(auth_request(Method::GET, "/scim/v2/Users", &entra_token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(entra_list.status(), StatusCode::OK);
+    assert_eq!(json_body(entra_list)["totalResults"], 1);
+
+    let entra_user = router
+        .handle_async(auth_request(
+            Method::GET,
+            &format!("/scim/v2/Users/{entra_user_id}"),
+            &entra_token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(entra_user.status(), StatusCode::OK);
+
+    let stale_okta_user = router
+        .handle_async(auth_request(
+            Method::GET,
+            &format!("/scim/v2/Users/{okta_user_id}"),
+            &entra_token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(stale_okta_user.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn management_delete_provider_unlinks_linked_user_when_other_accounts_exist() {
+    let (adapter, router, context) =
+        router_with_context(crate::scim_options_for_global_management()).expect("router");
+    let cookie = session_cookie(adapter.as_ref(), &context, "owner@example.com")
+        .await
+        .expect("session cookie should create");
+
+    let generated = router
+        .handle_async(session_json_request(
+            Method::POST,
+            "/scim/generate-token",
+            r#"{"providerId":"okta"}"#,
+            &cookie,
+        ))
+        .await
+        .expect("request should succeed");
+    let token = json_body(generated)["scimToken"]
+        .as_str()
+        .expect("token should be string")
+        .to_owned();
+
+    let existing = DbUserStore::new(adapter.as_ref())
+        .create_user(
+            CreateUserInput::new("Password User", "linked-delete@example.com").email_verified(true),
+        )
+        .await
+        .expect("user should create");
+    DbUserStore::new(adapter.as_ref())
+        .create_credential_account(CreateCredentialAccountInput::new(
+            &existing.id,
+            "hashed-password".to_owned(),
+        ))
+        .await
+        .expect("credential account should create");
+
+    let linked = router
+        .handle_async(json_request(
+            Method::POST,
+            "/scim/v2/Users",
+            r#"{"userName":"linked-delete@example.com"}"#,
+            Some(&token),
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(linked.status(), StatusCode::CREATED);
+
+    let deleted = router
+        .handle_async(session_json_request(
+            Method::POST,
+            "/scim/delete-provider-connection",
+            r#"{"providerId":"okta"}"#,
+            &cookie,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(deleted.status(), StatusCode::OK);
+
+    let user = DbUserStore::new(adapter.as_ref())
+        .find_user_by_id(&existing.id)
+        .await
+        .expect("lookup should succeed")
+        .expect("user should remain");
+    assert_eq!(user.email, "linked-delete@example.com");
+
+    let accounts = DbUserStore::new(adapter.as_ref())
+        .list_accounts_for_user(&existing.id)
+        .await
+        .expect("accounts should list");
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].provider_id, "credential");
+}
+
+#[tokio::test]
 async fn management_global_unowned_provider_is_inaccessible_with_ownership() {
     let (adapter, router, context) =
         router_with_context(crate::scim_options_for_global_management()).expect("router");

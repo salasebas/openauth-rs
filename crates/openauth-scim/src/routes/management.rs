@@ -315,9 +315,104 @@ pub(super) fn delete_provider_connection_endpoint(
                         "You must be the owner to access this provider",
                     );
                 }
-                store.delete(&body.provider_id).await?;
+                purge_provider_connection(adapter.as_ref(), &provider, options.deprovision_mode)
+                    .await?;
                 json(StatusCode::OK, &DeleteProviderResponse { success: true })
             })
         },
     )
+}
+
+async fn purge_provider_connection(
+    adapter: &dyn DbAdapter,
+    provider: &ScimProviderRecord,
+    deprovision_mode: crate::options::ScimDeprovisionMode,
+) -> Result<(), OpenAuthError> {
+    purge_provider_groups(adapter, &provider.provider_id).await?;
+    purge_provider_users(adapter, provider, deprovision_mode).await?;
+    ScimProviderStore::new(adapter)
+        .delete(&provider.provider_id)
+        .await
+}
+
+async fn purge_provider_groups(
+    adapter: &dyn DbAdapter,
+    provider_id: &str,
+) -> Result<(), OpenAuthError> {
+    let profiles = adapter
+        .find_many(
+            FindMany::new("scimGroupProfile")
+                .where_clause(Where::new(
+                    "providerId",
+                    DbValue::String(provider_id.to_owned()),
+                ))
+                .select(["teamId"]),
+        )
+        .await?;
+    for profile in profiles {
+        let team_id = required_string(&profile, "teamId")?.to_owned();
+        delete_group(adapter, provider_id, &team_id).await?;
+    }
+    Ok(())
+}
+
+async fn purge_provider_users(
+    adapter: &dyn DbAdapter,
+    provider: &ScimProviderRecord,
+    deprovision_mode: crate::options::ScimDeprovisionMode,
+) -> Result<(), OpenAuthError> {
+    let accounts = adapter
+        .find_many(
+            FindMany::new("account")
+                .where_clause(Where::new(
+                    "provider_id",
+                    DbValue::String(provider.provider_id.clone()),
+                ))
+                .select(["user_id"]),
+        )
+        .await?;
+    let mut user_ids = accounts
+        .into_iter()
+        .filter_map(|record| required_string(&record, "user_id").ok().map(str::to_owned))
+        .collect::<Vec<_>>();
+    user_ids.sort();
+    user_ids.dedup();
+
+    if let Some(organization_id) = provider.organization_id.as_deref() {
+        if !user_ids.is_empty() {
+            let members = adapter
+                .find_many(
+                    FindMany::new("member")
+                        .where_clause(Where::new(
+                            "organization_id",
+                            DbValue::String(organization_id.to_owned()),
+                        ))
+                        .where_clause(
+                            Where::new("user_id", DbValue::StringArray(user_ids.clone()))
+                                .operator(WhereOperator::In),
+                        )
+                        .select(["user_id"]),
+                )
+                .await?;
+            user_ids = members
+                .into_iter()
+                .filter_map(|member| match member.get("user_id") {
+                    Some(DbValue::String(user_id)) => Some(user_id.to_owned()),
+                    _ => None,
+                })
+                .collect();
+        }
+    }
+
+    for user_id in user_ids {
+        deprovision_scim_user(
+            adapter,
+            &user_id,
+            &provider.provider_id,
+            provider.organization_id.as_deref(),
+            deprovision_mode,
+        )
+        .await?;
+    }
+    Ok(())
 }
