@@ -410,7 +410,7 @@ fn audience_matches(value: Option<&Value>, expected: &[String]) -> bool {
 
 fn validate_temporal_claims(claims: &serde_json::Map<String, Value>) -> Result<(), OAuthError> {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    if let Some(expiration) = parse_numeric_timestamp_claim(claims.get("exp"), "exp", false)? {
+    if let Some(expiration) = parse_numeric_timestamp_claim(claims.get("exp"), "exp", true)? {
         if expiration <= now {
             return Err(OAuthError::TokenVerification("token expired".to_owned()));
         }
@@ -485,6 +485,25 @@ mod tests {
         assert!(provider
             .verify_id_token_with_jwk_set(&token, Some("n"), &jwks)
             .expect("verification should complete"));
+    }
+
+    #[tokio::test]
+    async fn verify_id_token_rejects_missing_exp() {
+        let (token, jwk) =
+            signed_google_id_token_without_exp("web-client", GOOGLE_ISSUER_HTTPS, Some("n"));
+        let jwks = jwks_with_key(jwk);
+        let provider = test_provider(false);
+
+        assert!(!provider
+            .verify_id_token_with_jwk_set(&token, Some("n"), &jwks)
+            .expect("verification should complete"));
+
+        let error = verify_google_id_token_jws(&token, &jwks, &["web-client".to_owned()])
+            .expect_err("token without exp should fail verification");
+        assert!(
+            matches!(error, OAuthError::InvalidClaim { claim: "exp", .. }),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]
@@ -618,6 +637,58 @@ mod tests {
 
     fn signed_google_id_token(audience: &str, issuer: &str, nonce: Option<&str>) -> (String, Jwk) {
         signed_google_id_token_with_claims(audience, issuer, nonce, [])
+    }
+
+    fn signed_google_id_token_without_exp(
+        audience: &str,
+        issuer: &str,
+        nonce: Option<&str>,
+    ) -> (String, Jwk) {
+        let kid = "google-test-key";
+        let mut jwk = Jwk::generate_rsa_key(2048).expect("rsa key should generate");
+        jwk.set_key_id(kid);
+        jwk.set_algorithm("RS256");
+        jwk.set_key_use("sig");
+
+        let signer = Rs256
+            .signer_from_jwk(&jwk)
+            .expect("rsa signer should build");
+        let mut payload = JwtPayload::new();
+        payload
+            .set_claim("aud", Some(json!(audience)))
+            .expect("aud claim");
+        payload
+            .set_claim("iss", Some(json!(issuer)))
+            .expect("iss claim");
+        payload
+            .set_claim("sub", Some(json!("google-subject")))
+            .expect("sub claim");
+        payload
+            .set_claim("email", Some(json!("ada@example.com")))
+            .expect("email claim");
+        payload
+            .set_claim("email_verified", Some(json!(true)))
+            .expect("email_verified claim");
+        if let Some(nonce) = nonce {
+            payload
+                .set_claim("nonce", Some(json!(nonce)))
+                .expect("nonce claim");
+        }
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        payload
+            .set_claim("iat", Some(json!(now)))
+            .expect("iat claim");
+
+        let mut header = JwsHeader::new();
+        header.set_algorithm("RS256");
+        header.set_key_id(kid);
+        let token =
+            jwt::encode_with_signer(&payload, &header, &signer).expect("token should encode");
+        let mut public_jwk = jwk.to_public_key().expect("public jwk should export");
+        public_jwk.set_key_id(kid);
+        public_jwk.set_algorithm("RS256");
+        public_jwk.set_key_use("sig");
+        (token, public_jwk)
     }
 
     fn jwks_with_key(jwk: Jwk) -> JwkSet {
