@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 
 const AUTH_BASE_PATH: &str = "/api/axum/auth";
+const PROFILE_AUTH_PATH_PREFIX: &str = "/api/example/auth/";
 const DEFAULT_SECRET: &str = "openauth-example-dev-secret-at-least-32-chars";
 const RATE_LIMIT_WINDOW_HEADER: &str = "x-openauth-example-rate-window";
 const RATE_LIMIT_MAX_HEADER: &str = "x-openauth-example-rate-max";
@@ -171,6 +172,7 @@ impl ExampleConfig {
             })?;
         let default_base_url = format!("http://{host}:{port}{AUTH_BASE_PATH}");
         let base_url = env::var("OPENAUTH_EXAMPLE_BASE_URL").unwrap_or(default_base_url);
+        validate_example_base_url(&base_url)?;
         let secret = env::var("OPENAUTH_SECRET").unwrap_or_else(|_| DEFAULT_SECRET.to_owned());
         let db = env_or("OPENAUTH_EXAMPLE_DB", "sqlite").parse::<DbBackend>()?;
         let rate_limit =
@@ -642,11 +644,7 @@ where
     };
 
     OpenAuth::builder()
-        .base_url(format!(
-            "{}{}",
-            origin_from_base_url(&config.base_url),
-            auth_base_path
-        ))
+        .base_url(auth_base_url_for_path(&config.base_url, &auth_base_path)?)
         .base_path(auth_base_path)
         .secret(config.secret)
         .email_password(EmailPasswordOptions::new().enabled(true))
@@ -1002,11 +1000,6 @@ async fn build_profile_auth(
     } else {
         db.default_database_url()
     };
-    config.base_url = format!(
-        "{}{}",
-        origin_from_base_url(&config.base_url),
-        auth_base_path
-    );
     ensure_sqlite_parent(&config)?;
 
     match db {
@@ -1428,12 +1421,71 @@ fn db_value_to_json(value: &DbValue) -> serde_json::Value {
     }
 }
 
-fn origin_from_base_url(base_url: &str) -> String {
-    let Some((scheme, rest)) = base_url.split_once("://") else {
-        return "http://127.0.0.1:3000".to_owned();
-    };
-    let host = rest.split('/').next().unwrap_or(rest);
-    format!("{scheme}://{host}")
+fn validate_example_base_url(base_url: &str) -> Result<(), ExampleError> {
+    let url = parse_example_base_url(base_url)?;
+    if url.cannot_be_a_base() || url.host_str().is_none() {
+        return Err(ExampleError::InvalidConfig(
+            "OPENAUTH_EXAMPLE_BASE_URL must be an absolute URL with a host".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_example_base_url(base_url: &str) -> Result<url::Url, ExampleError> {
+    url::Url::parse(base_url).map_err(|error| {
+        ExampleError::InvalidConfig(format!("OPENAUTH_EXAMPLE_BASE_URL is invalid: {error}"))
+    })
+}
+
+fn format_url_origin(url: &url::Url) -> String {
+    let mut origin = format!("{}://", url.scheme());
+    if let Some(host) = url.host_str() {
+        origin.push_str(host);
+    }
+    if let Some(port) = url.port() {
+        origin.push(':');
+        origin.push_str(&port.to_string());
+    }
+    origin
+}
+
+fn trim_url_path(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+fn configured_path_prefix(path: &str) -> String {
+    let path = trim_url_path(path);
+    if path.is_empty() {
+        return String::new();
+    }
+
+    if let Some(idx) = path.find(PROFILE_AUTH_PATH_PREFIX) {
+        if idx > 0 {
+            return trim_url_path(&path[..idx]);
+        }
+        return String::new();
+    }
+
+    if path.ends_with(AUTH_BASE_PATH) {
+        return trim_url_path(path.strip_suffix(AUTH_BASE_PATH).unwrap_or(path.as_str()));
+    }
+
+    path
+}
+
+fn auth_base_url_for_path(
+    configured_base_url: &str,
+    auth_base_path: &str,
+) -> Result<String, ExampleError> {
+    let parsed = parse_example_base_url(configured_base_url)?;
+    let origin = format_url_origin(&parsed);
+    let prefix = configured_path_prefix(parsed.path());
+    Ok(format!("{origin}{prefix}{auth_base_path}"))
 }
 
 async fn detect_services() -> Vec<ServiceStatus> {
@@ -2939,6 +2991,105 @@ void loadStudioTables();
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn configured_base_url_prefix_is_preserved_for_static_routes() -> Result<(), ExampleError>
+    {
+        let config = ExampleConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 3000,
+            base_url: "https://example.com/demo/api/axum/auth".to_owned(),
+            secret: DEFAULT_SECRET.to_owned(),
+            db: DbBackend::Memory,
+            rate_limit: RateLimitBackend::Memory,
+            rate_limit_enabled: true,
+            rate_limit_window: 60,
+            rate_limit_max: 120,
+            database_url: String::new(),
+            redis_url: "redis://127.0.0.1:6379".to_owned(),
+            valkey_url: "valkey://127.0.0.1:6380".to_owned(),
+            dev_controls: true,
+        };
+
+        let auth = build_auth(
+            config,
+            AUTH_BASE_PATH.to_owned(),
+            openauth::MemoryAdapter::new(),
+            None,
+            Arc::new(GovernorMemoryRateLimitStore::new()),
+        )
+        .await?;
+
+        assert_eq!(
+            auth.context().base_url,
+            "https://example.com/demo/api/axum/auth"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn configured_base_url_prefix_is_preserved_for_dynamic_profiles(
+    ) -> Result<(), ExampleError> {
+        let config = ExampleConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 3000,
+            base_url: "https://example.com/demo/api/axum/auth".to_owned(),
+            secret: DEFAULT_SECRET.to_owned(),
+            db: DbBackend::Memory,
+            rate_limit: RateLimitBackend::Memory,
+            rate_limit_enabled: true,
+            rate_limit_window: 60,
+            rate_limit_max: 120,
+            database_url: String::new(),
+            redis_url: "redis://127.0.0.1:6379".to_owned(),
+            valkey_url: "valkey://127.0.0.1:6380".to_owned(),
+            dev_controls: true,
+        };
+        let profile_path = profile_base_path(DbBackend::Memory, RateLimitBackend::Memory);
+
+        let auth = build_profile_auth(
+            config,
+            DbBackend::Memory,
+            RateLimitBackend::Memory,
+            profile_path.clone(),
+            openauth::MemoryAdapter::new(),
+            Arc::new(GovernorMemoryRateLimitStore::new()),
+        )
+        .await?;
+
+        assert_eq!(
+            auth.context().base_url,
+            format!("https://example.com/demo{profile_path}")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_example_base_url_is_rejected() {
+        let missing_scheme = validate_example_base_url("127.0.0.1:3000/api/axum/auth");
+        assert!(missing_scheme.is_err(), "missing scheme must be rejected");
+        assert!(matches!(
+            missing_scheme,
+            Err(ExampleError::InvalidConfig(message))
+                if message.contains("OPENAUTH_EXAMPLE_BASE_URL is invalid")
+        ));
+
+        let garbage = validate_example_base_url("not-a-valid-url");
+        assert!(garbage.is_err(), "garbage input must be rejected");
+        assert!(matches!(
+            garbage,
+            Err(ExampleError::InvalidConfig(message))
+                if message.contains("OPENAUTH_EXAMPLE_BASE_URL is invalid")
+        ));
+    }
+
+    #[test]
+    fn auth_base_url_for_path_rejects_malformed_input_without_localhost_fallback() {
+        assert!(matches!(
+            auth_base_url_for_path("127.0.0.1:3000/api/axum/auth", AUTH_BASE_PATH),
+            Err(ExampleError::InvalidConfig(message)) if !message.contains("127.0.0.1")
+        ));
+    }
 
     #[tokio::test]
     async fn dynamic_profile_cache_reuses_auth_instances() -> Result<(), ExampleError> {

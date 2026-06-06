@@ -18,6 +18,7 @@ serde_json.workspace = true
 sqlx = { workspace = true, features = ["mysql", "postgres", "sqlite"] }
 time = { workspace = true, features = ["formatting"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net"] }
+url.workspace = true
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
