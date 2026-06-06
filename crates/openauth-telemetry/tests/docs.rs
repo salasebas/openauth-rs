@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 #[test]
 fn readme_documents_oauth_feature_for_social_provider_snapshots() {
     let readme = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md");
