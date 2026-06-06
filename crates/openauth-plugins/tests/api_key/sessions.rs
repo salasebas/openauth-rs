@@ -13,7 +13,9 @@ use openauth_plugins::api_key::{
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 
-use super::helpers::{request_json, request_json_with_headers, sign_up, test_router};
+use super::helpers::{
+    request_json, request_json_with_headers, sign_up, test_router, with_test_defaults,
+};
 
 #[tokio::test]
 async fn api_key_can_mock_get_session_when_enabled() -> Result<(), Box<dyn std::error::Error>> {
@@ -352,6 +354,6 @@ fn test_router_with_options(
     options: OpenAuthOptions,
 ) -> Result<AuthRouter, OpenAuthError> {
     let adapter: Arc<dyn DbAdapter> = adapter;
-    let context = create_auth_context_with_adapter(options, adapter.clone())?;
+    let context = create_auth_context_with_adapter(with_test_defaults(options), adapter.clone())?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
 }

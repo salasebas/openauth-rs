@@ -13,8 +13,19 @@ use openauth_core::db::{
     MemoryAdapter, SchemaCreation, Update, UpdateMany,
 };
 use openauth_core::options::{
-    BackgroundTaskFuture, BackgroundTaskRunner, OpenAuthOptions, SecondaryStorage,
+    BackgroundTaskFuture, BackgroundTaskRunner, EmailPasswordOptions, OpenAuthOptions,
+    SecondaryStorage,
 };
+
+pub fn with_test_defaults(mut options: OpenAuthOptions) -> OpenAuthOptions {
+    if !options.production {
+        options.development = true;
+    }
+    if !options.email_password.enabled {
+        options.email_password = EmailPasswordOptions::new().enabled(true);
+    }
+    options
+}
 use serde_json::{json, Value};
 
 pub struct TestResponse {
@@ -47,12 +58,12 @@ pub fn test_router_with_adapter(
     plugins: Vec<openauth_core::plugin::AuthPlugin>,
 ) -> Result<AuthRouter, Box<dyn std::error::Error>> {
     let context = create_auth_context_with_adapter(
-        OpenAuthOptions {
+        with_test_defaults(OpenAuthOptions {
             plugins,
             base_url: Some("http://localhost:3000".to_owned()),
             secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
             ..OpenAuthOptions::default()
-        },
+        }),
         adapter.clone(),
     )?;
     Ok(AuthRouter::with_async_endpoints(
