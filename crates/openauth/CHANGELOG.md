@@ -12,6 +12,9 @@ All notable changes to `openauth` are documented in this file.
 
 ### Fixed
 
+- Umbrella README SQLx quick start now imports `openauth::sqlx::SqliteAdapter`
+  behind the documented `sqlx-sqlite` feature instead of requiring a separate
+  `openauth-sqlx` dependency.
 - SQL/memory/Postgres adapter constructors apply `database_hooks` once instead of
   wrapping the inner adapter on every `new`.
 - `open_auth_async` / `OpenAuth::new_async` build without requiring the
