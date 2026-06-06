@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use http::{Method, StatusCode};
+use http::{header, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::Duration;
@@ -13,6 +13,7 @@ use crate::api::{
     create_auth_endpoint, parse_request_body, request_base_url, AsyncAuthEndpoint,
     AuthEndpointOptions, BodyField, BodySchema, JsonSchemaType, OpenApiOperation,
 };
+use crate::auth::trusted_origins::OriginMatchSettings;
 use crate::crypto::jwt::{sign_jwt, verify_jwt};
 use crate::db::{DbAdapter, User};
 use crate::options::{EmailVerificationCallbackPayload, VerificationEmail};
@@ -133,6 +134,13 @@ pub(super) fn verify_email_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEnd
             .openapi(
                 OpenApiOperation::new("verifyEmail")
                     .description("Verify the email of the user")
+                    .parameter(serde_json::json!({
+                        "name": "callbackURL",
+                        "in": "query",
+                        "required": false,
+                        "description": "The URL to redirect to after email verification",
+                        "schema": { "type": "string" },
+                    }))
                     .response(
                         "200",
                         super::shared::json_openapi_response(
@@ -151,22 +159,45 @@ pub(super) fn verify_email_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEnd
                                 "required": ["status", "user"],
                             }),
                         ),
-                    ),
+                    )
+                    .response("302", super::shared::message_openapi_response("Redirect")),
             ),
         move |context, request| {
             let adapter = Arc::clone(&adapter);
             Box::pin(async move {
+                let callback_url = query_param(&request, "callbackURL");
+                let origin_settings = Some(OriginMatchSettings {
+                    allow_relative_paths: true,
+                });
+                if let Some(ref url) = callback_url {
+                    if !context.is_trusted_origin_for_request(
+                        url,
+                        origin_settings,
+                        Some(&request),
+                    )? {
+                        return redirect_with_error("/error", "INVALID_TOKEN");
+                    }
+                }
+
                 let Some(token) = query_param(&request, "token") else {
-                    return invalid_token();
+                    return verification_error_response(
+                        callback_url.as_deref(),
+                        "INVALID_TOKEN",
+                        "Invalid token",
+                    );
                 };
                 let Some(claims) = verify_jwt::<EmailVerificationClaims>(&token, &context.secret)?
                 else {
-                    return invalid_token();
+                    return verification_error_response(
+                        callback_url.as_deref(),
+                        "INVALID_TOKEN",
+                        "Invalid token",
+                    );
                 };
                 let users = DbUserStore::new(adapter.as_ref());
                 let Some(user) = users.find_user_by_email(&claims.email).await? else {
-                    return error_response(
-                        StatusCode::UNAUTHORIZED,
+                    return verification_error_response(
+                        callback_url.as_deref(),
                         "USER_NOT_FOUND",
                         "User not found",
                     );
@@ -199,13 +230,12 @@ pub(super) fn verify_email_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEnd
                             Some(&request),
                         )?;
                     }
-                    return json_response(
-                        StatusCode::OK,
+                    return verify_success_response(
+                        callback_url.as_deref(),
                         &VerifyEmailResponse {
                             status: true,
                             user: Some(updated),
                         },
-                        Vec::new(),
                     );
                 }
 
@@ -232,13 +262,12 @@ pub(super) fn verify_email_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEnd
                         Some(&request),
                     )?;
                 }
-                json_response(
-                    StatusCode::OK,
+                verify_success_response(
+                    callback_url.as_deref(),
                     &VerifyEmailResponse {
                         status: true,
                         user: None,
                     },
-                    Vec::new(),
                 )
             })
         },
@@ -274,8 +303,47 @@ fn simulate_verification_token(
     create_email_verification_token(context, email, None, None).map(|_| ())
 }
 
-fn invalid_token() -> Result<crate::api::ApiResponse, crate::error::OpenAuthError> {
-    error_response(StatusCode::UNAUTHORIZED, "INVALID_TOKEN", "Invalid token")
+fn verify_success_response(
+    callback_url: Option<&str>,
+    body: &VerifyEmailResponse,
+) -> Result<crate::api::ApiResponse, crate::error::OpenAuthError> {
+    if let Some(url) = callback_url {
+        return redirect(url);
+    }
+    json_response(StatusCode::OK, body, Vec::new())
+}
+
+fn verification_error_response(
+    callback_url: Option<&str>,
+    code: &str,
+    message: &str,
+) -> Result<crate::api::ApiResponse, crate::error::OpenAuthError> {
+    if let Some(url) = callback_url {
+        return redirect_with_error(url, code);
+    }
+    error_response(StatusCode::UNAUTHORIZED, code, message)
+}
+
+fn redirect_with_error(
+    location: &str,
+    code: &str,
+) -> Result<crate::api::ApiResponse, crate::error::OpenAuthError> {
+    let separator = if location.contains('?') { '&' } else { '?' };
+    redirect(&format!(
+        "{location}{separator}error={}",
+        percent_encode(code)
+    ))
+}
+
+fn redirect(location: &str) -> Result<crate::api::ApiResponse, crate::error::OpenAuthError> {
+    http::Response::builder()
+        .status(StatusCode::FOUND)
+        .header(header::LOCATION, location)
+        .body(Vec::new())
+        .map_err(|error| crate::error::OpenAuthError::Serialization {
+            context: "building email verification redirect response",
+            message: error.to_string(),
+        })
 }
 
 fn send_verification_email_body_schema() -> BodySchema {

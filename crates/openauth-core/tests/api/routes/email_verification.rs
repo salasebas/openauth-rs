@@ -211,7 +211,13 @@ async fn verify_email_route_marks_user_verified() -> Result<(), Box<dyn std::err
         })
         .await;
     let token = sign_jwt(&json!({ "email": "ada@example.com" }), secret(), 3600)?;
-    let router = router(adapter.clone())?;
+    let router = router_with_options(
+        adapter.clone(),
+        OpenAuthOptions {
+            base_url: Some("https://app.example.com/api/auth".to_owned()),
+            ..OpenAuthOptions::default()
+        },
+    )?;
 
     let response = router
         .handle_async(json_request(
@@ -249,5 +255,196 @@ async fn verify_email_route_rejects_invalid_token() -> Result<(), Box<dyn std::e
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body: Value = serde_json::from_slice(response.body())?;
     assert_eq!(body["code"], "INVALID_TOKEN");
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_email_route_redirects_to_trusted_callback() -> Result<(), Box<dyn std::error::Error>>
+{
+    let adapter = Arc::new(RouteAdapter::default());
+    let now = OffsetDateTime::now_utc();
+    adapter
+        .insert_user(User {
+            email_verified: false,
+            ..user(now)
+        })
+        .await;
+    let token = sign_jwt(&json!({ "email": "ada@example.com" }), secret(), 3600)?;
+    let router = router_with_options(
+        adapter.clone(),
+        OpenAuthOptions {
+            base_url: Some("https://app.example.com/api/auth".to_owned()),
+            ..OpenAuthOptions::default()
+        },
+    )?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!("/api/auth/verify-email?token={token}&callbackURL=/callback"),
+            "",
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("/callback")
+    );
+    let user = record_by_string(&adapter, "user", "email", "ada@example.com")
+        .await?
+        .ok_or("missing user")?;
+    assert_eq!(user.get("email_verified"), Some(&DbValue::Boolean(true)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_email_change_email_redirects_to_trusted_callback(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(RouteAdapter::default());
+    let now = OffsetDateTime::now_utc();
+    adapter
+        .insert_user(User {
+            email_verified: true,
+            ..user(now)
+        })
+        .await;
+    let token = sign_jwt(
+        &json!({
+            "email": "ada@example.com",
+            "updateTo": "new@example.com",
+            "requestType": "change-email-verification"
+        }),
+        secret(),
+        3600,
+    )?;
+    let router = router_with_options(
+        adapter.clone(),
+        OpenAuthOptions {
+            base_url: Some("https://app.example.com/api/auth".to_owned()),
+            ..OpenAuthOptions::default()
+        },
+    )?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!("/api/auth/verify-email?token={token}&callbackURL=/callback"),
+            "",
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("/callback")
+    );
+    assert!(!contains_record_string(&adapter, "user", "email", "ada@example.com").await?);
+    let updated = record_by_string(&adapter, "user", "email", "new@example.com")
+        .await?
+        .ok_or("missing updated user")?;
+    assert_eq!(
+        updated.get("email"),
+        Some(&DbValue::String("new@example.com".to_owned()))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_email_route_rejects_untrusted_callback_urls(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(RouteAdapter::default());
+    let now = OffsetDateTime::now_utc();
+    adapter
+        .insert_user(User {
+            email_verified: false,
+            ..user(now)
+        })
+        .await;
+    let token = sign_jwt(&json!({ "email": "ada@example.com" }), secret(), 3600)?;
+    let router = router_with_options(
+        adapter.clone(),
+        OpenAuthOptions {
+            base_url: Some("https://app.example.com/api/auth".to_owned()),
+            ..OpenAuthOptions::default()
+        },
+    )?;
+
+    let location = |response: &http::Response<Vec<u8>>| {
+        response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+
+    for unsafe_url in [
+        "https://malicious.example",
+        "//malicious.example",
+        "/\\malicious.example",
+    ] {
+        let response = router
+            .handle_async(json_request(
+                Method::GET,
+                &format!("/api/auth/verify-email?token={token}&callbackURL={unsafe_url}"),
+                "",
+                None,
+            )?)
+            .await?;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(
+            location(&response).as_deref(),
+            Some("/error?error=INVALID_TOKEN"),
+            "callback {unsafe_url} must fall back to /error"
+        );
+    }
+
+    let user = record_by_string(&adapter, "user", "email", "ada@example.com")
+        .await?
+        .ok_or("missing user")?;
+    assert_eq!(
+        user.get("email_verified"),
+        Some(&DbValue::Boolean(false)),
+        "untrusted callback must not verify the user"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_email_route_redirects_invalid_token_to_trusted_callback(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let router = router_with_options(
+        Arc::new(RouteAdapter::default()),
+        OpenAuthOptions {
+            base_url: Some("https://app.example.com/api/auth".to_owned()),
+            ..OpenAuthOptions::default()
+        },
+    )?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::GET,
+            "/api/auth/verify-email?token=bad-token&callbackURL=/callback",
+            "",
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("/callback?error=INVALID_TOKEN")
+    );
     Ok(())
 }
