@@ -15,6 +15,8 @@ All notable changes to `openauth-stripe` are documented in this file.
 
 ### Fixed
 
+- Customer fallback lookups paginate Stripe `customers.list` responses instead of
+  scanning only the first page when `customers.search` is unavailable (OPE-138).
 - Subscription state reconciliation paginates Stripe list calls instead of
   loading only the first page.
 - Releases orphaned subscription schedules when a period-end update fails after

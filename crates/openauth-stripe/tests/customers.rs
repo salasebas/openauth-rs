@@ -51,6 +51,8 @@ enum CustomerTransportMode {
     SearchFindsForeignUserCustomer,
     SearchFindsForeignThenDashboardCustomer,
     SearchFailsListFindsUserCustomer,
+    SearchFailsListPaginatesToUserCustomer,
+    SearchFailsListPaginatesToOrganizationCustomer,
     ExistingCustomerEmailDiffers,
     CreateCustomerFails,
     CheckoutSessionDeclined,
@@ -154,6 +156,95 @@ impl StripeTransport for CustomerTransport {
                             }
                         ]
                     }),
+                }
+            }
+            (
+                CustomerTransportMode::SearchFailsListPaginatesToUserCustomer,
+                "/v1/customers/search",
+                _,
+            ) => StripeResponse {
+                status: 500,
+                body: json!({ "error": { "message": "Search unavailable" } }),
+            },
+            (
+                CustomerTransportMode::SearchFailsListPaginatesToUserCustomer,
+                "/v1/customers",
+                "GET",
+            ) => {
+                if request.body.contains("starting_after=") {
+                    StripeResponse {
+                        status: 200,
+                        body: json!({
+                            "object": "list",
+                            "has_more": false,
+                            "data": [{
+                                "id": "cus_list_user_page2",
+                                "object": "customer",
+                                "metadata": { "userId": "user_1", "customerType": "user" }
+                            }]
+                        }),
+                    }
+                } else {
+                    StripeResponse {
+                        status: 200,
+                        body: json!({
+                            "object": "list",
+                            "has_more": true,
+                            "data": [{
+                                "id": "cus_foreign_user",
+                                "object": "customer",
+                                "email": "ada@example.com",
+                                "metadata": { "userId": "user_2", "customerType": "user" }
+                            }]
+                        }),
+                    }
+                }
+            }
+            (
+                CustomerTransportMode::SearchFailsListPaginatesToOrganizationCustomer,
+                "/v1/customers/search",
+                _,
+            ) => StripeResponse {
+                status: 500,
+                body: json!({ "error": { "message": "Search unavailable" } }),
+            },
+            (
+                CustomerTransportMode::SearchFailsListPaginatesToOrganizationCustomer,
+                "/v1/customers",
+                "GET",
+            ) => {
+                if request.body.contains("starting_after=") {
+                    StripeResponse {
+                        status: 200,
+                        body: json!({
+                            "object": "list",
+                            "has_more": false,
+                            "data": [{
+                                "id": "cus_org_page2",
+                                "object": "customer",
+                                "metadata": {
+                                    "organizationId": "org_1",
+                                    "customerType": "organization"
+                                }
+                            }]
+                        }),
+                    }
+                } else {
+                    StripeResponse {
+                        status: 200,
+                        body: json!({
+                            "object": "list",
+                            "has_more": true,
+                            "data": [{
+                                "id": "cus_unrelated",
+                                "object": "customer",
+                                "metadata": {
+                                    "organizationId": "org_other",
+                                    "customerType": "organization"
+                                }
+                            }]
+                        }),
+                    }
                 }
             }
             (_, "/v1/customers", "GET") => StripeResponse {
@@ -516,6 +607,35 @@ async fn linked_existing_customer_invokes_customer_create_hook(
     assert!(!requests
         .iter()
         .any(|request| request.method == "POST" && request.path == "/v1/customers"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn upgrade_falls_back_to_paginated_customer_list() -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CustomerTransport::new(
+        CustomerTransportMode::SearchFailsListPaginatesToUserCustomer,
+    ));
+    let (response, adapter, requests) = upgrade_with_transport(Arc::clone(&transport)).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let list_requests: Vec<_> = requests
+        .iter()
+        .filter(|request| request.method == "GET" && request.path == "/v1/customers")
+        .collect();
+    assert_eq!(list_requests.len(), 2);
+    assert!(!list_requests[0].body.contains("starting_after="));
+    assert!(list_requests[1]
+        .body
+        .contains("starting_after=cus_foreign_user"));
+    assert!(!requests
+        .iter()
+        .any(|request| request.method == "POST" && request.path == "/v1/customers"));
+    let checkout = requests
+        .iter()
+        .find(|request| request.path == "/v1/checkout/sessions")
+        .ok_or("checkout request")?;
+    assert!(checkout.body.contains("customer=cus_list_user_page2"));
+    assert_user_customer(&adapter, "cus_list_user_page2").await?;
     Ok(())
 }
 
@@ -942,6 +1062,86 @@ async fn create_customer_on_sign_up_creates_and_links_user_customer(
         .iter()
         .any(|request| request.method == "POST" && request.path == "/v1/customers"));
     assert_user_customer(&adapter, "cus_created").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn organization_upgrade_falls_back_to_paginated_customer_list(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(CustomerTransport::new(
+        CustomerTransportMode::SearchFailsListPaginatesToOrganizationCustomer,
+    ));
+    let client_transport: Arc<dyn StripeTransport> = transport.clone();
+    let plugin = stripe(
+        StripeOptions::new(
+            StripeClient::with_transport("sk_test", client_transport),
+            "whsec_test",
+        )
+        .organization(OrganizationStripeOptions::enabled())
+        .subscription(
+            SubscriptionOptions::enabled(vec![StripePlan::new("pro").price_id("price_pro")])
+                .authorize_reference(|input, _| {
+                    Box::pin(async move {
+                        Ok(input.reference_id == "org_1"
+                            && input.action
+                                == openauth_stripe::options::AuthorizeReferenceAction::UpgradeSubscription)
+                    })
+                }),
+        ),
+    );
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/upgrade")
+        .ok_or("upgrade endpoint")?;
+    let (context, adapter, cookie_header) = authenticated_context().await?;
+    adapter
+        .create(
+            Create::new("organization")
+                .data("id", DbValue::String("org_1".to_owned()))
+                .data("name", DbValue::String("Acme".to_owned()))
+                .data("slug", DbValue::String("acme".to_owned()))
+                .force_allow_id(),
+        )
+        .await?;
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/subscription/upgrade")
+        .header("content-type", "application/json")
+        .header("cookie", cookie_header)
+        .body(
+            br#"{"customerType":"organization","referenceId":"org_1","plan":"pro","successUrl":"/ok","cancelUrl":"/pricing"}"#
+                .to_vec(),
+        )?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = transport.requests()?;
+    let list_requests: Vec<_> = requests
+        .iter()
+        .filter(|request| request.method == "GET" && request.path == "/v1/customers")
+        .collect();
+    assert_eq!(list_requests.len(), 2);
+    assert!(!requests
+        .iter()
+        .any(|request| request.method == "POST" && request.path == "/v1/customers"));
+    let checkout = requests
+        .iter()
+        .find(|request| request.path == "/v1/checkout/sessions")
+        .ok_or("checkout request")?;
+    assert!(checkout.body.contains("customer=cus_org_page2"));
+    let stored_org = adapter
+        .find_one(
+            FindOne::new("organization")
+                .where_clause(Where::new("id", DbValue::String("org_1".to_owned()))),
+        )
+        .await?
+        .ok_or("stored organization")?;
+    assert_eq!(
+        stored_org.get("stripe_customer_id"),
+        Some(&DbValue::String("cus_org_page2".to_owned()))
+    );
     Ok(())
 }
 
