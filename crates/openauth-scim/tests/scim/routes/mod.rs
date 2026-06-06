@@ -8,7 +8,7 @@ use openauth_core::cookies::{set_session_cookie, Cookie, SessionCookieOptions};
 use openauth_core::db::{Create, DbAdapter, DbValue, Delete, FindOne, MemoryAdapter, Where};
 use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
 use openauth_core::session::{CreateSessionInput, DbSessionStore};
-use openauth_core::user::{CreateUserInput, DbUserStore};
+use openauth_core::user::{CreateCredentialAccountInput, CreateUserInput, DbUserStore};
 use openauth_plugins::organization::{organization_with_options, OrganizationOptions};
 use openauth_scim::store::{CreateScimProviderInput, ScimProviderStore};
 use openauth_scim::token::encode_bearer_token;
