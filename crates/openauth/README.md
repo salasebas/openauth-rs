@@ -27,11 +27,17 @@ let auth = OpenAuth::builder()
 ```
 
 Attach an adapter when you need durable users, sessions, accounts, plugin data,
-or migrations:
+or migrations. Enable the matching SQLx dialect on the `openauth` crate
+(`sqlx-sqlite`, `sqlx-postgres`, or `sqlx-mysql`):
+
+```toml
+[dependencies]
+openauth = { version = "0.0.6", features = ["sqlx-sqlite"] }
+```
 
 ```rust
 use openauth::{EmailPasswordOptions, OpenAuth};
-use openauth_sqlx::SqliteAdapter;
+use openauth::sqlx::SqliteAdapter;
 use sqlx::sqlite::SqlitePoolOptions;
 
 let pool = SqlitePoolOptions::new().connect("sqlite://openauth.db").await?;
