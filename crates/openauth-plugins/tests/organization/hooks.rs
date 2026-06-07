@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use http::{Method, StatusCode};
 use openauth_core::db::MemoryAdapter;
 use openauth_plugins::organization::{
-    MemberHookData, MemberRoleUpdateData, OrganizationHookData, OrganizationHooks,
+    DefaultTeamSpec, MemberHookData, MemberRoleUpdateData, OrganizationHookData, OrganizationHooks,
     OrganizationOptions, OrganizationUpdateData, TeamHookData,
 };
 use serde_json::json;
@@ -92,6 +92,41 @@ async fn before_create_organization_hook_can_mutate_name_and_slug(
     assert_eq!(created.body["slug"], "hooked-create-org");
     assert_eq!(created.body["teams"].as_array().map(Vec::len), Some(1));
     assert_eq!(created.body["teams"][0]["name"], "Default");
+    Ok(())
+}
+
+#[tokio::test]
+async fn custom_create_default_team_controls_default_team_name(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let options = OrganizationOptions::builder()
+        .teams(openauth_plugins::organization::TeamOptions {
+            enabled: true,
+            create_default_team: true,
+            custom_create_default_team: Some(Arc::new(|organization| {
+                Box::pin(async move {
+                    Ok(DefaultTeamSpec {
+                        name: format!("{} Launch", organization.name),
+                    })
+                })
+            })),
+            ..Default::default()
+        })
+        .build();
+    let auth = super::test_router(Arc::new(MemoryAdapter::new()), options)?;
+    let ada = super::sign_up(&auth, "Ada", "ada-custom-default-team@example.com").await?;
+
+    let created = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Custom Default","slug":"custom-default-team"}),
+        Some(&ada.cookie),
+    )
+    .await?;
+
+    assert_eq!(created.status, StatusCode::OK);
+    assert_eq!(created.body["teams"].as_array().map(Vec::len), Some(1));
+    assert_eq!(created.body["teams"][0]["name"], "Custom Default Launch");
     Ok(())
 }
 

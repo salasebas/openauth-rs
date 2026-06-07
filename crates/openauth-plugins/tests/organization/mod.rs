@@ -3,11 +3,15 @@ use std::sync::Arc;
 use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
-use openauth_core::db::{DbField, DbFieldType, MemoryAdapter, TableOptions};
+use openauth_core::db::{
+    DbAdapter, DbField, DbFieldType, DbRecord, DbValue, FindOne, MemoryAdapter, TableOptions, User,
+    Where,
+};
 use openauth_core::options::{EmailPasswordOptions, OpenAuthOptions};
 use openauth_plugins::organization::{
-    has_permission, organization, organization_with_options, OrganizationOptions,
-    OrganizationPermission, OrganizationRole, OrganizationSchemaOptions,
+    has_permission, organization, organization_with_options, provision_organization_member,
+    MemberHookData, OrganizationHooks, OrganizationOptions, OrganizationPermission,
+    OrganizationRole, OrganizationSchemaOptions, ProvisionOrganizationMemberInput,
 };
 use serde_json::{json, Value};
 
@@ -366,6 +370,303 @@ async fn leave_organization_uses_body_organization_id_not_active_org(
     Ok(())
 }
 
+#[tokio::test]
+async fn invite_member_normalizes_email_and_resend_extends_existing_invitation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let auth = test_router(adapter, OrganizationOptions::default())?;
+    let owner = sign_up(&auth, "Owner", "owner-invite-resend@example.com").await?;
+    let org = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Invite Resend","slug":"invite-resend"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+    let organization_id = org.body["id"].clone();
+
+    let first = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/invite-member",
+        json!({"organizationId": organization_id, "email": "  CASED-INVITE@example.COM  ", "role": "member"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(first.status, StatusCode::OK);
+    assert_eq!(first.body["email"], "cased-invite@example.com");
+    let first_id = first.body["id"].clone();
+
+    let duplicate = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/invite-member",
+        json!({"organizationId": organization_id, "email": "cased-invite@example.com", "role": "member"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(duplicate.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        duplicate.body["code"],
+        "USER_IS_ALREADY_INVITED_TO_THIS_ORGANIZATION"
+    );
+
+    let resent = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/invite-member",
+        json!({"organizationId": organization_id, "email": "CASED-INVITE@example.com", "role": "member", "resend": true}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(resent.status, StatusCode::OK);
+    assert_eq!(resent.body["id"], first_id);
+    assert_eq!(resent.body["email"], "cased-invite@example.com");
+    Ok(())
+}
+
+#[tokio::test]
+async fn custom_creator_role_is_used_for_owner_guards() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let auth = test_router(
+        adapter,
+        OrganizationOptions::builder()
+            .creator_role("founder")
+            .build(),
+    )?;
+    let founder = sign_up(&auth, "Founder", "founder-role@example.com").await?;
+    let org = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Founder Org","slug":"founder-org"}),
+        Some(&founder.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+    assert_eq!(org.body["members"][0]["role"], "founder");
+    let organization_id = org.body["id"].clone();
+    let founder_member_id = org.body["members"][0]["id"]
+        .as_str()
+        .ok_or("missing founder member id")?;
+
+    let demote = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/update-member-role",
+        json!({"organizationId": organization_id, "memberId": founder_member_id, "role": "member"}),
+        Some(&founder.cookie),
+    )
+    .await?;
+    assert_eq!(demote.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        demote.body["code"],
+        "YOU_CANNOT_LEAVE_THE_ORGANIZATION_WITHOUT_AN_OWNER"
+    );
+
+    let leave = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/leave",
+        json!({"organizationId": org.body["id"]}),
+        Some(&founder.cookie),
+    )
+    .await?;
+    assert_eq!(leave.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        leave.body["code"],
+        "YOU_CANNOT_LEAVE_THE_ORGANIZATION_AS_THE_ONLY_OWNER"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_role_owner_counts_for_last_owner_guards() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let auth = test_router(adapter, OrganizationOptions::default())?;
+    let owner = sign_up(&auth, "Owner", "owner-multi-role@example.com").await?;
+    let second = sign_up(&auth, "Second", "second-multi-role@example.com").await?;
+    let org = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Multi Owner","slug":"multi-owner"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+    let organization_id = org.body["id"].clone();
+    let owner_member_id = org.body["members"][0]["id"]
+        .as_str()
+        .ok_or("missing owner member id")?;
+
+    let second_member = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({"organizationId": organization_id, "userId": second.user_id, "role": "admin, owner"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(second_member.status, StatusCode::OK);
+    assert_eq!(second_member.body["role"], "admin,owner");
+
+    let demoted_owner = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/update-member-role",
+        json!({"organizationId": organization_id, "memberId": owner_member_id, "role": "member"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(demoted_owner.status, StatusCode::OK);
+    assert_eq!(demoted_owner.body["role"], "member");
+
+    let second_member_id = second_member.body["id"]
+        .as_str()
+        .ok_or("missing second member id")?;
+    let denied = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/update-member-role",
+        json!({"organizationId": organization_id, "memberId": second_member_id, "role": "admin"}),
+        Some(&second.cookie),
+    )
+    .await?;
+    assert_eq!(denied.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        denied.body["code"],
+        "YOU_CANNOT_LEAVE_THE_ORGANIZATION_WITHOUT_AN_OWNER"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_provision_organization_member_uses_member_semantics_and_hooks(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let hook_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let options = OrganizationOptions::builder()
+        .membership_limit(2)
+        .hooks(OrganizationHooks {
+            before_add_member: Some(Arc::new({
+                let hook_calls = hook_calls.clone();
+                move |event| {
+                    hook_calls
+                        .lock()
+                        .map_err(|error| {
+                            openauth_core::error::OpenAuthError::Api(error.to_string())
+                        })?
+                        .push(format!("before:{}", event.member.role));
+                    Ok(MemberHookData {
+                        role: "admin".to_owned(),
+                        ..event.member.clone()
+                    })
+                }
+            })),
+            after_add_member: Some(Arc::new({
+                let hook_calls = hook_calls.clone();
+                move |event| {
+                    hook_calls
+                        .lock()
+                        .map_err(|error| {
+                            openauth_core::error::OpenAuthError::Api(error.to_string())
+                        })?
+                        .push(format!("after:{}", event.member.role));
+                    Ok(())
+                }
+            })),
+            ..OrganizationHooks::default()
+        })
+        .build();
+    let auth = test_router(adapter.clone(), options.clone())?;
+    let owner = sign_up(&auth, "Owner", "owner-provision-helper@example.com").await?;
+    let member = sign_up(&auth, "Member", "member-provision-helper@example.com").await?;
+    let extra = sign_up(&auth, "Extra", "extra-provision-helper@example.com").await?;
+    let org = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Provision Helper","slug":"provision-helper"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+    let organization_id = org.body["id"].as_str().ok_or("missing organization id")?;
+    hook_calls
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clear();
+    let member_record = adapter
+        .find_one(
+            FindOne::new("user")
+                .where_clause(Where::new("id", DbValue::String(member.user_id.clone()))),
+        )
+        .await?
+        .ok_or("missing member user")?;
+    let member_user = user_from_record(member_record)?;
+
+    let provisioned = provision_organization_member(
+        adapter.as_ref(),
+        &options,
+        ProvisionOrganizationMemberInput {
+            organization_id,
+            user: &member_user,
+            role: "member",
+        },
+    )
+    .await?;
+    let provisioned = provisioned.ok_or("expected new member")?;
+    assert_eq!(provisioned.organization_id, organization_id);
+    assert_eq!(provisioned.user_id, member.user_id);
+    assert_eq!(provisioned.role, "admin");
+
+    let duplicate = provision_organization_member(
+        adapter.as_ref(),
+        &options,
+        ProvisionOrganizationMemberInput {
+            organization_id,
+            user: &member_user,
+            role: "member",
+        },
+    )
+    .await?;
+    assert!(duplicate.is_none());
+
+    {
+        let calls = hook_calls.lock().map_err(|error| error.to_string())?;
+        assert_eq!(calls.as_slice(), ["before:member", "after:admin"]);
+    }
+
+    let extra_record = adapter
+        .find_one(
+            FindOne::new("user")
+                .where_clause(Where::new("id", DbValue::String(extra.user_id.clone()))),
+        )
+        .await?
+        .ok_or("missing extra user")?;
+    let extra_user = user_from_record(extra_record)?;
+    let limit_result = provision_organization_member(
+        adapter.as_ref(),
+        &options,
+        ProvisionOrganizationMemberInput {
+            organization_id,
+            user: &extra_user,
+            role: "member",
+        },
+    )
+    .await;
+    let Err(limit_error) = limit_result else {
+        return Err("expected membership limit".into());
+    };
+    assert!(limit_error
+        .to_string()
+        .contains("ORGANIZATION_MEMBERSHIP_LIMIT_REACHED"));
+    Ok(())
+}
+
 fn test_router(
     adapter: Arc<MemoryAdapter>,
     options: OrganizationOptions,
@@ -398,6 +699,38 @@ struct TestResponse {
 struct SignedUp {
     cookie: String,
     user_id: String,
+}
+
+fn user_from_record(record: DbRecord) -> Result<User, Box<dyn std::error::Error>> {
+    let string = |field: &str| match record.get(field) {
+        Some(DbValue::String(value)) => Ok(value.clone()),
+        _ => Err(format!("missing string user field `{field}`")),
+    };
+    let bool_field = |field: &str| match record.get(field) {
+        Some(DbValue::Boolean(value)) => Ok(*value),
+        _ => Err(format!("missing bool user field `{field}`")),
+    };
+    let timestamp = |field: &str| match record.get(field) {
+        Some(DbValue::Timestamp(value)) => Ok(*value),
+        _ => Err(format!("missing timestamp user field `{field}`")),
+    };
+    let optional_string = |field: &str| match record.get(field) {
+        Some(DbValue::String(value)) => Ok(Some(value.clone())),
+        Some(DbValue::Null) | None => Ok(None),
+        _ => Err(format!("invalid optional string user field `{field}`")),
+    };
+
+    Ok(User {
+        id: string("id")?,
+        name: string("name")?,
+        email: string("email")?,
+        email_verified: bool_field("email_verified")?,
+        image: optional_string("image")?,
+        username: optional_string("username")?,
+        display_username: optional_string("display_username")?,
+        created_at: timestamp("created_at")?,
+        updated_at: timestamp("updated_at")?,
+    })
 }
 
 async fn sign_up(

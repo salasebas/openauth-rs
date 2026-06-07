@@ -187,6 +187,92 @@ async fn has_permission_allows_custom_ac_resource_for_dynamic_role(
 }
 
 #[tokio::test]
+async fn has_permission_merges_comma_separated_static_and_dynamic_roles(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let access_control = create_access_control(statements([
+        ("project", vec!["read", "write"]),
+        ("ac", vec!["create", "read", "update", "delete"]),
+    ]))?;
+    let options = OrganizationOptions::builder()
+        .access_control(access_control)
+        .dynamic_access_control(DynamicAccessControlOptions {
+            enabled: true,
+            maximum_roles_per_organization: Some(3),
+        })
+        .build();
+    let auth = super::test_router(adapter, options)?;
+    let owner = super::sign_up(&auth, "Owner", "owner-role-merge@example.com").await?;
+    let member = super::sign_up(&auth, "Member", "member-role-merge@example.com").await?;
+    let org = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Role Merge","slug":"role-merge"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+    let organization_id = org.body["id"].clone();
+    let role = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create-role",
+        json!({
+            "organizationId": organization_id,
+            "role": "project_writer",
+            "permission": { "project": ["write"], "ac": ["read"] }
+        }),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(role.status, StatusCode::OK);
+
+    let added = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({"organizationId": organization_id, "userId": member.user_id, "role": "member, project_writer"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(added.status, StatusCode::OK);
+    assert_eq!(added.body["role"], "member,project_writer");
+    let active = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/set-active",
+        json!({"organizationId": organization_id}),
+        Some(&member.cookie),
+    )
+    .await?;
+    assert_eq!(active.status, StatusCode::OK);
+
+    let dynamic_permission = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/has-permission",
+        json!({"permissions": {"project": ["write"]}}),
+        Some(&member.cookie),
+    )
+    .await?;
+    assert_eq!(dynamic_permission.status, StatusCode::OK);
+    assert_eq!(dynamic_permission.body["success"], true);
+
+    let static_permission = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/has-permission",
+        json!({"permissions": {"ac": ["read"]}}),
+        Some(&member.cookie),
+    )
+    .await?;
+    assert_eq!(static_permission.status, StatusCode::OK);
+    assert_eq!(static_permission.body["success"], true);
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_role_rejects_permissions_actor_lacks_with_missing_permissions(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(MemoryAdapter::new());

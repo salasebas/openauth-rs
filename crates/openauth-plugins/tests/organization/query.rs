@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use http::{Method, StatusCode};
 use openauth_core::db::MemoryAdapter;
-use openauth_plugins::organization::OrganizationOptions;
+use openauth_plugins::organization::{OrganizationOptions, TeamOptions};
 use serde_json::json;
 
 #[tokio::test]
@@ -142,6 +142,113 @@ async fn get_full_organization_rejects_non_member() -> Result<(), Box<dyn std::e
         response.body["code"],
         "USER_IS_NOT_A_MEMBER_OF_THE_ORGANIZATION"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_full_organization_returns_all_members_by_default(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let auth = super::test_router(
+        Arc::new(MemoryAdapter::new()),
+        OrganizationOptions::default(),
+    )?;
+    let owner = super::sign_up(&auth, "Owner", "owner-full-limit-default@example.com").await?;
+    let member = super::sign_up(&auth, "Member", "member-full-limit-default@example.com").await?;
+    let org = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Full Limit Default","slug":"full-limit-default"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+    let org_id = org.body["id"].as_str().ok_or("missing organization id")?;
+    let added = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({"organizationId": org_id, "userId": member.user_id, "role": "member"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(added.status, StatusCode::OK);
+
+    let response = super::request_json(
+        &auth,
+        Method::GET,
+        &format!("/api/auth/organization/get-full-organization?organizationId={org_id}"),
+        json!({}),
+        Some(&owner.cookie),
+    )
+    .await?;
+
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(response.body["members"].as_array().map(Vec::len), Some(2));
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_full_organization_members_limit_truncates_members_only(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let auth = super::test_router(
+        Arc::new(MemoryAdapter::new()),
+        OrganizationOptions::builder()
+            .teams(TeamOptions {
+                enabled: true,
+                ..TeamOptions::default()
+            })
+            .build(),
+    )?;
+    let owner = super::sign_up(&auth, "Owner", "owner-full-limit@example.com").await?;
+    let member = super::sign_up(&auth, "Member", "member-full-limit@example.com").await?;
+    let org = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Full Limit Org","slug":"full-limit-org"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+    let org_id = org.body["id"].as_str().ok_or("missing organization id")?;
+    let added = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({"organizationId": org_id, "userId": member.user_id, "role": "member"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(added.status, StatusCode::OK);
+    let invited = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/invite-member",
+        json!({"organizationId": org_id, "email": "invitee-full-limit@example.com", "role": "member"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(invited.status, StatusCode::OK);
+
+    let response = super::request_json(
+        &auth,
+        Method::GET,
+        &format!(
+            "/api/auth/organization/get-full-organization?organizationId={org_id}&membersLimit=1"
+        ),
+        json!({}),
+        Some(&owner.cookie),
+    )
+    .await?;
+
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(response.body["members"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        response.body["invitations"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(response.body["teams"].as_array().map(Vec::len), Some(1));
     Ok(())
 }
 

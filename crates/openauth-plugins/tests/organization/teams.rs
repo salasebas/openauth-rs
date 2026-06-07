@@ -196,3 +196,164 @@ async fn accepting_invitation_to_full_team_does_not_create_partial_membership(
 
     Ok(())
 }
+
+#[tokio::test]
+async fn create_team_respects_explicit_organization_id_over_active_org(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let options = OrganizationOptions::builder()
+        .teams(TeamOptions {
+            enabled: true,
+            create_default_team: false,
+            allow_removing_all_teams: true,
+            ..TeamOptions::default()
+        })
+        .build();
+    let auth = super::test_router(adapter, options)?;
+    let owner = super::sign_up(&auth, "Owner", "owner-team-explicit@example.com").await?;
+    let first = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"First Team Org","slug":"first-team-org"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(first.status, StatusCode::OK);
+    let first_id = first.body["id"].as_str().ok_or("missing first org id")?;
+    let second = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Second Team Org","slug":"second-team-org"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(second.status, StatusCode::OK);
+    let second_id = second.body["id"].as_str().ok_or("missing second org id")?;
+
+    let created = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create-team",
+        json!({"organizationId": first_id, "name":"Explicit First"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(created.status, StatusCode::OK);
+    assert_eq!(created.body["organizationId"], first_id);
+
+    let first_full = super::request_json(
+        &auth,
+        Method::GET,
+        &format!("/api/auth/organization/get-full-organization?organizationId={first_id}"),
+        json!({}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(first_full.status, StatusCode::OK);
+    assert_eq!(first_full.body["teams"].as_array().map(Vec::len), Some(1));
+    let second_full = super::request_json(
+        &auth,
+        Method::GET,
+        &format!("/api/auth/organization/get-full-organization?organizationId={second_id}"),
+        json!({}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(second_full.status, StatusCode::OK);
+    assert_eq!(
+        second_full
+            .body
+            .get("teams")
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, Vec::len),
+        0
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn remove_team_blocks_last_team_unless_option_allows_it(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let blocked_auth = super::test_router(
+        Arc::new(MemoryAdapter::new()),
+        OrganizationOptions::builder()
+            .teams(TeamOptions {
+                enabled: true,
+                create_default_team: true,
+                allow_removing_all_teams: false,
+                ..TeamOptions::default()
+            })
+            .build(),
+    )?;
+    let owner = super::sign_up(
+        &blocked_auth,
+        "Owner",
+        "owner-last-team-blocked@example.com",
+    )
+    .await?;
+    let org = super::request_json(
+        &blocked_auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Last Team Blocked","slug":"last-team-blocked"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+    let team_id = org.body["teams"][0]["id"]
+        .as_str()
+        .ok_or("missing default team id")?;
+    let denied = super::request_json(
+        &blocked_auth,
+        Method::POST,
+        "/api/auth/organization/remove-team",
+        json!({"teamId": team_id}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(denied.status, StatusCode::BAD_REQUEST);
+    assert_eq!(denied.body["code"], "UNABLE_TO_REMOVE_LAST_TEAM");
+
+    let allowed_auth = super::test_router(
+        Arc::new(MemoryAdapter::new()),
+        OrganizationOptions::builder()
+            .teams(TeamOptions {
+                enabled: true,
+                create_default_team: true,
+                allow_removing_all_teams: true,
+                ..TeamOptions::default()
+            })
+            .build(),
+    )?;
+    let owner = super::sign_up(
+        &allowed_auth,
+        "Owner",
+        "owner-last-team-allowed@example.com",
+    )
+    .await?;
+    let org = super::request_json(
+        &allowed_auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Last Team Allowed","slug":"last-team-allowed"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+    let team_id = org.body["teams"][0]["id"]
+        .as_str()
+        .ok_or("missing default team id")?;
+    let removed = super::request_json(
+        &allowed_auth,
+        Method::POST,
+        "/api/auth/organization/remove-team",
+        json!({"teamId": team_id}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(removed.status, StatusCode::OK);
+    assert_eq!(removed.body["team"]["id"], team_id);
+    Ok(())
+}
