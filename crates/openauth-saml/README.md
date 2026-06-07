@@ -77,5 +77,5 @@ For route-level parity, test counts, differences, and gaps, see [UPSTREAM.md](./
 ## Links
 
 - [Root README](../../README.md)
-- [SSO HTTP parity (`openauth-sso`)](../openauth-sso/README.md#upstream-parity-better-auth-169)
+- [SSO HTTP parity (`openauth-sso`)](../openauth-sso/UPSTREAM.md)
 - [Repository](https://github.com/sebasxsala/openauth-rs)

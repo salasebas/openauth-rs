@@ -84,45 +84,14 @@ Without a TLS feature, opening a `rediss://` or `valkeys://` URL fails with an
 Experimental beta. URL handling, key layout, Lua script behavior, and storage
 contracts may change before stable release.
 
-## Upstream parity (Better Auth 1.6.9)
+## Better Auth compatibility
 
-Upstream: `@better-auth/redis-storage` (ioredis). Sibling crate: `openauth-fred`
-(same contract, `fred` client). Secondary-storage KV adapter parity is **high**;
-session payload interchange depends on `openauth-core`, not this crate.
+Server-side Redis/Valkey secondary storage and rate limiting via `redis-rs`.
+Aligned with Better Auth **1.6.9** where it matters for this crate; OpenAuth is
+not a line-by-line port.
 
-### Status
-
-| Area | Status | Notes |
-| --- | --- | --- |
-| Secondary storage (`get`/`set`/`delete`) | **High** | Prefix + `secondary:` namespace; `ttl=0` → `SET` without TTL |
-| `list_keys` / `clear` | **High** | `SCAN` (not upstream `KEYS`) |
-| Rate limit Redis | **Extension** | `RedisRateLimitStore` + Lua; upstream reuses secondary KV as JSON |
-| Session data interchange | **Low** | Key layout and JSON differ in `openauth-core` |
-| Auto rate limit on secondary only | **Gap (core)** | Upstream defaults RL to secondary; OpenAuth requires explicit wiring |
-
-**Tests:** **19** `nextest` in this crate; email sign-up E2E with Redis in `openauth-fred`.
-Upstream `packages/redis-storage/` has no package-local tests; behavior is inferred
-from `redis-storage.ts` plus `better-auth/src/db/secondary-storage.test.ts`.
-
-### Intentional differences
-
-- `list_keys` / `clear` use `SCAN` instead of upstream `KEYS` for safer production scans.
-- `RedisRateLimitStore` is a dedicated Lua-backed store; upstream reuses secondary KV as JSON.
-- Default key prefix is `openauth:` (upstream defaults to `better-auth:`).
-- `rediss://` / `valkeys://` TLS requires an explicit crate feature (`rustls` or `native-tls`).
-
-### Open gaps/risks
-
-- Session payloads are not portable to Better Auth without `openauth-core` migration.
-- Rate-limit wiring is explicit in OpenAuth; upstream can default rate limiting to secondary storage.
-- Wire rate-limit JSON separately from secondary storage when comparing to upstream deployments.
-
-### Upstream lookup
-
-1. Read the pin in [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
-2. Open `reference/upstream-src/<version>/repository/packages/redis-storage/` (run `./scripts/fetch-upstream-better-auth.sh` if missing).
-3. Map Rust modules in `crates/openauth-redis/src/` to `redis-storage.ts` and shared secondary-storage tests under `packages/better-auth/src/db/`.
-4. Add a failing Rust integration test before changing behavior; match key layout, TTL semantics, and storage side effects—not TypeScript types.
+For route-level parity, test counts, intentional differences, and known gaps, see
+[UPSTREAM.md](./UPSTREAM.md).
 
 ## Links
 

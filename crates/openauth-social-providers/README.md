@@ -46,45 +46,14 @@ defines server-side OAuth provider behavior.
 Experimental beta. Provider coverage, scopes, profile mapping, and provider
 edge-case behavior may change before stable release.
 
-## Upstream parity (Better Auth 1.6.9)
+## Better Auth compatibility
 
-Upstream: `@better-auth/core` → `packages/core/src/social-providers/` (**35**
-built-in providers). HTTP routes (`/sign-in/social`, callbacks) live in `openauth-core`.
-Wire parity is **high (33/35)**; hook override surface is partial by design.
+Server-side social OAuth provider definitions (metadata, scopes, profile mapping,
+token auth). Aligned with Better Auth **1.6.9** where it matters for this crate;
+OpenAuth is not a line-by-line port.
 
-### Status
-
-| Area | Status | Notes |
-| --- | --- | --- |
-| Provider registry | **High** | All **35** providers; `PROVIDER_IDS` matches upstream order |
-| Wire parity (URLs, scopes, defaults) | **High (33/35)** | Discord/Roblox `+` scopes, Railway optional PKCE fixed |
-| Provider unit tests | **Beyond upstream** | **310** Rust tests; upstream has **0** in `social-providers/` |
-| Hook overrides (`mapProfileToUser`, etc.) | **Partial** | Typed overrides on **10/35**; architectural vs upstream `ProviderOptions` |
-| Open gaps (wire) | **Minor** | Facebook opaque token verify (stricter); Twitch JWKS verify (stricter) |
-
-Social E2E from upstream `social.test.ts` belongs in `openauth-core`, not this crate.
-
-### Intentional differences
-
-- Provider hook overrides are typed Rust traits on **10/35** providers instead of
-  global `ProviderOptions` callbacks on every provider.
-- Facebook opaque-token verification and Twitch JWKS verification are stricter than
-  upstream for safer server-side token acceptance.
-- Async `SocialOAuthProvider` replaces upstream's synchronous provider functions.
-
-### Open gaps/risks
-
-- Remaining wire gaps are limited to stricter Facebook/Twitch token verification.
-- Full `mapProfileToUser` / `getUserInfo` override ergonomics are not exposed on all
-  **35** providers yet.
-- OAuth route and account-linking E2E parity is owned by `openauth-core`, not this crate.
-
-### Upstream lookup
-
-1. Read the pin in [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
-2. Open `reference/upstream-src/<version>/repository/packages/core/src/social-providers/` (run `./scripts/fetch-upstream-better-auth.sh` if missing).
-3. Map Rust modules in `crates/openauth-social-providers/src/` to upstream provider `.ts` files by provider id, authorize/token URLs, scopes, and profile mapping.
-4. Add a failing Rust integration test before changing behavior; match wire URLs, scopes, defaults, and profile fields—not TypeScript types.
+For route-level parity, test counts, intentional differences, and known gaps, see
+[UPSTREAM.md](./UPSTREAM.md).
 
 ## Links
 

@@ -88,36 +88,14 @@ auth.run_migrations().await?;
 Experimental beta. Public re-exports, feature flags, and crate boundaries may
 change before stable release.
 
-## Upstream parity (Better Auth 1.6.9)
+## Better Auth compatibility
 
-The `openauth` crate maps to the public `better-auth` npm package—the surface
-most applications import. Server runtime (routes, cookies, crypto, sessions)
-lives in [`openauth-core`](../openauth-core/README.md); this crate re-exports
-that API and optional integrations behind feature flags.
+Server-side public entry crate (builder, handler, re-exports). Aligned with
+Better Auth **1.6.9** where it matters for this crate; OpenAuth is not a
+line-by-line port.
 
-There is no separate upstream package for the facade. Parity is the union of
-`openauth-core` and whichever optional crates you enable (`i18n`, `plugins`,
-`passkey`, `sso`, `oidc`, `saml`, `scim`, `stripe`, `telemetry`, SQL/Redis
-adapters).
-
-| Concern | Parity crate |
-| --- | --- |
-| Builder, handler, sessions, accounts | `openauth-core` |
-| Enterprise SSO (OIDC/SAML routes) | `openauth-sso` |
-| OAuth/OIDC authorization server | `openauth-oauth-provider` |
-| SQL / Redis persistence | `openauth-sqlx`, `openauth-redis`, … |
-| Framework mount (Axum) | `openauth-axum` |
-| Browser / React / Vue clients | N/A (server-only) |
-
-**Parity level:** High for core auth when using default integrations; SAML and
-some product plugins remain experimental or feature-gated.
-
-### Upstream lookup
-
-1. Pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
-2. Public API exports: `reference/upstream-src/<version>/repository/packages/better-auth/src/` (fetch via `./scripts/fetch-upstream-better-auth.sh`).
-3. Map `crates/openauth/src/lib.rs` re-exports to upstream `index.ts` and package `exports`.
-4. Server behavior: [`openauth-core`](../openauth-core/README.md#upstream-parity-better-auth-169).
+For route-level parity, test counts, intentional differences, and known gaps, see
+[UPSTREAM.md](./UPSTREAM.md).
 
 ## Links
 

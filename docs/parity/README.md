@@ -15,7 +15,7 @@ Agent prompts: [`UPSTREAM_SPLIT_PROMPT.md`](./UPSTREAM_SPLIT_PROMPT.md) (move RE
 | Crate | Upstream reference | Full parity doc |
 | --- | --- | --- |
 | [`openauth-core`](../../crates/openauth-core/UPSTREAM.md) | `@better-auth/core` + `better-auth` server runtime | [UPSTREAM.md](../../crates/openauth-core/UPSTREAM.md) |
-| [`openauth`](../../crates/openauth/UPSTREAM.md) | `better-auth` public facade | Contributor doc |
+| [`openauth`](../../crates/openauth/UPSTREAM.md) | `better-auth` public facade | [UPSTREAM.md](../../crates/openauth/UPSTREAM.md) |
 | [`openauth-plugins`](../../crates/openauth-plugins/UPSTREAM.md) | `better-auth/plugins/*` | Contributor doc |
 | [`openauth-oauth`](../../crates/openauth-oauth/UPSTREAM.md) | `@better-auth/core` → `oauth2/` | Contributor doc |
 | [`openauth-oauth-provider`](../../crates/openauth-oauth-provider/UPSTREAM.md) | `@better-auth/oauth-provider` | Contributor doc |

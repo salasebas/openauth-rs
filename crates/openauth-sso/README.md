@@ -58,36 +58,14 @@ integrations.
 Experimental beta. OIDC is the recommended path. SAML remains WIP until XML
 signature/encryption support is backed by an auditable implementation.
 
-## Upstream parity (Better Auth 1.6.9)
+## Better Auth compatibility
 
-Parity pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md)
-(commit `f484269`). Upstream package: `@better-auth/sso` at `packages/sso/`.
-OpenAuth splits OIDC discovery/types into `openauth-oidc` and SAML into
-`openauth-saml` (feature `saml`); this crate owns HTTP routes, DB storage,
-callbacks, and provisioning. TypeScript `ssoClient()` is N/A (server-only).
+Server-side SSO plugin (provider CRUD, OIDC sign-in/callback, optional SAML
+routes, domain verification, linking). Aligned with Better Auth **1.6.9** where
+it matters for this crate; OpenAuth is not a line-by-line port.
 
-**Parity level (OIDC E2E):** High for provider registration, sign-in (email,
-domain, `providerId`), callback with ID token and UserInfo, shared `redirectURI`
-and `/sso/callback`, `defaultSSO`, and `provisionUser` first/every login.
-Organization slug sign-in is partial (requires `organization` plugin). SAML is
-documented separately and remains experimental.
-
-**Test coverage:** All **22** scenarios in upstream `oidc.test.ts` are covered
-across `tests/sso/endpoints/` plus `oidc_upstream_parity.rs` (six explicit
-upstream-alignment tests added June 2026). OIDC discovery has **71** upstream
-Vitest cases in `openauth-oidc`. Run: `cargo nextest run -p openauth-sso --test sso`.
-
-**Open gaps:** SAML production readiness (signing/encryption); duplicate
-maintenance between `tests/sso/oidc.rs` and `openauth-oidc/tests/flow.rs`; no
-typed browser client. SCIM and full SAML parity live in sibling crates.
-
-### Upstream lookup
-
-1. Pin: [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
-2. SSO plugin: `reference/upstream-src/<version>/repository/packages/sso/` (fetch via `./scripts/fetch-upstream-better-auth.sh`).
-3. OIDC discovery/types: [`openauth-oidc`](../openauth-oidc/README.md#upstream-lookup); SAML SP XML:
-   [`openauth-saml`](../openauth-saml/README.md#upstream-lookup).
-4. Tests: `packages/sso/src/oidc.test.ts` → `cargo nextest run -p openauth-sso --test sso`.
+For route-level parity, test counts, intentional differences, and known gaps, see
+[UPSTREAM.md](./UPSTREAM.md).
 
 ## Links
 
