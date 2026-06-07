@@ -35,6 +35,9 @@ Versioning while the API is still pre-1.0.
 
 ### Added
 
+- `openauth-passkey`: `PasskeySchemaOptions` and `PasskeyOptions::schema` for
+  physical passkey table/column renames (Better Auth `options.schema` /
+  `mergeSchema` server parity).
 - Added SSO audit event `DomainVerificationRevoked` (`Warn`) when a provider
   update clears a previously verified domain after issuer/domain changes or
   OIDC/SAML trust-boundary edits.
@@ -73,6 +76,8 @@ Versioning while the API is still pre-1.0.
 - Legacy passkey rows without `webauthn_credential` JSON can authenticate again:
   OpenAuth reconstructs `webauthn-rs` credential state from the stored COSE
   public key and backfills the hidden JSON after successful verification.
+- Passkey session-scoped `allowCredentials` omits legacy rows with corrupt or
+  unsupported COSE `public_key` values.
 - Stripe subscription reconciliation paginates list results and releases
   orphaned schedules after failed period-end updates.
 - `SecondaryStorage::take` on Fred/Redis uses atomic `GETDEL`.

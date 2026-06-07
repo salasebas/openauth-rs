@@ -2,6 +2,7 @@ use std::future::{ready, Future};
 use std::pin::Pin;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
 use openauth_core::options::RateLimitRule;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -137,6 +138,54 @@ impl PasskeyManagementOptions {
     }
 }
 
+/// Database schema naming overrides for the passkey model.
+///
+/// The Rust API continues to use OpenAuth's logical snake_case names; these
+/// overrides only affect the physical table and column names used by adapters.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PasskeySchemaOptions {
+    pub table_name: Option<String>,
+    pub field_names: IndexMap<String, String>,
+}
+
+impl PasskeySchemaOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn table_name(mut self, table_name: impl Into<String>) -> Self {
+        self.table_name = Some(table_name.into());
+        self
+    }
+
+    #[must_use]
+    pub fn field_name(
+        mut self,
+        logical_name: impl Into<String>,
+        database_name: impl Into<String>,
+    ) -> Self {
+        self.field_names
+            .insert(logical_name.into(), database_name.into());
+        self
+    }
+
+    pub(crate) fn table_name_or<'a>(&'a self, default_name: &'a str) -> &'a str {
+        self.table_name.as_deref().unwrap_or(default_name)
+    }
+
+    pub(crate) fn field_name_or<'a>(
+        &'a self,
+        logical_name: &str,
+        default_name: &'a str,
+    ) -> &'a str {
+        self.field_names
+            .get(logical_name)
+            .map(String::as_str)
+            .unwrap_or(default_name)
+    }
+}
+
 /// Passkey plugin settings.
 #[derive(Clone)]
 pub struct PasskeyOptions {
@@ -144,6 +193,7 @@ pub struct PasskeyOptions {
     pub rp_name: Option<String>,
     pub origin: Vec<String>,
     pub passkey_table: String,
+    pub schema: PasskeySchemaOptions,
     pub authenticator_selection: AuthenticatorSelection,
     pub registration: PasskeyRegistrationOptions,
     pub authentication: PasskeyAuthenticationOptions,
@@ -161,6 +211,7 @@ impl Default for PasskeyOptions {
             rp_name: None,
             origin: Vec::new(),
             passkey_table: "passkeys".to_owned(),
+            schema: PasskeySchemaOptions::default(),
             authenticator_selection: AuthenticatorSelection::default(),
             registration: PasskeyRegistrationOptions::default(),
             authentication: PasskeyAuthenticationOptions::default(),
@@ -199,6 +250,12 @@ impl PasskeyOptions {
     #[must_use]
     pub fn passkey_table(mut self, table: impl Into<String>) -> Self {
         self.passkey_table = table.into();
+        self
+    }
+
+    #[must_use]
+    pub fn schema(mut self, schema: PasskeySchemaOptions) -> Self {
+        self.schema = schema;
         self
     }
 
