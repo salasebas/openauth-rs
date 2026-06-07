@@ -762,6 +762,84 @@ async fn mysql_adapter_plan_migrations_warns_for_type_mismatch_without_rewrite(
 }
 
 #[tokio::test]
+async fn mysql_adapter_run_migrations_rejects_type_warnings_without_applying_statements(
+) -> Result<(), OpenAuthError> {
+    let prefix = unique_prefix();
+    let users_table = format!("{prefix}_users");
+    let sessions_table = format!("{prefix}_sessions");
+    let schema = auth_schema(AuthSchemaOptions {
+        user: table_options(&prefix, "users"),
+        account: table_options(&prefix, "accounts"),
+        session: table_options(&prefix, "sessions"),
+        verification: table_options(&prefix, "verifications"),
+        rate_limit: table_options(&prefix, "rate_limits"),
+        ..AuthSchemaOptions::default()
+    });
+    let pool = test_pool(1).await?;
+    sqlx::query(&format!(
+        "CREATE TABLE {users_table} (id VARCHAR(255) PRIMARY KEY, name TEXT NOT NULL, email BIGINT NOT NULL UNIQUE, email_verified BOOLEAN NOT NULL, image TEXT, created_at DATETIME(6) NOT NULL, updated_at DATETIME(6) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    ))
+    .execute(&pool)
+    .await
+    .map_err(sql_error)?;
+    let adapter = MySqlAdapter::with_schema(pool.clone(), schema.clone());
+
+    let result = adapter.run_migrations(&schema).await;
+
+    assert!(
+        matches!(result, Err(OpenAuthError::Adapter(message)) if message.contains("non-executable migration warnings"))
+    );
+    let sessions_table_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?",
+    )
+    .bind(&sessions_table)
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+    assert_eq!(sessions_table_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn mysql_adapter_create_schema_rejects_type_warnings_without_applying_statements(
+) -> Result<(), OpenAuthError> {
+    let prefix = unique_prefix();
+    let users_table = format!("{prefix}_users");
+    let sessions_table = format!("{prefix}_sessions");
+    let schema = auth_schema(AuthSchemaOptions {
+        user: table_options(&prefix, "users"),
+        account: table_options(&prefix, "accounts"),
+        session: table_options(&prefix, "sessions"),
+        verification: table_options(&prefix, "verifications"),
+        rate_limit: table_options(&prefix, "rate_limits"),
+        ..AuthSchemaOptions::default()
+    });
+    let pool = test_pool(1).await?;
+    sqlx::query(&format!(
+        "CREATE TABLE {users_table} (id VARCHAR(255) PRIMARY KEY, email BIGINT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    ))
+    .execute(&pool)
+    .await
+    .map_err(sql_error)?;
+    let adapter = MySqlAdapter::with_schema(pool.clone(), schema.clone());
+
+    let result = adapter.create_schema(&schema, None).await;
+
+    assert!(
+        matches!(result, Err(OpenAuthError::Adapter(message)) if message.contains("migration warnings"))
+    );
+    let sessions_table_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?",
+    )
+    .bind(&sessions_table)
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+    assert_eq!(sessions_table_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn mysql_adapter_plan_migrations_warns_for_foreign_key_mismatch() -> Result<(), OpenAuthError>
 {
     let prefix = unique_prefix();

@@ -768,6 +768,84 @@ async fn postgres_adapter_plan_migrations_warns_for_type_mismatch_without_rewrit
 }
 
 #[tokio::test]
+async fn postgres_adapter_run_migrations_rejects_type_warnings_without_applying_statements(
+) -> Result<(), OpenAuthError> {
+    let prefix = unique_prefix();
+    let users_table = format!("{prefix}_users");
+    let sessions_table = format!("{prefix}_sessions");
+    let schema = auth_schema(AuthSchemaOptions {
+        user: table_options(&prefix, "users"),
+        account: table_options(&prefix, "accounts"),
+        session: table_options(&prefix, "sessions"),
+        verification: table_options(&prefix, "verifications"),
+        rate_limit: table_options(&prefix, "rate_limits"),
+        ..AuthSchemaOptions::default()
+    });
+    let pool = test_pool(1).await?;
+    sqlx::query(&format!(
+        "CREATE TABLE {users_table} (id TEXT PRIMARY KEY, name TEXT NOT NULL, email BIGINT NOT NULL UNIQUE, email_verified BOOLEAN NOT NULL, image TEXT, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL)"
+    ))
+    .execute(&pool)
+    .await
+    .map_err(sql_error)?;
+    let adapter = PostgresAdapter::with_schema(pool.clone(), schema.clone());
+
+    let result = adapter.run_migrations(&schema).await;
+
+    assert!(
+        matches!(result, Err(OpenAuthError::Adapter(message)) if message.contains("non-executable migration warnings"))
+    );
+    let sessions_table_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1",
+    )
+    .bind(&sessions_table)
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+    assert_eq!(sessions_table_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn postgres_adapter_create_schema_rejects_type_warnings_without_applying_statements(
+) -> Result<(), OpenAuthError> {
+    let prefix = unique_prefix();
+    let users_table = format!("{prefix}_users");
+    let sessions_table = format!("{prefix}_sessions");
+    let schema = auth_schema(AuthSchemaOptions {
+        user: table_options(&prefix, "users"),
+        account: table_options(&prefix, "accounts"),
+        session: table_options(&prefix, "sessions"),
+        verification: table_options(&prefix, "verifications"),
+        rate_limit: table_options(&prefix, "rate_limits"),
+        ..AuthSchemaOptions::default()
+    });
+    let pool = test_pool(1).await?;
+    sqlx::query(&format!(
+        "CREATE TABLE {users_table} (id TEXT PRIMARY KEY, email BIGINT)"
+    ))
+    .execute(&pool)
+    .await
+    .map_err(sql_error)?;
+    let adapter = PostgresAdapter::with_schema(pool.clone(), schema.clone());
+
+    let result = adapter.create_schema(&schema, None).await;
+
+    assert!(
+        matches!(result, Err(OpenAuthError::Adapter(message)) if message.contains("migration warnings"))
+    );
+    let sessions_table_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1",
+    )
+    .bind(&sessions_table)
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+    assert_eq!(sessions_table_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn postgres_adapter_plan_migrations_warns_for_foreign_key_mismatch(
 ) -> Result<(), OpenAuthError> {
     let prefix = unique_prefix();
@@ -1058,6 +1136,86 @@ async fn postgres_adapter_uses_physical_names_from_auth_schema() -> Result<(), O
         Some(&DbValue::String("ada@example.com".to_owned()))
     );
     assert_eq!(stored_email, "ada@example.com");
+    Ok(())
+}
+
+#[tokio::test]
+async fn postgres_adapter_supports_schema_qualified_table_names() -> Result<(), OpenAuthError> {
+    let suffix = format!(
+        "{:x}{:x}",
+        std::process::id() & 0xfff,
+        TEST_ID.fetch_add(1, Ordering::Relaxed) & 0xffff
+    );
+    let schema_name = format!("s{suffix}");
+    let users_table = format!("u{suffix}");
+    let auth_schema = auth_schema(AuthSchemaOptions {
+        user: TableOptions::default().with_name(format!("{schema_name}.{users_table}")),
+        account: TableOptions::default().with_name(format!("{schema_name}.a{suffix}")),
+        session: TableOptions::default().with_name(format!("{schema_name}.s{suffix}")),
+        verification: TableOptions::default().with_name(format!("{schema_name}.v{suffix}")),
+        rate_limit: TableOptions::default().with_name(format!("{schema_name}.r{suffix}")),
+        rate_limit_storage: RateLimitStorage::Database,
+        ..AuthSchemaOptions::default()
+    });
+    let pool = test_pool(1).await?;
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
+        .execute(&pool)
+        .await
+        .map_err(sql_error)?;
+    sqlx::query(&format!("CREATE SCHEMA {schema_name}"))
+        .execute(&pool)
+        .await
+        .map_err(sql_error)?;
+    let adapter = PostgresAdapter::with_schema(pool.clone(), auth_schema.clone());
+
+    adapter.create_schema(&auth_schema, None).await?;
+    adapter
+        .create(
+            Create::new("user")
+                .data("id", DbValue::String("user_1".to_owned()))
+                .data("name", DbValue::String("Ada".to_owned()))
+                .data("email", DbValue::String("ada@example.com".to_owned()))
+                .data("email_verified", DbValue::Boolean(false))
+                .data("image", DbValue::Null)
+                .data("created_at", DbValue::Timestamp(OffsetDateTime::now_utc()))
+                .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc())),
+        )
+        .await?;
+    let record = adapter
+        .find_one(FindOne::new("user").where_clause(Where::new(
+            "email",
+            DbValue::String("ada@example.com".to_owned()),
+        )))
+        .await?
+        .ok_or_else(|| OpenAuthError::Adapter("missing schema-qualified user".to_owned()))?;
+    let plan = adapter.plan_migrations(&auth_schema).await?;
+    let custom_schema_tables: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = $1 AND table_type = 'BASE TABLE'",
+    )
+    .bind(&schema_name)
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+    let public_schema_tables: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1",
+    )
+    .bind(&users_table)
+    .fetch_one(&pool)
+    .await
+    .map_err(sql_error)?;
+
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
+        .execute(&pool)
+        .await
+        .map_err(sql_error)?;
+    assert_eq!(
+        record.get("email"),
+        Some(&DbValue::String("ada@example.com".to_owned()))
+    );
+    assert_eq!(custom_schema_tables, 5);
+    assert_eq!(public_schema_tables, 0);
+    assert!(plan.statements.is_empty(), "unexpected plan: {plan:?}");
+    assert!(plan.warnings.is_empty(), "unexpected warnings: {plan:?}");
     Ok(())
 }
 

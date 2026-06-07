@@ -64,7 +64,7 @@ async fn load_schema_snapshot(
                 let prefix = if field.unique { "uidx" } else { "idx" };
                 let index_name = format!("{prefix}_{}_{}", table.name, logical_name);
                 let index_name = sanitize_identifier(&index_name)?;
-                if index_exists(executor, &index_name).await? {
+                if index_exists(executor, &table.name, &index_name).await? {
                     snapshot = snapshot.with_index(&table.name, index_name);
                 }
             }
@@ -103,20 +103,23 @@ async fn table_exists(
     executor: &mut PostgresExecutor<'_, '_>,
     table: &str,
 ) -> Result<bool, OpenAuthError> {
+    let table_ref = PgTableRef::new(table);
     let exists = match executor {
         PostgresExecutor::Pool(pool) => sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' AND table_name = $1)",
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = COALESCE($1, current_schema()) AND table_type = 'BASE TABLE' AND table_name = $2)",
         )
-        .bind(table)
+        .bind(table_ref.schema)
+        .bind(table_ref.name)
         .fetch_one(*pool)
         .await
         .map_err(sql_error)?,
         PostgresExecutor::Transaction(tx) => {
             let tx = tx.as_mut().ok_or_else(inactive_transaction)?;
             sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' AND table_name = $1)",
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = COALESCE($1, current_schema()) AND table_type = 'BASE TABLE' AND table_name = $2)",
             )
-            .bind(table)
+            .bind(table_ref.schema)
+            .bind(table_ref.name)
             .fetch_one(&mut **tx)
             .await
             .map_err(sql_error)?
@@ -130,6 +133,7 @@ async fn column_snapshot(
     table: &str,
     column: &str,
 ) -> Result<Option<SqlColumnSnapshot>, OpenAuthError> {
+    let table_ref = PgTableRef::new(table);
     let row = match executor {
         PostgresExecutor::Pool(pool) => sqlx::query_as::<_, (String, bool, Option<String>, bool)>(
             "SELECT CASE WHEN data_type = 'ARRAY' THEN udt_name ELSE data_type END, \
@@ -137,9 +141,10 @@ async fn column_snapshot(
                     column_default, \
                     is_identity = 'YES' \
              FROM information_schema.columns \
-             WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2",
+             WHERE table_schema = COALESCE($1, current_schema()) AND table_name = $2 AND column_name = $3",
         )
-        .bind(table)
+        .bind(table_ref.schema)
+        .bind(table_ref.name)
         .bind(column)
         .fetch_optional(*pool)
         .await
@@ -152,9 +157,10 @@ async fn column_snapshot(
                         column_default, \
                         is_identity = 'YES' \
                  FROM information_schema.columns \
-                 WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2",
+                 WHERE table_schema = COALESCE($1, current_schema()) AND table_name = $2 AND column_name = $3",
             )
-            .bind(table)
+            .bind(table_ref.schema)
+            .bind(table_ref.name)
             .bind(column)
             .fetch_optional(&mut **tx)
             .await
@@ -186,12 +192,15 @@ async fn column_snapshot(
 
 async fn index_exists(
     executor: &mut PostgresExecutor<'_, '_>,
+    table: &str,
     index: &str,
 ) -> Result<bool, OpenAuthError> {
+    let table_ref = PgTableRef::new(table);
     let exists = match executor {
         PostgresExecutor::Pool(pool) => sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1)",
+            "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = COALESCE($1, current_schema()) AND indexname = $2)",
         )
+        .bind(table_ref.schema)
         .bind(index)
         .fetch_one(*pool)
         .await
@@ -199,8 +208,9 @@ async fn index_exists(
         PostgresExecutor::Transaction(tx) => {
             let tx = tx.as_mut().ok_or_else(inactive_transaction)?;
             sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1)",
+                "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = COALESCE($1, current_schema()) AND indexname = $2)",
             )
+            .bind(table_ref.schema)
             .bind(index)
             .fetch_one(&mut **tx)
             .await
@@ -215,6 +225,7 @@ async fn unique_column_exists(
     table: &str,
     column: &str,
 ) -> Result<bool, OpenAuthError> {
+    let table_ref = PgTableRef::new(table);
     let exists = match executor {
         PostgresExecutor::Pool(pool) => sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS ( \
@@ -223,13 +234,14 @@ async fn unique_column_exists(
              JOIN pg_class tbl ON tbl.oid = i.indrelid \
              JOIN pg_namespace ns ON ns.oid = tbl.relnamespace \
              JOIN pg_attribute attr ON attr.attrelid = tbl.oid AND attr.attnum = ANY(i.indkey) \
-             WHERE ns.nspname = current_schema() \
-               AND tbl.relname = $1 \
-               AND attr.attname = $2 \
+             WHERE ns.nspname = COALESCE($1, current_schema()) \
+               AND tbl.relname = $2 \
+               AND attr.attname = $3 \
                AND i.indisunique \
              )",
         )
-        .bind(table)
+        .bind(table_ref.schema)
+        .bind(table_ref.name)
         .bind(column)
         .fetch_one(*pool)
         .await
@@ -243,13 +255,14 @@ async fn unique_column_exists(
                  JOIN pg_class tbl ON tbl.oid = i.indrelid \
                  JOIN pg_namespace ns ON ns.oid = tbl.relnamespace \
                  JOIN pg_attribute attr ON attr.attrelid = tbl.oid AND attr.attnum = ANY(i.indkey) \
-                 WHERE ns.nspname = current_schema() \
-                   AND tbl.relname = $1 \
-                   AND attr.attname = $2 \
+                 WHERE ns.nspname = COALESCE($1, current_schema()) \
+                   AND tbl.relname = $2 \
+                   AND attr.attname = $3 \
                    AND i.indisunique \
                  )",
             )
-            .bind(table)
+            .bind(table_ref.schema)
+            .bind(table_ref.name)
             .bind(column)
             .fetch_one(&mut **tx)
             .await
@@ -264,6 +277,7 @@ async fn primary_key_column_exists(
     table: &str,
     column: &str,
 ) -> Result<bool, OpenAuthError> {
+    let table_ref = PgTableRef::new(table);
     let exists = match executor {
         PostgresExecutor::Pool(pool) => sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS ( \
@@ -272,13 +286,14 @@ async fn primary_key_column_exists(
              JOIN pg_class tbl ON tbl.oid = i.indrelid \
              JOIN pg_namespace ns ON ns.oid = tbl.relnamespace \
              JOIN pg_attribute attr ON attr.attrelid = tbl.oid AND attr.attnum = ANY(i.indkey) \
-             WHERE ns.nspname = current_schema() \
-               AND tbl.relname = $1 \
-               AND attr.attname = $2 \
+             WHERE ns.nspname = COALESCE($1, current_schema()) \
+               AND tbl.relname = $2 \
+               AND attr.attname = $3 \
                AND i.indisprimary \
              )",
         )
-        .bind(table)
+        .bind(table_ref.schema)
+        .bind(table_ref.name)
         .bind(column)
         .fetch_one(*pool)
         .await
@@ -292,13 +307,14 @@ async fn primary_key_column_exists(
                  JOIN pg_class tbl ON tbl.oid = i.indrelid \
                  JOIN pg_namespace ns ON ns.oid = tbl.relnamespace \
                  JOIN pg_attribute attr ON attr.attrelid = tbl.oid AND attr.attnum = ANY(i.indkey) \
-                 WHERE ns.nspname = current_schema() \
-                   AND tbl.relname = $1 \
-                   AND attr.attname = $2 \
+                 WHERE ns.nspname = COALESCE($1, current_schema()) \
+                   AND tbl.relname = $2 \
+                   AND attr.attname = $3 \
                    AND i.indisprimary \
                  )",
             )
-            .bind(table)
+            .bind(table_ref.schema)
+            .bind(table_ref.name)
             .bind(column)
             .fetch_one(&mut **tx)
             .await
@@ -313,9 +329,10 @@ async fn foreign_key(
     table: &str,
     column: &str,
 ) -> Result<Option<ForeignKey>, OpenAuthError> {
+    let table_ref = PgTableRef::new(table);
     let row = match executor {
-        PostgresExecutor::Pool(pool) => sqlx::query_as::<_, (String, String, String)>(
-            "SELECT ccu.table_name, ccu.column_name, rc.delete_rule \
+        PostgresExecutor::Pool(pool) => sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT ccu.table_schema, ccu.table_name, ccu.column_name, rc.delete_rule \
              FROM information_schema.table_constraints tc \
              JOIN information_schema.key_column_usage kcu \
                ON tc.constraint_name = kcu.constraint_name AND tc.constraint_schema = kcu.constraint_schema \
@@ -323,20 +340,21 @@ async fn foreign_key(
                ON ccu.constraint_name = tc.constraint_name AND ccu.constraint_schema = tc.constraint_schema \
              JOIN information_schema.referential_constraints rc \
                ON rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.constraint_schema \
-             WHERE tc.table_schema = current_schema() \
-               AND tc.table_name = $1 \
-               AND kcu.column_name = $2 \
+             WHERE tc.table_schema = COALESCE($1, current_schema()) \
+               AND tc.table_name = $2 \
+               AND kcu.column_name = $3 \
                AND tc.constraint_type = 'FOREIGN KEY'",
         )
-        .bind(table)
+        .bind(table_ref.schema)
+        .bind(table_ref.name)
         .bind(column)
         .fetch_optional(*pool)
         .await
         .map_err(sql_error)?,
         PostgresExecutor::Transaction(tx) => {
             let tx = tx.as_mut().ok_or_else(inactive_transaction)?;
-            sqlx::query_as::<_, (String, String, String)>(
-                "SELECT ccu.table_name, ccu.column_name, rc.delete_rule \
+            sqlx::query_as::<_, (String, String, String, String)>(
+                "SELECT ccu.table_schema, ccu.table_name, ccu.column_name, rc.delete_rule \
                  FROM information_schema.table_constraints tc \
                  JOIN information_schema.key_column_usage kcu \
                    ON tc.constraint_name = kcu.constraint_name AND tc.constraint_schema = kcu.constraint_schema \
@@ -344,21 +362,47 @@ async fn foreign_key(
                    ON ccu.constraint_name = tc.constraint_name AND ccu.constraint_schema = tc.constraint_schema \
                  JOIN information_schema.referential_constraints rc \
                    ON rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.constraint_schema \
-                 WHERE tc.table_schema = current_schema() \
-                   AND tc.table_name = $1 \
-                   AND kcu.column_name = $2 \
+                 WHERE tc.table_schema = COALESCE($1, current_schema()) \
+                   AND tc.table_name = $2 \
+                   AND kcu.column_name = $3 \
                    AND tc.constraint_type = 'FOREIGN KEY'",
             )
-            .bind(table)
+            .bind(table_ref.schema)
+            .bind(table_ref.name)
             .bind(column)
             .fetch_optional(&mut **tx)
             .await
             .map_err(sql_error)?
         }
     };
-    Ok(row.map(|(table, field, on_delete)| {
+    Ok(row.map(|(schema, table, field, on_delete)| {
+        let table = match table_ref.schema {
+            Some(_) => format!("{schema}.{table}"),
+            None => table,
+        };
         ForeignKey::new(table, field, parse_on_delete(&on_delete))
     }))
+}
+
+#[derive(Clone, Copy)]
+struct PgTableRef<'a> {
+    schema: Option<&'a str>,
+    name: &'a str,
+}
+
+impl<'a> PgTableRef<'a> {
+    fn new(table: &'a str) -> Self {
+        match table.split_once('.') {
+            Some((schema, name)) => Self {
+                schema: Some(schema),
+                name,
+            },
+            None => Self {
+                schema: None,
+                name: table,
+            },
+        }
+    }
 }
 
 fn parse_on_delete(value: &str) -> OnDelete {

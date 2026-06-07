@@ -20,22 +20,22 @@
 | Joins | ✅ | Native one-to-one and one-to-many joins are supported for all three dialects through OpenAuth core SQL planning. |
 | Transactions | ✅ | All adapters support transaction callbacks; SQLite enables foreign keys per transaction. |
 | Schema creation | ✅ | Creates OpenAuth and plugin tables from `DbSchema`; optional file output returns compiled migration SQL. |
-| Migration planning | ✅ | Additive table, column, and index plans are compiled per dialect; warning plans are rejected before execution. |
+| Migration planning | ✅ | Additive table, column, and index plans are compiled per dialect; warning plans are rejected before execution. Postgres introspection supports `search_path` and schema-qualified table names such as `internal.users`. |
 | Migration atomicity | 🎯 | SQLite/Postgres run each plan in a transaction; MySQL performs best-effort reverse cleanup because MySQL DDL implicitly commits. |
 | Rate-limit storage | 🎯 | SQL-backed stores consume in one transaction and denied requests do not rewrite counters. Upstream database rate limits are split read/write through the generic adapter. |
-| Server runtime dialect coverage | ⚠️ | SQLite, Postgres, and MySQL are implemented. Upstream Kysely also has server/runtime adapters for MSSQL, Bun SQLite, Node SQLite, and Cloudflare D1. |
+| Server runtime dialect coverage | ➖ | SQLite, Postgres, and MySQL are implemented. Upstream Kysely also has server/runtime adapters for MSSQL, Bun SQLite, Node SQLite, and Cloudflare D1; those runtime-specific drivers are outside this SQLx crate's supported dialect set. |
 | Public HTTP routes | ➖ | The Kysely adapter has no route surface; route-level behavior belongs to `openauth-core`, `openauth`, and plugin crates. |
-| Adapter factory runtime transforms | ⚠️ | Better Auth applies defaults, field mappings, `onUpdate`, type conversions, and fallback joins in its adapter factory. OpenAuth handles these through Rust schema, service, and shared SQL layers. |
-| Rate-limit table naming | ⚠️ | Upstream stores database rate limits through model `rateLimit`; OpenAuth's default physical table is `rate_limits` for logical model `rate_limit`. |
+| Adapter factory runtime transforms | ➖ | Better Auth applies defaults, field mappings, `onUpdate`, type conversions, and fallback joins in its adapter factory. OpenAuth handles these through Rust schema, service, and shared SQL layers above this crate. |
+| Rate-limit table naming | 🎯 | Upstream stores database rate limits through model `rateLimit`; OpenAuth's default physical table is `rate_limits` for logical model `rate_limit`, with physical names honored from `DbSchema`. |
 
 ## Test Coverage
 
 | Surface | OpenAuth tests | Upstream tests | Notes |
 | --- | --- | --- | --- |
 | SQLite adapter | 37 source-counted tests in `tests/sqlite_adapter.rs` | `adapter.kysely.sqlite.test.ts`, `node-sqlite-dialect.test.ts`, shared adapter suites | Deepest local coverage, including foreign-key pool enforcement and serialized rate-limit concurrency. |
-| Postgres adapter | 32 source-counted tests in `tests/postgres_adapter.rs` | `adapter.kysely.pg.test.ts`, `adapter.kysely.custom-schema-pg.test.ts`, schema-reference suites, migration schema tests | Requires reachable `OPENAUTH_TEST_POSTGRES_URL` or local Docker Compose defaults. |
-| MySQL adapter | 32 source-counted tests in `tests/mysql_adapter.rs` | `adapter.kysely.mysql.test.ts` and shared adapter suites | Requires reachable `OPENAUTH_TEST_MYSQL_URL` or local Docker Compose defaults. |
-| Upstream-only server dialects | None in this crate | `adapter.kysely.mssql.test.ts`, Bun SQLite dialect, D1 dialect | Tracked as unsupported server/runtime coverage. |
+| Postgres adapter | 35 source-counted tests in `tests/postgres_adapter.rs` | `adapter.kysely.pg.test.ts`, `adapter.kysely.custom-schema-pg.test.ts`, schema-reference suites, migration schema tests | Requires reachable `OPENAUTH_TEST_POSTGRES_URL` or local Docker Compose defaults; includes schema-qualified table names and fail-closed warning-plan coverage. |
+| MySQL adapter | 34 source-counted tests in `tests/mysql_adapter.rs` | `adapter.kysely.mysql.test.ts` and shared adapter suites | Requires reachable `OPENAUTH_TEST_MYSQL_URL` or local Docker Compose defaults; includes fail-closed warning-plan coverage. |
+| Upstream-only server dialects | None in this crate | `adapter.kysely.mssql.test.ts`, Bun SQLite dialect, D1 dialect | Intentional scope boundary: SQLx has no Bun SQLite, Node SQLite, Cloudflare D1, or MSSQL driver surface in this crate. |
 | Kysely adapter package | N/A | 1 local smoke test in `packages/kysely-adapter/src/kysely-adapter.test.ts` | Most upstream behavior is exercised outside the package-local test file. |
 | Migrations | Dialect integration tests plus shared migration atomicity helpers | 10 tests in `packages/better-auth/src/db/get-migration-schema.test.ts` | OpenAuth adds executable-plan checks and atomic application guarantees. |
 | Model/table metadata | Covered indirectly through schema/migration tests | `packages/core/src/db/test/get-tables.test.ts`, `packages/better-auth/src/db/db.test.ts` | Upstream covers custom names, field mapping, verification table inclusion, and database hooks. |
@@ -43,7 +43,7 @@
 | Internal adapter consumers | Outside direct SQLx crate scope | `internal-adapter.test.ts`, `secondary-storage.test.ts` | Server-side consumers of the adapter; useful boundary evidence, not raw adapter parity. |
 | Shared adapter contract | `run_adapter_contract` plus focused dialect tests | `packages/test-utils/src/adapter/` suites and Kysely e2e files | Upstream suites are not ported 1:1. |
 | Verify command | `cargo nextest run -p openauth-sqlx` | Upstream uses Vitest/e2e harnesses | Add `--features postgres,mysql` with live services to exercise every SQLx dialect. |
-| Quick count | `rg '#\[test\]|#\[tokio::test\]' crates/openauth-sqlx` | Include `packages/kysely-adapter`, `packages/better-auth/src/db`, `packages/better-auth/src/api/rate-limiter`, `packages/test-utils/src/adapter`, and `e2e/adapter/test/kysely-adapter` | Current OpenAuth source count: 101 tests; upstream e2e suites are generated dynamically. |
+| Quick count | `rg '#\[test\]|#\[tokio::test\]' crates/openauth-sqlx` | Include `packages/kysely-adapter`, `packages/better-auth/src/db`, `packages/better-auth/src/api/rate-limiter`, `packages/test-utils/src/adapter`, and `e2e/adapter/test/kysely-adapter` | Current OpenAuth source count: 106 tests; upstream e2e suites are generated dynamically. |
 
 ## Intentional Differences
 
@@ -64,15 +64,12 @@
 
 | ID | Gap | Severity | Notes |
 | --- | --- | --- | --- |
-| SQLX-1 | MSSQL, Bun SQLite, Node SQLite, and Cloudflare D1 are not implemented | Medium | These are server/runtime upstream surfaces, but outside this crate's supported SQLx dialects. |
-| SQLX-2 | Postgres/MySQL test coverage depends on live services | Medium | SQLite-only local runs do not exercise all production dialects. |
-| SQLX-3 | Postgres/MySQL do not mirror every SQLite-only hardening test | Medium | Missing equivalents include FK pool enforcement, warning-plan rejection paths, and serialized rate-limit concurrency. |
-| SQLX-4 | Direct `with_schema` use can drift from migrations | Medium | The normal OpenAuth builder wires schema, hooks, defaults, and `onUpdate` behavior above the adapter. |
-| SQLX-5 | Shared Better Auth adapter/e2e suites are not ported 1:1 | Low | OpenAuth relies on `run_adapter_contract` and focused dialect integration tests. |
-| SQLX-6 | `find_many` has no adapter-level default limit | Low | Public list endpoints should pass explicit limits. |
-| SQLX-7 | MySQL DDL rollback is best-effort | Medium | Inspect failed MySQL migrations before retrying because DDL implicitly commits. |
-| SQLX-8 | Postgres custom-schema parity is shallower than upstream e2e coverage | Low | OpenAuth introspects `current_schema()` and tests prefixed table names; upstream also has schema-reference and search-path e2e suites. |
-| SQLX-9 | Upstream dynamic e2e suite count is not statically comparable to OpenAuth's 101 source-counted tests | Low | Better Auth expands tests through `testAdapter` and `createTestSuite`; compare coverage areas, not only raw `it(` counts. |
+| SQLX-1 | Upstream-only runtime dialects are intentionally unsupported | Low | MSSQL, Bun SQLite, Node SQLite, and Cloudflare D1 are server/runtime surfaces in Better Auth's Kysely adapter. This crate supports SQLx SQLite, Postgres, and MySQL only; add a sibling/runtime crate if those drivers become OpenAuth scope. |
+| SQLX-2 | Postgres/MySQL test coverage depends on live services | Medium | This is operational test infrastructure, not a parity gap. SQLite-only local runs do not exercise all production dialects; run `./scripts/ensure-test-services.sh postgres mysql` before full SQLx dialect verification. |
+| SQLX-3 | Direct `with_schema` construction bypasses higher-level service transforms | Low | Intentional adapter boundary. The normal OpenAuth builder wires schema, hooks, defaults, and `onUpdate` behavior above the SQLx adapter; direct adapter construction should be used with an already-final `DbSchema`. |
+| SQLX-4 | Shared Better Auth adapter/e2e suites are not ported 1:1 | Low | Intentional test strategy. OpenAuth relies on `run_adapter_contract` plus focused dialect integration tests for observable server behavior instead of mirroring Better Auth's generated Vitest matrix count. |
+| SQLX-5 | `find_many` has no adapter-level default limit | Low | Intentional boundary. Better Auth's adapter factory applies a top-level default in TypeScript; OpenAuth public endpoints and callers should pass explicit limits instead of hiding a SQLx adapter default. |
+| SQLX-6 | MySQL DDL rollback is best-effort | Medium | Intentional database limitation. MySQL DDL implicitly commits, so SQLx cannot provide true transactional migration rollback; OpenAuth compensates successful statements where possible and surfaces the error. |
 
 ## Hardening Notes
 
@@ -80,6 +77,7 @@
 - Migration plans fail closed on unsafe warnings before any executable SQL is applied.
 - SQLite and Postgres migration plans are transactional; MySQL compensates successful statements in reverse order on failure.
 - SQLite enables `PRAGMA foreign_keys = ON` on pooled connections and transactions.
+- Postgres schema planning honors the active `search_path` for plain names and explicit schema prefixes for dotted table names.
 - Rate-limit counters are consumed inside one transaction; SQLite uses `BEGIN IMMEDIATE` to avoid stale reads across pooled connections.
 - LIKE pattern operators escape SQL wildcard characters in user input.
 - Negative or invalid rate-limit counts are rejected instead of silently coerced.
