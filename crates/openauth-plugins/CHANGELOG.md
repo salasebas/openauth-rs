@@ -4,8 +4,23 @@ All notable changes to `openauth-plugins` are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- Re-audited non-organization plugin parity against Better Auth 1.6.9 and
+  clarified that API-key pure secondary-storage listing consistency across
+  processes is an intentional storage-contract boundary covered by fallback or
+  externally atomic storage.
+- Added focused Better Auth 1.6.9 parity coverage for API-key expiry/refill,
+  Email OTP current-email verification and legacy password-reset alias,
+  Two-factor enable/disable session rotation, and Username validation/update
+  edges.
+
 ### Fixed
 
+- Two-factor enable with `skip_verification_on_enable` and disable now rotate
+  the active session after changing the user's 2FA state.
+- Email OTP verification now returns `OTP_EXPIRED` for expired stored OTPs
+  instead of treating them as missing.
 - Device authorization token exchange atomically consumes approved device codes.
 - Fixed magic-link verify creating sessions with IP metadata read directly from
   raw `x-forwarded-for` / `x-real-ip` headers instead of the configured

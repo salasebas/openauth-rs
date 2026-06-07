@@ -5,7 +5,7 @@ use openauth_core::api::{create_auth_endpoint, parse_request_body};
 use openauth_core::crypto::random::generate_random_string;
 use openauth_core::crypto::{symmetric_decrypt, symmetric_encrypt};
 
-use super::{flow_error_response, json_response};
+use super::{flow_error_response, json_response, rotate_session};
 use crate::two_factor::backup_codes::{encode_backup_codes, generate_backup_codes};
 use crate::two_factor::errors::{error_message, error_response};
 use crate::two_factor::flow::{current_session, validate_password};
@@ -29,7 +29,7 @@ pub(super) fn enable_endpoint(
             Box::pin(async move {
                 validate_digits(options.totp.digits)?;
                 let body: EnableBody = parse_request_body(&request)?;
-                let (adapter, _session, user, cookies) =
+                let (adapter, session, user, mut cookies) =
                     match current_session(context, &request).await {
                         Ok(session) => session,
                         Err(error) => return flow_error_response(error),
@@ -58,6 +58,10 @@ pub(super) fn enable_endpoint(
                         .is_some_and(|record| record.verified != Some(false));
                 if verified {
                     update_user_two_factor_enabled(adapter.as_ref(), &user.id, true).await?;
+                    if options.skip_verification_on_enable {
+                        cookies =
+                            rotate_session(context, adapter.as_ref(), &session, &user).await?;
+                    }
                 }
                 store
                     .upsert_for_user(&user.id, encrypted_secret, encoded_backup_codes, verified)

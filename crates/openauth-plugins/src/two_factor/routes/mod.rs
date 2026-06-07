@@ -7,8 +7,11 @@ use std::sync::Arc;
 
 use http::{header, StatusCode};
 use openauth_core::api::{ApiRequest, ApiResponse};
+use openauth_core::context::AuthContext;
+use openauth_core::db::{DbAdapter, Session, User};
 use openauth_core::error::OpenAuthError;
 use openauth_core::plugin::{AuthPlugin, PluginRateLimitRule};
+use openauth_core::session::{CreateSessionInput, DbSessionStore};
 use serde::Serialize;
 
 use super::cookies::append_cookies;
@@ -96,6 +99,25 @@ pub(super) fn flow_error_response(error: OpenAuthError) -> Result<ApiResponse, O
         ),
         error => Err(error),
     }
+}
+
+pub(super) async fn rotate_session(
+    context: &AuthContext,
+    adapter: &dyn DbAdapter,
+    session: &Session,
+    user: &User,
+) -> Result<Vec<openauth_core::cookies::Cookie>, OpenAuthError> {
+    let store = DbSessionStore::new(adapter);
+    let mut input = CreateSessionInput::new(&user.id, session.expires_at);
+    if let Some(ip_address) = &session.ip_address {
+        input = input.ip_address(ip_address.clone());
+    }
+    if let Some(user_agent) = &session.user_agent {
+        input = input.user_agent(user_agent.clone());
+    }
+    let rotated = store.create_session(input).await?;
+    store.delete_session(&session.token).await?;
+    openauth_core::api::output::session_response_cookies(context, &rotated, user, false)
 }
 
 pub(super) fn json_response<T: Serialize>(

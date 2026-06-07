@@ -7,8 +7,9 @@ use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::db::{DbAdapter, MemoryAdapter};
 use openauth_core::options::{AdvancedOptions, BackgroundTaskRunner, OpenAuthOptions};
 use openauth_plugins::api_key::{
-    api_key, api_key_with_options, ApiKeyConfiguration, ApiKeyGeneratorInput, ApiKeyOptions,
-    INVALID_API_KEY, KEY_NOT_FOUND, RATE_LIMIT_EXCEEDED,
+    api_key, api_key_with_options, ApiKeyConfiguration, ApiKeyExpirationOptions,
+    ApiKeyGeneratorInput, ApiKeyOptions, INVALID_API_KEY, KEY_EXPIRED, KEY_NOT_FOUND,
+    RATE_LIMIT_EXCEEDED,
 };
 use serde_json::json;
 
@@ -280,6 +281,163 @@ async fn verification_refills_remaining_after_interval() -> Result<(), Box<dyn s
     .await?;
     assert_eq!(second.body["valid"], true);
     assert_eq!(second.body["key"]["remaining"], 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn verification_returns_key_expired_for_expired_key() -> Result<(), Box<dyn std::error::Error>>
+{
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = super::helpers::test_router(
+        adapter,
+        api_key_with_options(ApiKeyOptions {
+            configuration: ApiKeyConfiguration {
+                key_expiration: ApiKeyExpirationOptions {
+                    min_expires_in_days: 0,
+                    ..ApiKeyExpirationOptions::default()
+                },
+                ..ApiKeyConfiguration::default()
+            },
+        }),
+    )?;
+    let user = sign_up(&router, "Exp", "expired-api@example.com").await?;
+    let created = server_request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/create",
+        json!({"name": "short-lived", "userId": user.user_id, "expiresIn": 1}),
+        None,
+        None,
+    )
+    .await?;
+    let key = created.body["key"].as_str().ok_or("missing api key")?;
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    let verified = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/verify",
+        json!({"key": key}),
+        None,
+        None,
+    )
+    .await?;
+
+    assert_eq!(verified.status, StatusCode::OK);
+    assert_eq!(verified.body["valid"], false);
+    assert_eq!(verified.body["error"]["code"], KEY_EXPIRED);
+    Ok(())
+}
+
+#[tokio::test]
+async fn verification_does_not_refill_remaining_before_interval(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = super::helpers::test_router(adapter, api_key())?;
+    let user = sign_up(&router, "No Refill", "no-refill-api@example.com").await?;
+    let created = server_request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/create",
+        json!({
+            "name": "no-refill-yet",
+            "userId": user.user_id,
+            "remaining": 1,
+            "refillAmount": 2,
+            "refillInterval": 60_000
+        }),
+        None,
+        None,
+    )
+    .await?;
+    let key = created.body["key"].as_str().ok_or("missing api key")?;
+
+    let first = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/verify",
+        json!({"key": key}),
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(first.body["valid"], true);
+    assert_eq!(first.body["key"]["remaining"], 0);
+
+    let second = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/verify",
+        json!({"key": key}),
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(second.body["valid"], false);
+    assert_eq!(second.body["error"]["code"], "USAGE_EXCEEDED");
+    Ok(())
+}
+
+#[tokio::test]
+async fn verification_handles_multiple_refill_cycles() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = super::helpers::test_router(adapter, api_key())?;
+    let user = sign_up(&router, "Cycle", "cycle-api@example.com").await?;
+    let created = server_request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/create",
+        json!({
+            "name": "multi-cycle",
+            "userId": user.user_id,
+            "remaining": 1,
+            "refillAmount": 2,
+            "refillInterval": 1
+        }),
+        None,
+        None,
+    )
+    .await?;
+    let key = created.body["key"].as_str().ok_or("missing api key")?;
+
+    let first = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/verify",
+        json!({"key": key}),
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(first.body["valid"], true);
+    assert_eq!(first.body["key"]["remaining"], 0);
+
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    let second = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/verify",
+        json!({"key": key}),
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(second.body["valid"], true);
+    assert_eq!(second.body["key"]["remaining"], 1);
+
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    let third = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/verify",
+        json!({"key": key}),
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(third.body["valid"], true);
+    assert_eq!(third.body["key"]["remaining"], 1);
     Ok(())
 }
 

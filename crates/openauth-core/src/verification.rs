@@ -313,6 +313,14 @@ impl<'a> DbVerificationStore<'a> {
         Ok(Some(verification))
     }
 
+    pub async fn take_verification_including_expired(
+        &self,
+        identifier: &str,
+    ) -> Result<Option<Verification>, OpenAuthError> {
+        self.consume_verification_including_expired(identifier)
+            .await
+    }
+
     pub async fn delete_expired_verifications(&self) -> Result<u64, OpenAuthError> {
         if self.options.disable_cleanup {
             return Ok(0);
@@ -470,6 +478,23 @@ impl<'a> VerificationStore<'a> {
             return Ok(None);
         }
         Ok(Some(verification))
+    }
+
+    pub async fn take_verification_including_expired(
+        &self,
+        identifier: &str,
+    ) -> Result<Option<Verification>, OpenAuthError> {
+        let Some(storage) = &self.secondary_storage else {
+            return self
+                .database
+                .consume_verification_including_expired(identifier)
+                .await;
+        };
+        let stored_identifier = process_verification_identifier(&self.options, identifier).await?;
+        let Some(raw) = storage.take(&verification_key(&stored_identifier)).await? else {
+            return Ok(None);
+        };
+        deserialize_verification(&raw).map(Some)
     }
 
     pub async fn delete_expired_verifications(&self) -> Result<u64, OpenAuthError> {

@@ -4,7 +4,7 @@ use http::{Method, StatusCode};
 use openauth_core::api::{create_auth_endpoint, parse_request_body};
 use openauth_core::verification::DbVerificationStore;
 
-use super::{flow_error_response, json_response, request_cookie};
+use super::{flow_error_response, json_response, request_cookie, rotate_session};
 use crate::two_factor::cookies::{
     expire_cookie, plugin_cookie, read_signed_cookie, TRUST_DEVICE_COOKIE_NAME,
 };
@@ -24,7 +24,7 @@ pub(super) fn disable_endpoint(
             let options = Arc::clone(&options);
             Box::pin(async move {
                 let body: PasswordBody = parse_request_body(&request)?;
-                let (adapter, _session, user, mut cookies) =
+                let (adapter, session, user, _cookies) =
                     match current_session(context, &request).await {
                         Ok(session) => session,
                         Err(error) => return flow_error_response(error),
@@ -44,6 +44,8 @@ pub(super) fn disable_endpoint(
                 TwoFactorStore::new(adapter.as_ref(), &options.two_factor_table)
                     .delete_for_user(&user.id)
                     .await?;
+                let mut cookies =
+                    rotate_session(context, adapter.as_ref(), &session, &user).await?;
                 let trust_cookie = plugin_cookie(
                     &context.auth_cookies.session_token,
                     TRUST_DEVICE_COOKIE_NAME,

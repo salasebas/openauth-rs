@@ -15,7 +15,9 @@ use openauth_core::crypto::password::verify_password;
 use openauth_core::db::MemoryAdapter;
 use openauth_core::options::{EmailVerificationOptions, OpenAuthOptions};
 use openauth_core::user::DbUserStore;
+use openauth_core::verification::{CreateVerificationInput, DbVerificationStore};
 use openauth_plugins::email_otp::{email_otp, ChangeEmailOptions, EmailOtpOptions, OtpStorage};
+use time::{Duration, OffsetDateTime};
 
 #[test]
 fn exposes_email_otp_plugin_builder() {
@@ -93,6 +95,41 @@ async fn disable_sign_up_silently_skips_sender_for_missing_sign_in_user() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(sender.count(), 0);
+}
+
+#[tokio::test]
+async fn disable_sign_up_silently_skips_sender_for_missing_email_verification_user() {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let sender = CaptureSender::default();
+    let router = router(
+        adapter.clone(),
+        sender.clone(),
+        EmailOtpOptions {
+            disable_sign_up: true,
+            ..EmailOtpOptions::default()
+        },
+    )
+    .unwrap();
+
+    let response = router
+        .handle_async(
+            json_request(
+                "/email-otp/send-verification-otp",
+                r#"{"email":"missing@example.com","type":"email-verification"}"#,
+                None,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(sender.count(), 0);
+    assert!(
+        verification_value(&adapter, "email-verification-otp-missing@example.com")
+            .await
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -234,6 +271,38 @@ async fn check_otp_returns_too_many_attempts_on_limit_attempt() {
     assert_eq!(first.status(), StatusCode::BAD_REQUEST);
     assert_eq!(second.status(), StatusCode::FORBIDDEN);
     assert_eq!(body["code"], "TOO_MANY_ATTEMPTS");
+}
+
+#[tokio::test]
+async fn check_otp_returns_otp_expired_for_expired_verification() {
+    let adapter = Arc::new(MemoryAdapter::new());
+    create_user(&adapter, "ada@example.com", false).await;
+    DbVerificationStore::new(adapter.as_ref())
+        .create_verification(CreateVerificationInput::new(
+            "email-verification-otp-ada@example.com",
+            "123456:0",
+            OffsetDateTime::now_utc() - Duration::seconds(1),
+        ))
+        .await
+        .unwrap();
+    let sender = CaptureSender::default();
+    let router = router(adapter, sender, EmailOtpOptions::default()).unwrap();
+
+    let response = router
+        .handle_async(
+            json_request(
+                "/email-otp/check-verification-otp",
+                r#"{"email":"ada@example.com","type":"email-verification","otp":"123456"}"#,
+                None,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(response.body()).unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "OTP_EXPIRED");
 }
 
 #[tokio::test]
@@ -488,6 +557,124 @@ async fn change_email_requires_session_and_updates_email_with_otp() {
     assert_eq!(body, serde_json::json!({ "success": true }));
     assert_eq!(updated.email, "new@example.com");
     assert!(updated.email_verified);
+}
+
+#[tokio::test]
+async fn request_email_change_requires_current_email_otp_when_configured() {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let user = create_user(&adapter, "ada@example.com", true).await;
+    let cookie = session_cookie(&adapter, &user.id).await;
+    let sender = CaptureSender::default();
+    let router = router(
+        adapter.clone(),
+        sender,
+        EmailOtpOptions {
+            change_email: ChangeEmailOptions {
+                enabled: true,
+                verify_current_email: true,
+            },
+            ..EmailOtpOptions::default()
+        },
+    )
+    .unwrap();
+
+    let response = router
+        .handle_async(
+            json_request(
+                "/email-otp/request-email-change",
+                r#"{"newEmail":"new@example.com"}"#,
+                Some(&cookie),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(response.body()).unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "OTP_REQUIRED");
+    assert!(
+        verification_value(&adapter, "change-email-otp-ada@example.com:new@example.com")
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn request_email_change_rejects_invalid_current_email_otp_when_configured() {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let user = create_user(&adapter, "ada@example.com", true).await;
+    let cookie = session_cookie(&adapter, &user.id).await;
+    DbVerificationStore::new(adapter.as_ref())
+        .create_verification(CreateVerificationInput::new(
+            "email-verification-otp-ada@example.com",
+            "123456:0",
+            OffsetDateTime::now_utc() + Duration::minutes(5),
+        ))
+        .await
+        .unwrap();
+    let sender = CaptureSender::default();
+    let router = router(
+        adapter.clone(),
+        sender,
+        EmailOtpOptions {
+            change_email: ChangeEmailOptions {
+                enabled: true,
+                verify_current_email: true,
+            },
+            ..EmailOtpOptions::default()
+        },
+    )
+    .unwrap();
+
+    let response = router
+        .handle_async(
+            json_request(
+                "/email-otp/request-email-change",
+                r#"{"newEmail":"new@example.com","otp":"000000"}"#,
+                Some(&cookie),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(response.body()).unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "INVALID_OTP");
+    assert!(
+        verification_value(&adapter, "change-email-otp-ada@example.com:new@example.com")
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn deprecated_forget_password_email_otp_alias_requests_reset_otp() {
+    let adapter = Arc::new(MemoryAdapter::new());
+    create_user(&adapter, "ada@example.com", false).await;
+    let sender = CaptureSender::default();
+    let router = router(adapter.clone(), sender.clone(), EmailOtpOptions::default()).unwrap();
+
+    let response = router
+        .handle_async(
+            json_request(
+                "/forget-password/email-otp",
+                r#"{"email":"ada@example.com"}"#,
+                None,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(sender.count(), 1);
+    assert!(
+        verification_value(&adapter, "forget-password-otp-ada@example.com")
+            .await
+            .is_some()
+    );
 }
 
 #[tokio::test]

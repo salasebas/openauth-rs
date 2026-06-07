@@ -7,6 +7,7 @@ use http::{Method, StatusCode};
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::crypto::symmetric_decrypt;
 use openauth_core::db::{DbAdapter, DbValue, FindOne, MemoryAdapter, Where};
+use openauth_core::session::DbSessionStore;
 use openauth_plugins::two_factor::{
     totp_code, BackupCodeOptions, OtpStorage, SendOtp, TwoFactorOptions,
 };
@@ -55,6 +56,51 @@ async fn enable_returns_totp_uri_and_backup_codes_without_enabling_user(
     assert_eq!(
         two_factor_record(adapter.as_ref()).await?.get("verified"),
         Some(&DbValue::Boolean(false))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn skip_verification_enable_rotates_session_cookie_and_deletes_old_session(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = seeded_router_with_options(TwoFactorOptions {
+        skip_verification_on_enable: true,
+        ..TwoFactorOptions::default()
+    })
+    .await?;
+    let cookie = sign_in_cookie(&router).await?;
+    let old_token = signed_cookie_value(&cookie, "session_token")?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/two-factor/enable",
+            r#"{"password":"password123"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(user_enabled(adapter.as_ref()).await?);
+    let new_cookie = cookie_header_from_response(&response);
+    let new_token = signed_cookie_value(&new_cookie, "session_token")?;
+    assert_ne!(
+        old_token, new_token,
+        "enabling 2FA with skip verification should rotate the session cookie"
+    );
+    assert!(
+        DbSessionStore::new(adapter.as_ref())
+            .find_session(&old_token)
+            .await?
+            .is_none(),
+        "old session should be deleted after rotation"
+    );
+    assert!(
+        DbSessionStore::new(adapter.as_ref())
+            .find_session(&new_token)
+            .await?
+            .is_some(),
+        "new session should be persisted"
     );
     Ok(())
 }
@@ -354,6 +400,47 @@ async fn disable_two_factor_clears_user_flag_and_row() -> Result<(), Box<dyn std
         )
         .await?
         .is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn disable_two_factor_rotates_session_cookie_and_deletes_old_session(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = seeded_router().await?;
+    let cookie = enable_totp(&adapter, &router).await?;
+    let old_token = signed_cookie_value(&cookie, "session_token")?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/two-factor/disable",
+            r#"{"password":"password123"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!user_enabled(adapter.as_ref()).await?);
+    let new_cookie = cookie_header_from_response(&response);
+    let new_token = signed_cookie_value(&new_cookie, "session_token")?;
+    assert_ne!(
+        old_token, new_token,
+        "disabling 2FA should rotate the session cookie"
+    );
+    assert!(
+        DbSessionStore::new(adapter.as_ref())
+            .find_session(&old_token)
+            .await?
+            .is_none(),
+        "old session should be deleted after rotation"
+    );
+    assert!(
+        DbSessionStore::new(adapter.as_ref())
+            .find_session(&new_token)
+            .await?
+            .is_some(),
+        "new session should be persisted"
+    );
     Ok(())
 }
 

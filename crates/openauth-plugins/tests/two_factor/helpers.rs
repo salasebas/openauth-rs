@@ -3,7 +3,9 @@ use std::sync::Arc;
 use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::{create_auth_context, create_auth_context_with_adapter};
-use openauth_core::cookies::{parse_set_cookie_header, set_session_cookie, SessionCookieOptions};
+use openauth_core::cookies::{
+    parse_set_cookie_header, set_session_cookie, verify_cookie_value, SessionCookieOptions,
+};
 use openauth_core::crypto::password::hash_password;
 use openauth_core::crypto::symmetric_decrypt;
 use openauth_core::db::{
@@ -218,6 +220,18 @@ pub(super) fn cookie_value_from_response(
             .into_iter()
             .find_map(|(name, cookie)| name.ends_with(name_suffix).then_some(cookie.value))
     })
+}
+
+pub(super) fn signed_cookie_value(
+    cookie_header: &str,
+    name_suffix: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let cookies = openauth_core::cookies::parse_cookies(cookie_header);
+    let value = cookies
+        .iter()
+        .find_map(|(name, value)| name.ends_with(name_suffix).then_some(value.as_str()))
+        .ok_or("missing signed cookie")?;
+    Ok(verify_cookie_value(value, secret())?.ok_or("invalid signed cookie")?)
 }
 
 pub(super) async fn two_factor_record(adapter: &MemoryAdapter) -> Result<DbRecord, OpenAuthError> {

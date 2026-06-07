@@ -12,6 +12,7 @@ use openauth_core::options::{
     AdvancedOptions, EmailPasswordOptions, EmailVerificationOptions, OpenAuthOptions,
     VerificationEmail,
 };
+use openauth_plugins::username::{UsernameOptions, ValidationOrder, ValidationPhase};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 
@@ -74,6 +75,45 @@ async fn username_availability_and_sign_in_use_normalized_username(
         .as_str()
         .is_some_and(|token| !token.is_empty()));
     assert_eq!(body["user"]["username"], "ada_user");
+    Ok(())
+}
+
+#[tokio::test]
+async fn username_availability_rejects_invalid_username_with_422(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router(adapter)?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/is-username-available",
+            r#"{"username":"ab"}"#,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["code"], "USERNAME_TOO_SHORT");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sign_up_rejects_empty_username() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router(adapter)?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"ada@example.com","password":"secret123","username":""}"#,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "USERNAME_TOO_SHORT");
     Ok(())
 }
 
@@ -270,6 +310,86 @@ async fn update_user_rejects_duplicate_username_with_different_casing(
 }
 
 #[tokio::test]
+async fn update_user_rejects_duplicate_username_owned_by_different_user(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router(adapter)?;
+    let _ada = sign_up_username(&router, "Ada", "ada@example.com", "ada_user").await?;
+    let (_grace, grace_cookie) =
+        sign_up_username(&router, "Grace", "grace@example.com", "grace_user").await?;
+
+    let response = router
+        .handle_async(json_request_with_cookie(
+            Method::POST,
+            "/api/auth/update-user",
+            r#"{"username":"ada_user"}"#,
+            Some(&grace_cookie),
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "USERNAME_IS_ALREADY_TAKEN");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sign_up_rejects_invalid_display_username() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router_with_username_options(
+        adapter,
+        UsernameOptions {
+            display_username_validator: Some(Arc::new(|display| !display.contains('!'))),
+            ..UsernameOptions::default()
+        },
+    )?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"ada@example.com","password":"secret123","username":"ada_user","displayUsername":"Ada!"}"#,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "INVALID_DISPLAY_USERNAME");
+    Ok(())
+}
+
+#[tokio::test]
+async fn post_normalization_validation_allows_sign_up_display_username_fallback(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router_with_username_options(
+        adapter,
+        UsernameOptions {
+            validation_order: ValidationOrder {
+                username: ValidationPhase::PostNormalization,
+                display_username: ValidationPhase::PreNormalization,
+            },
+            username_normalization: Some(Arc::new(|username| username.to_lowercase())),
+            ..UsernameOptions::default()
+        },
+    )?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"ada@example.com","password":"secret123","displayUsername":"Ada_User"}"#,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body["user"]["username"], "ada_user");
+    assert_eq!(body["user"]["display_username"], "Ada_User");
+    Ok(())
+}
+
+#[tokio::test]
 async fn update_user_normalizes_username_and_preserves_display_username(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(MemoryAdapter::new());
@@ -336,6 +456,25 @@ fn options() -> OpenAuthOptions {
         development: true,
         ..OpenAuthOptions::default()
     }
+}
+
+fn router_with_username_options(
+    adapter: Arc<MemoryAdapter>,
+    username_options: UsernameOptions,
+) -> Result<AuthRouter, OpenAuthError> {
+    router_with_options(
+        adapter,
+        OpenAuthOptions {
+            plugins: vec![openauth_plugins::username::username_with_options(
+                username_options,
+            )],
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            advanced: test_advanced_options(),
+            email_password: EmailPasswordOptions::new().enabled(true),
+            development: true,
+            ..OpenAuthOptions::default()
+        },
+    )
 }
 
 fn test_advanced_options() -> AdvancedOptions {

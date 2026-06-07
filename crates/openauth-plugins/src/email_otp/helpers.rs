@@ -67,7 +67,10 @@ pub(super) async fn verify_otp(
 ) -> Result<Option<ApiResponse>, OpenAuthError> {
     let store = DbVerificationStore::new(adapter);
     let verification = if consume {
-        match store.take_verification(identifier).await? {
+        match store
+            .take_verification_including_expired(identifier)
+            .await?
+        {
             Some(verification) => verification,
             None => {
                 return response::error(StatusCode::BAD_REQUEST, "INVALID_OTP", "Invalid OTP")
@@ -75,7 +78,10 @@ pub(super) async fn verify_otp(
             }
         }
     } else {
-        match store.find_verification(identifier).await? {
+        match store
+            .find_verification_including_expired(identifier)
+            .await?
+        {
             Some(verification) => verification,
             None => {
                 return response::error(StatusCode::BAD_REQUEST, "INVALID_OTP", "Invalid OTP")
