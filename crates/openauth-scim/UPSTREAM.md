@@ -73,12 +73,18 @@ Verify command: `cargo nextest run -p openauth-scim`
 
 | ID | Gap | Severity | Notes |
 | --- | --- | --- | --- |
-| SCIM-1 | Groups and Bulk have no Better Auth 1.6.9 oracle | Medium | Covered by Rust tests, but parity is OpenAuth-defined. |
-| SCIM-2 | Non-email `userName` values are rejected | Medium | Secure identity choice; can break IdPs that send opaque usernames. |
-| SCIM-3 | Bulk per-operation `If-Match` is not evaluated | Low | Direct `PUT`/`PATCH`/`DELETE` enforce weak ETags. |
-| SCIM-4 | Atomic Bulk depends on adapter transactions | Medium | Use SQL adapters with transaction support for production atomicity. |
-| SCIM-5 | Rate limiting lives outside this crate | Medium | Deploy SCIM routes behind OpenAuth/server rate-limit middleware. |
-| SCIM-6 | MongoDB adapter is not implemented | Low | Docker Compose has MongoDB for experiments only; no SCIM Mongo contract. |
+| SCIM-1 | No open Better Auth 1.6.9 server parity gaps | None | Re-audited against `packages/scim/src/`; open items below are intentional OpenAuth extensions or deployment/sibling-crate scope. |
+
+## Intentional Extension / Out-of-Scope Notes
+
+| ID | Topic | Status | Notes |
+| --- | --- | --- | --- |
+| SCIM-X1 | Groups and Bulk have no Better Auth 1.6.9 oracle | 🎯 Extension | Covered by Rust tests; behavior is OpenAuth-defined because upstream 1.6.9 does not implement these routes. |
+| SCIM-X2 | Non-email `userName` values are rejected | ➖ Intentional | Secure server identity choice for OpenAuth's email-centered user model; opaque IdP usernames remain out of scope for this crate. |
+| SCIM-X3 | Bulk per-operation version preconditions | ✅ | Bulk operations honor the SCIM `version` member for Users and Groups, including `PUT`/`PATCH`/`DELETE`; no per-operation HTTP `If-Match` header exists inside a SCIM Bulk request. |
+| SCIM-X4 | Atomic Bulk depends on adapter transactions | ➖ Deployment constraint | Use SQL adapters with transaction support for production atomicity; non-transactional adapters fail closed when atomic mode is requested. |
+| SCIM-X5 | Rate limiting lives outside this crate | ➖ Sibling/core scope | Route-level throttling belongs to OpenAuth/server middleware, not this SCIM plugin crate. |
+| SCIM-X6 | MongoDB adapter is not implemented | ➖ Sibling adapter scope | Better Auth's Mongo adapter is outside `openauth-scim`; Docker Compose MongoDB remains experimental and has no SCIM contract here. |
 
 ## Hardening Notes
 

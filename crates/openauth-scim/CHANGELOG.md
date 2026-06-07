@@ -14,9 +14,13 @@ All notable changes to `openauth-scim` are documented in this file.
   aligned with Better Auth) and list-filter evaluation paths.
 - Route and bulk tests for invalid `userName`, `failOnErrors: 0`, and extended
   list filters.
+- Bulk route test locking stale `version` rejection on user `DELETE` without
+  deprovisioning.
 
 ### Changed
 
+- Re-audited `UPSTREAM.md` against Better Auth 1.6.9; no open server parity gaps
+  remain, and former risk items are documented as extensions or out-of-scope notes.
 - Default `ScimOptions::token_storage` is now `Hashed` instead of `Plain`.
 - SCIM provider token rotation uses `upsert` to preserve provider row ids.
 
