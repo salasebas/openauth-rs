@@ -3,7 +3,8 @@ use std::sync::Arc;
 use http::{Method, StatusCode};
 use openauth_core::db::MemoryAdapter;
 use openauth_plugins::api_key::{
-    api_key_with_configurations, ApiKeyConfiguration, ApiKeyReference, UPSTREAM_PLUGIN_ID,
+    api_key_with_configurations, ApiKeyConfiguration, ApiKeyRateLimitOptions, ApiKeyReference,
+    UPSTREAM_PLUGIN_ID,
 };
 use serde_json::{json, Value};
 
@@ -86,5 +87,114 @@ async fn list_without_config_id_merges_user_keys_from_all_configurations(
     assert_eq!(listed.body["total"], 2);
     assert_eq!(listed.body["apiKeys"][0]["name"], "one");
     assert_eq!(listed.body["apiKeys"][1]["name"], "two");
+    Ok(())
+}
+
+#[tokio::test]
+async fn specific_config_id_controls_create_verify_get_update_and_delete(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let plugin = api_key_with_configurations(vec![
+        ApiKeyConfiguration {
+            config_id: Some("default".to_owned()),
+            default_prefix: Some("def_".to_owned()),
+            rate_limit: ApiKeyRateLimitOptions {
+                max_requests: 10,
+                ..ApiKeyRateLimitOptions::default()
+            },
+            ..ApiKeyConfiguration::default()
+        },
+        ApiKeyConfiguration {
+            config_id: Some("public-api".to_owned()),
+            default_prefix: Some("pub_".to_owned()),
+            rate_limit: ApiKeyRateLimitOptions {
+                max_requests: 15,
+                ..ApiKeyRateLimitOptions::default()
+            },
+            ..ApiKeyConfiguration::default()
+        },
+    ])?;
+    let router = test_router(adapter, plugin)?;
+    let user = sign_up(&router, "Cfg", "cfg-api@example.com").await?;
+
+    let created = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/create",
+        json!({"configId":"public-api","name":"public-key"}),
+        Some(&user.cookie),
+        None,
+    )
+    .await?;
+    assert_eq!(created.status, StatusCode::OK);
+    assert_eq!(created.body["configId"], "public-api");
+    assert_eq!(created.body["prefix"], "pub_");
+    assert_eq!(created.body["rateLimitMax"], 15);
+    let key = created.body["key"].as_str().ok_or("missing key")?;
+    let key_id = created.body["id"].as_str().ok_or("missing id")?;
+
+    let verified = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/verify",
+        json!({"configId":"public-api","key": key}),
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(verified.status, StatusCode::OK);
+    assert_eq!(verified.body["valid"], true);
+    assert_eq!(verified.body["key"]["configId"], "public-api");
+    assert_eq!(verified.body["key"]["rateLimitMax"], 15);
+
+    let listed = request_json(
+        &router,
+        Method::GET,
+        "/api/auth/api-key/list?configId=public-api",
+        Value::Null,
+        Some(&user.cookie),
+        None,
+    )
+    .await?;
+    assert_eq!(listed.status, StatusCode::OK);
+    assert_eq!(listed.body["total"], 1);
+    assert_eq!(listed.body["apiKeys"][0]["id"], key_id);
+
+    let fetched = request_json(
+        &router,
+        Method::GET,
+        &format!("/api/auth/api-key/get?configId=public-api&id={key_id}"),
+        Value::Null,
+        Some(&user.cookie),
+        None,
+    )
+    .await?;
+    assert_eq!(fetched.status, StatusCode::OK);
+    assert_eq!(fetched.body["configId"], "public-api");
+
+    let updated = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/update",
+        json!({"configId":"public-api","keyId": key_id, "name":"updated-public"}),
+        Some(&user.cookie),
+        None,
+    )
+    .await?;
+    assert_eq!(updated.status, StatusCode::OK);
+    assert_eq!(updated.body["configId"], "public-api");
+    assert_eq!(updated.body["name"], "updated-public");
+
+    let deleted = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/delete",
+        json!({"configId":"public-api","keyId": key_id}),
+        Some(&user.cookie),
+        None,
+    )
+    .await?;
+    assert_eq!(deleted.status, StatusCode::OK);
+    assert_eq!(deleted.body["success"], true);
     Ok(())
 }

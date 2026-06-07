@@ -540,6 +540,54 @@ async fn verification_enforces_permissions() -> Result<(), Box<dyn std::error::E
 }
 
 #[tokio::test]
+async fn verification_reports_invalid_key_and_missing_permissions(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = super::helpers::test_router(adapter, api_key())?;
+    let user = sign_up(&router, "NoPerm", "noperm-api@example.com").await?;
+
+    let invalid = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/verify",
+        json!({"key": "not-a-real-key"}),
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(invalid.status, StatusCode::OK);
+    assert_eq!(invalid.body["valid"], false);
+    assert_eq!(invalid.body["error"]["code"], INVALID_API_KEY);
+
+    let created = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/create",
+        json!({"name":"no-permissions"}),
+        Some(&user.cookie),
+        None,
+    )
+    .await?;
+    assert_eq!(created.status, StatusCode::OK);
+    let key = created.body["key"].as_str().ok_or("missing api key")?;
+    assert!(created.body["permissions"].is_null());
+
+    let denied = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/verify",
+        json!({"key": key, "permissions": {"post": ["read"]}}),
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(denied.status, StatusCode::OK);
+    assert_eq!(denied.body["valid"], false);
+    assert_eq!(denied.body["error"]["code"], KEY_NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
 async fn default_permissions_resolver_is_applied_on_create(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use openauth_core::context::AuthContext;

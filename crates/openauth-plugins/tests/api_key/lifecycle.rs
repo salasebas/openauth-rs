@@ -6,8 +6,8 @@ use openauth_plugins::api_key::{
     api_key, api_key_with_configurations, api_key_with_options, ApiKeyConfiguration,
     ApiKeyExpirationOptions, ApiKeyOptions, ApiKeyReference, StartingCharactersConfig,
     API_KEY_MODEL, EXPIRES_IN_IS_TOO_LARGE, EXPIRES_IN_IS_TOO_SMALL, INVALID_PREFIX_LENGTH,
-    NAME_REQUIRED, NO_VALUES_TO_UPDATE, REFILL_INTERVAL_AND_AMOUNT_REQUIRED, SERVER_ONLY_PROPERTY,
-    UNAUTHORIZED_SESSION,
+    KEY_NOT_FOUND, NAME_REQUIRED, NO_VALUES_TO_UPDATE, REFILL_INTERVAL_AND_AMOUNT_REQUIRED,
+    SERVER_ONLY_PROPERTY, UNAUTHORIZED_SESSION,
 };
 use serde_json::{json, Value};
 
@@ -153,6 +153,75 @@ async fn list_api_keys_preserves_total_when_paginated() -> Result<(), Box<dyn st
     assert_eq!(listed.body["total"], 3);
     assert_eq!(listed.body["apiKeys"].as_array().map(Vec::len), Some(1));
     assert_eq!(listed.body["apiKeys"][0]["name"], "beta");
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_get_and_delete_auth_and_missing_key_errors() -> Result<(), Box<dyn std::error::Error>>
+{
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = test_router(adapter, api_key())?;
+    let user = sign_up(&router, "Auth", "auth-api@example.com").await?;
+
+    let created = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/create",
+        json!({"name":"owned"}),
+        Some(&user.cookie),
+        None,
+    )
+    .await?;
+    assert_eq!(created.status, StatusCode::OK);
+    let key_id = created.body["id"].as_str().ok_or("missing key id")?;
+
+    let unauth_list = request_json(
+        &router,
+        Method::GET,
+        "/api/auth/api-key/list",
+        Value::Null,
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(unauth_list.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(unauth_list.body["code"], UNAUTHORIZED_SESSION);
+
+    let unauth_delete = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/delete",
+        json!({"keyId": key_id}),
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(unauth_delete.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(unauth_delete.body["code"], UNAUTHORIZED_SESSION);
+
+    let missing_get = request_json(
+        &router,
+        Method::GET,
+        "/api/auth/api-key/get?id=missing",
+        Value::Null,
+        Some(&user.cookie),
+        None,
+    )
+    .await?;
+    assert_eq!(missing_get.status, StatusCode::NOT_FOUND);
+    assert_eq!(missing_get.body["code"], KEY_NOT_FOUND);
+
+    let missing_delete = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/delete",
+        json!({"keyId": "missing"}),
+        Some(&user.cookie),
+        None,
+    )
+    .await?;
+    assert_eq!(missing_delete.status, StatusCode::NOT_FOUND);
+    assert_eq!(missing_delete.body["code"], KEY_NOT_FOUND);
     Ok(())
 }
 
@@ -561,6 +630,42 @@ async fn server_update_allows_explicit_null_expiration_and_permissions(
     assert_eq!(updated.status, StatusCode::OK);
     assert!(updated.body["expiresAt"].is_null());
     assert!(updated.body["permissions"].is_null());
+    Ok(())
+}
+
+#[tokio::test]
+async fn updating_key_metadata_does_not_touch_usage_fields(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = test_router(adapter, api_key())?;
+    let user = sign_up(&router, "Usage", "usage-api@example.com").await?;
+    let created = server_request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/create",
+        json!({"name":"usage","userId": user.user_id, "remaining": 5}),
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(created.status, StatusCode::OK);
+    assert_eq!(created.body["remaining"], 5);
+    assert!(created.body["lastRequest"].is_null());
+    let key_id = created.body["id"].as_str().ok_or("missing key id")?;
+
+    let updated = request_json(
+        &router,
+        Method::POST,
+        "/api/auth/api-key/update",
+        json!({"keyId": key_id, "name":"usage-renamed"}),
+        Some(&user.cookie),
+        None,
+    )
+    .await?;
+    assert_eq!(updated.status, StatusCode::OK);
+    assert_eq!(updated.body["name"], "usage-renamed");
+    assert_eq!(updated.body["remaining"], 5);
+    assert!(updated.body["lastRequest"].is_null());
     Ok(())
 }
 
