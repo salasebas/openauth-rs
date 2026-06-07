@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use http::{HeaderValue, Method, StatusCode};
-use openauth_core::db::{DbAdapter, DbValue, Delete, FindMany, FindOne, Where};
+use openauth_core::db::{Create, DbAdapter, DbValue, Delete, FindMany, FindOne, Where};
 use openauth_core::options::{AdvancedOptions, IpAddressOptions};
 use openauth_passkey::{
     PasskeyAuthenticationOptions, PasskeyAuthenticationRejected, PasskeyOptions,
@@ -72,6 +72,74 @@ async fn generate_authenticate_options_includes_legacy_credential_ids_in_allow_l
     assert!(
         allow_credentials_contains_id(allowed, "legacy-credential-id"),
         "legacy credential id must be allowed: {allowed:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn generate_authenticate_options_omits_corrupt_legacy_public_key_rows(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router, _backend) = seeded_router(PasskeyOptions::default()).await?;
+    let session_cookie = sign_in_cookie(&router).await?;
+    seed_legacy_passkey(
+        adapter.as_ref(),
+        "legacy-passkey",
+        "user_1",
+        "Legacy",
+        "legacy-credential-id",
+    )
+    .await?;
+    adapter
+        .create(
+            Create::new("passkey")
+                .data("id", DbValue::String("corrupt-legacy-passkey".to_owned()))
+                .data("name", DbValue::String("Corrupt legacy".to_owned()))
+                .data(
+                    "public_key",
+                    DbValue::String("not-valid-base64-cose".to_owned()),
+                )
+                .data("user_id", DbValue::String("user_1".to_owned()))
+                .data(
+                    "credential_id",
+                    DbValue::String("corrupt-legacy-credential-id".to_owned()),
+                )
+                .data("counter", DbValue::Number(0))
+                .data("device_type", DbValue::String("singleDevice".to_owned()))
+                .data("backed_up", DbValue::Boolean(false))
+                .data("transports", DbValue::String("internal".to_owned()))
+                .data(
+                    "created_at",
+                    DbValue::Timestamp(time::OffsetDateTime::now_utc()),
+                )
+                .data("aaguid", DbValue::Null)
+                .data("webauthn_credential", DbValue::Null)
+                .force_allow_id(),
+        )
+        .await?;
+
+    let response = router
+        .handle_async(empty_request(
+            Method::GET,
+            "/api/auth/passkey/generate-authenticate-options",
+            Some(&session_cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(response.body())?;
+    let Some(allowed) = body
+        .get("allowCredentials")
+        .and_then(|value| value.as_array())
+    else {
+        return Err(format!("allowCredentials missing: {body:?}").into());
+    };
+    assert!(
+        allow_credentials_contains_id(allowed, "legacy-credential-id"),
+        "valid legacy credential id must be allowed: {allowed:?}"
+    );
+    assert!(
+        !allow_credentials_contains_id(allowed, "corrupt-legacy-credential-id"),
+        "corrupt legacy credential id must be omitted: {allowed:?}"
     );
     Ok(())
 }

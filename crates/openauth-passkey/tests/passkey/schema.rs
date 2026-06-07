@@ -1,7 +1,7 @@
 use openauth_core::context::create_auth_context;
 use openauth_core::db::DbFieldType;
 use openauth_core::options::OpenAuthOptions;
-use openauth_passkey::{passkey, PasskeyOptions};
+use openauth_passkey::{passkey, PasskeyOptions, PasskeySchemaOptions};
 
 #[test]
 fn passkey_plugin_registers_snake_case_plural_schema() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,6 +43,60 @@ fn passkey_plugin_registers_snake_case_plural_schema() -> Result<(), Box<dyn std
             .map(|code| code.message.as_str()),
         Some("Challenge not found")
     );
+
+    Ok(())
+}
+
+#[test]
+fn passkey_schema_options_rename_table_and_database_fields(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(OpenAuthOptions {
+        plugins: vec![passkey(
+            PasskeyOptions::default().schema(
+                PasskeySchemaOptions::new()
+                    .table_name("auth_passkeys")
+                    .field_name("public_key", "publicKey")
+                    .field_name("credential_id", "credentialID")
+                    .field_name("user_id", "userId")
+                    .field_name("device_type", "deviceType")
+                    .field_name("backed_up", "backedUp"),
+            ),
+        )],
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    })?;
+
+    let table = context
+        .db_schema
+        .table("passkey")
+        .ok_or("missing passkey table")?;
+    assert_eq!(table.name, "auth_passkeys");
+
+    assert_eq!(
+        context.db_schema.field_name("passkey", "public_key")?,
+        "publicKey"
+    );
+    assert_eq!(
+        context.db_schema.field_name("passkey", "credential_id")?,
+        "credentialID"
+    );
+    assert_eq!(
+        context.db_schema.field_name("auth_passkeys", "user_id")?,
+        "userId"
+    );
+    assert_eq!(
+        context.db_schema.field_name("passkey", "device_type")?,
+        "deviceType"
+    );
+    assert_eq!(
+        context.db_schema.field_name("passkey", "backed_up")?,
+        "backedUp"
+    );
+
+    let credential_id = context.db_schema.field("passkey", "credential_id")?;
+    assert_eq!(credential_id.field_type, DbFieldType::String);
+    assert!(credential_id.index);
+    assert!(credential_id.unique);
 
     Ok(())
 }

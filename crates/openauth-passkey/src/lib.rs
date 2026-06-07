@@ -38,8 +38,9 @@ pub use options::{
     AuthenticatorAttachment, AuthenticatorSelection, PasskeyAdvancedOptions,
     PasskeyAuthenticationOptions, PasskeyAuthenticationRejected, PasskeyChallengeRateLimit,
     PasskeyExtensionsInput, PasskeyManagementOptions, PasskeyOptions, PasskeyRateLimit,
-    PasskeyRegistrationOptions, PasskeyRegistrationUser, RegistrationWebAuthnOptions,
-    ResidentKeyRequirement, ResolveRegistrationUserInput, UserVerificationRequirement,
+    PasskeyRegistrationOptions, PasskeyRegistrationUser, PasskeySchemaOptions,
+    RegistrationWebAuthnOptions, ResidentKeyRequirement, ResolveRegistrationUserInput,
+    UserVerificationRequirement,
 };
 pub use store::Passkey;
 pub use webauthn::{
@@ -67,7 +68,7 @@ pub fn passkey(options: PasskeyOptions) -> AuthPlugin {
     for path in RATE_LIMITED_CEREMONY_PATHS {
         plugin = plugin.with_rate_limit(PluginRateLimitRule::new(*path, rate_limit_rule.clone()));
     }
-    for contribution in schema::contributions(&options.passkey_table) {
+    for contribution in schema::contributions(&options) {
         plugin = plugin.with_schema(contribution);
     }
     for code in errors::plugin_error_codes() {

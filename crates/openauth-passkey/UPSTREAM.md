@@ -25,7 +25,7 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | Authentication options | ✅ | `GET /passkey/generate-authenticate-options`; supports session-scoped allow lists and discoverable credentials without a session. |
 | Authentication verification | ✅ | `POST /passkey/verify-authentication`; verifies credential, updates counter, creates a session, returns `{ session, user }`, and consumes the challenge. |
 | Passkey management | ✅ | `GET /passkey/list-user-passkeys`, `POST /passkey/update-passkey`, and `POST /passkey/delete-passkey` match upstream paths and response shapes. |
-| Schema contribution | ⚠️ | Same logical passkey model, but OpenAuth uses `passkeys` and snake_case database columns with a hidden `webauthn_credential` JSON field. |
+| Schema contribution | ✅ | Same logical passkey model; OpenAuth defaults to `passkeys` and snake_case database columns, supports physical table/column renames through `PasskeySchemaOptions`, and adds a hidden `webauthn_credential` JSON field for `webauthn-rs`. |
 | Error codes | ✅ | All 14 upstream `PASSKEY_ERROR_CODES` are exported as plugin metadata. |
 | Version metadata | ✅ | Upstream exposes the package version from `src/version.ts`; OpenAuth sets the plugin version from `CARGO_PKG_VERSION`. |
 
@@ -37,16 +37,16 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | Authentication routes | `tests/passkey/authenticate.rs` | `packages/passkey/src/passkey.test.ts` | Covers discoverable credentials, session allow lists, counter updates, session creation, credential enumeration resistance, replay rejection, and missing-origin failures. |
 | Management routes | `tests/passkey/management.rs` | `packages/passkey/src/passkey.test.ts` | Covers list/update/delete, missing passkeys, cross-user ownership, and OpenAuth's fresh-session hardening. |
 | Rate limits and cookies | `tests/passkey/rate_limit.rs`, `tests/passkey/cookie_config.rs` | Global Better Auth limiter behavior, no dedicated upstream package tests | OpenAuth adds ceremony and per-challenge limits plus cookie prefix/attribute tests. |
-| Schema and adapters | `tests/passkey/schema.rs`, `tests/passkey/sql.rs`, `tests/passkey/sqlite.rs`, `tests/passkey/secondary_storage.rs` | Upstream adapter behavior through Better Auth test harness | Covers plural table name, unique credential ID indexes, SQLite/Postgres/MySQL migrations, and secondary storage for shared deployments. |
+| Schema and adapters | `tests/passkey/schema.rs`, `tests/passkey/sql.rs`, `tests/passkey/sqlite.rs`, `tests/passkey/secondary_storage.rs` | Upstream adapter behavior through Better Auth test harness | Covers plural table name, physical schema renames, unique credential ID indexes, SQLite/Postgres/MySQL migrations, and secondary storage for shared deployments. |
 | OpenAPI and WebAuthn config | `tests/passkey/openapi.rs`, `tests/passkey/webauthn_config.rs`, `src/webauthn.rs` unit tests | Upstream route metadata and SimpleWebAuthn behavior | Covers operation metadata, RP ID/origin derivation, fail-closed config, and `webauthn-rs` option/verification shape. |
-| Counts and verify command | 89 Rust `#[test]` / `#[tokio::test]` functions | 17 upstream server Vitest cases plus 1 Node smoke test under `e2e/smoke/test/passkey-preauth.spec.ts` | Verify with `cargo nextest run -p openauth-passkey`. The installed nextest may not support `-- --list-tests`; use `rg '#\[(test|tokio::test)\]' crates/openauth-passkey` for a static count. |
+| Counts and verify command | 96 Rust `#[test]` / `#[tokio::test]` functions | 17 upstream server Vitest cases plus 1 Node smoke test under `e2e/smoke/test/passkey-preauth.spec.ts` | Verify with `cargo nextest run -p openauth-passkey`. The installed nextest may not support `-- --list-tests`; use `rg '#\[(test|tokio::test)\]' crates/openauth-passkey` for a static count. |
 
 ## Intentional Differences
 
 | Topic | Better Auth | OpenAuth | Why |
 | --- | --- | --- | --- |
 | WebAuthn backend | Uses `@simplewebauthn/server`. | Uses `webauthn-rs`. | Idiomatic Rust cryptographic verification while preserving observable HTTP behavior. |
-| Database naming | Model `passkey` with camelCase fields such as `publicKey`, `userId`, and `credentialID`. | Table defaults to `passkeys` with snake_case columns; public JSON remains camelCase and keeps `credentialID`. | Rust/database convention internally without breaking public HTTP contracts. |
+| Database naming | Model `passkey` with camelCase fields such as `publicKey`, `userId`, and `credentialID`; `options.schema` can customize adapter names through `mergeSchema`. | Table defaults to `passkeys` with snake_case columns; public JSON remains camelCase and keeps `credentialID`; `PasskeySchemaOptions` customizes physical table/column names. | Rust/database convention internally without breaking public HTTP contracts. |
 | Stored credential state | Stores the base64 COSE public key and passkey metadata. | Stores the same public fields plus hidden `webauthn_credential` JSON. | `webauthn-rs` needs full credential state for secure authentication and counter updates. |
 | Challenge lifecycle | Signed `better-auth-passkey` cookie references a 5 minute verification record. | Same cookie and TTL, but verification records are consumed atomically. | Prevent challenge replay and make verification one-time-use. |
 | Authentication failures | Unknown credentials can return `PASSKEY_NOT_FOUND`. | Unknown, invalid, and out-of-session credentials return `AUTHENTICATION_FAILED`. | Reduce credential-ID enumeration on an auth boundary. |
@@ -57,10 +57,10 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 
 | ID | Gap | Severity | Notes |
 | --- | --- | --- | --- |
-| PK-1 | `options.schema` / `mergeSchema` field renames are not ported. | Low | Use `PasskeyOptions::passkey_table` and OpenAuth schema contributions instead. |
-| PK-2 | Multi-origin/proxy configuration can break WebAuthn if misconfigured. | Medium | Set stable public `base_url`, `origin`, and `rp_id`; tests cover missing-origin/RP-ID fail-closed paths. |
-| PK-3 | In-memory storage is not safe for multi-instance production. | Medium | Share adapter or secondary storage for verification records, challenge limits, and sessions. |
-| PK-4 | Legacy `publicKey`-only rows with invalid or unsupported COSE keys cannot authenticate until re-registered. | Low | Valid legacy rows are reconstructed at authentication time and backfilled after success; corrupt rows are omitted from `allowCredentials`. |
+| PK-1 | Closed: physical passkey schema renames are ported. | Low | `PasskeySchemaOptions` maps the logical `passkey` model to custom database table/column names, covering the server-observable portion of Better Auth `options.schema` / `mergeSchema`; arbitrary TypeScript type metadata is client/tooling scope and intentionally out of scope. |
+| PK-2 | Deployment risk: multi-origin/proxy configuration can break WebAuthn if misconfigured. | Medium | Intentional fail-closed behavior. Set stable public `base_url`, `origin`, and `rp_id`; tests cover missing-origin/RP-ID fail-closed paths. |
+| PK-3 | Deployment risk: in-memory storage is not safe for multi-instance production. | Medium | Intentional OpenAuth boundary. Share adapter or secondary storage for verification records, challenge limits, and sessions. |
+| PK-4 | Data migration risk: legacy `publicKey`-only rows with invalid or unsupported COSE keys cannot authenticate until re-registered. | Low | Intentional cryptographic boundary. Valid legacy rows are reconstructed at authentication time and backfilled after success; corrupt rows are omitted from `allowCredentials`. |
 
 ## Hardening
 

@@ -4,6 +4,13 @@ All notable changes to `openauth-passkey` are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added `PasskeySchemaOptions` and `PasskeyOptions::schema` to customize the
+  physical passkey table and column names, covering the server-observable
+  portion of Better Auth `options.schema` / `mergeSchema` field renames while
+  keeping route and store logic on logical snake_case names.
+
 ### Changed
 
 - Authentication `after_verification` callbacks now return
@@ -18,6 +25,8 @@ All notable changes to `openauth-passkey` are documented in this file.
   instead of being advertised in `allowCredentials` but failing at verify time.
   Successful authentication backfills `webauthn_credential` via the existing
   counter update path.
+- Session-scoped authentication options omit legacy passkey rows with corrupt or
+  unsupported COSE `public_key` values from `allowCredentials`.
 - WebAuthn registration/authentication now returns `InvalidConfig` when origin,
   `rp_id`, or derivations are missing instead of defaulting to localhost.
 - Passkey management mutations require a fresh session; authentication rejects
