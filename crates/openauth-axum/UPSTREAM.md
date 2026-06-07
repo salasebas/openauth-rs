@@ -30,15 +30,15 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | `auth.handler(Request)` pass-through | ✅ | `handle_ref` → `auth.handler_async` (`src/router.rs`) |
 | Catch-all mount under `base_path` | ✅ | `Router::nest` + `any()`; `/` and empty `base_path` supported |
 | Per-method handler maps (Next/Solid) | 🎯 | Single `any()` catch-all; same routes, different Axum idiom |
-| `svelteKitHandler` / `isAuthPath` middleware | ⚠️ | Upstream filters in app middleware; OpenAuth expects explicit `nest` at `base_path` |
+| `svelteKitHandler` / `isAuthPath` middleware | ➖ | SvelteKit-only app middleware; Axum uses explicit `router` / `nest` at `base_path` |
 | Headers / status / body / `Set-Cookie` | ✅ | Multi-value headers and extensions preserved (`http_contract.rs`) |
 | Request body collection + limit | 🎯 | 10 MiB default; JSON `413 PAYLOAD_TOO_LARGE` (`body_limit.rs`) |
 | `ConnectInfo` client IP | ✅ | Injected as `RequestClientIp`; spoofed `x-forwarded-for` ignored by default |
-| `base_url` inference (unconfigured) | ⚠️ | Opt-in `infer_base_url_from_request`; proxy trust is a separate adapter flag |
+| `base_url` inference (unconfigured) | 🎯 | Opt-in `infer_base_url_from_request`; proxy trust is a separate adapter flag |
 | Forwarded header validation | ✅ | Malicious `x-forwarded-*` rejected; falls back to `Host` (`router.rs`, `social.rs`) |
 | `base_url` ↔ `base_path` consistency | 🎯 | Build-time router validation before mount (`routing.rs`) |
 | `fromNodeHeaders` | 🎯 | Node `IncomingHttpHeaders` helper not exposed; Axum uses native `HeaderMap` |
-| `toNodeHandler` (`better-call/node`) | ⚠️ | Behavioral analogue only; Axum-native request/response path instead |
+| `toNodeHandler` (`better-call/node`) | ➖ | Node-specific helper; Axum-native request/response bridge is the Rust adapter surface |
 | Dynamic multi-tenant `baseURL` config | ➖ | Upstream `BetterAuthOptions.baseURL` object; see `openauth-core` |
 
 ## Test coverage
@@ -46,11 +46,11 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | Surface | OpenAuth (Rust) | Upstream | Notes |
 | --- | --- | --- | --- |
 | Adapter unit tests | 10 | — | `src/router.rs` (base path, inference, validation) |
-| Adapter integration tests | 41 | — | `routing.rs` (15), `adapter_regression.rs` (10), `body_limit.rs` (2), `http_contract.rs` (4), `security.rs` (6), `social.rs` (4) |
+| Adapter integration tests | 42 | — | `routing.rs` (15), `adapter_regression.rs` (10), `body_limit.rs` (3), `http_contract.rs` (4), `security.rs` (6), `social.rs` (4) |
 | End-to-end through Axum mount | 22 | — | `security_upstream.rs` (8), `password.rs` (3), `error_contract.rs` (3), `email_*.rs` (5), others (3) |
 | Integration handler Vitest | — | **0** | No server-handler tests under `src/integrations/` |
-| Related `auth.handler` proxy/base URL | partial | **5** `it()` | `to-auth-endpoints.test.ts` `trustedProxyHeaders` block only — core scope |
-| **Total (this crate)** | **73** | **0** (integrations) | Verify below |
+| Related `auth.handler` proxy/base URL | adapter overlap | **5** `it()` | Adapter behavior covered by `social.rs` / `security.rs`; `to-auth-endpoints.test.ts` pipeline coverage is core scope |
+| **Total (this crate)** | **74** | **0** (integrations) | Verify below |
 
 ```bash
 cargo nextest run -p openauth-axum
@@ -69,13 +69,16 @@ cargo nextest run -p openauth-axum
 
 ## Open gaps and risks
 
-| ID | Gap / risk | Severity | Notes |
+No open server-side Axum adapter gaps remain for the Better Auth 1.6.9
+integration surface.
+
+| ID | Previous gap / risk | Status | Notes |
 | --- | --- | --- | --- |
-| G1 | No test for body-consuming Tower middleware before auth routes | Med | Documented in README; mirrors Express JSON ordering hazard |
-| G2 | Production omitting `into_make_service_with_connect_info` | Med | Rate limits need `ConnectInfo` or trusted proxy IP headers |
-| G3 | `svelteKitHandler` / `isAuthPath` not ported | Low | Different mount pattern; use `router`/`nest` instead |
-| G4 | `better-call/node` not in reference tree | Low | `toNodeHandler` behavior inferred from usage in plugin tests only |
-| G5 | No 1:1 map to `to-auth-endpoints.test.ts` proxy suite | Low | Partial overlap via `social.rs` / `security.rs`; remainder is core scope |
+| G1 | Body-consuming Tower middleware before auth routes | Closed | Covered by `body_limit.rs`; empty drained bodies return stable `400 INVALID_REQUEST_BODY` JSON. README still warns users not to order such middleware before auth routes. |
+| G2 | Production omitting `into_make_service_with_connect_info` | Closed | Covered by `security.rs` and `adapter_regression.rs`; production rate limits use `ConnectInfo`, and a real TCP listener test verifies `into_make_service_with_connect_info::<SocketAddr>()`. |
+| G3 | `svelteKitHandler` / `isAuthPath` not ported | Out of scope | SvelteKit app middleware filters requests before framework resolve; Axum composition uses explicit `router` / `nest` at `base_path`. No client or SvelteKit helper belongs in this crate. |
+| G4 | `better-call/node` not in reference tree | Out of scope | Node `IncomingMessage` / `ServerResponse` adaptation is external npm scope. `openauth-axum` owns the Axum-native `Request<Body>` / `Response<Body>` bridge instead. |
+| G5 | No 1:1 map to `to-auth-endpoints.test.ts` proxy suite | Core scope | `to-auth-endpoints.test.ts` exercises endpoint pipeline and trusted-proxy core behavior. Adapter-relevant proxy behavior is covered by `social.rs` / `security.rs`; the full suite is tracked in `openauth-core`. |
 
 ## Hardening notes
 
@@ -118,7 +121,7 @@ cargo nextest run -p openauth-axum
 | --- | --- |
 | `tests/routing.rs`, `tests/adapter_regression.rs` | Handler mount + extensions + plugins through HTTP |
 | `tests/http_contract.rs` | Response preservation through `auth.handler` |
-| `tests/body_limit.rs` | Adapter-only (no upstream integration equivalent) |
+| `tests/body_limit.rs` | Adapter-only body collection, limit, and drained-body ordering hazard |
 | `tests/security.rs`, `tests/social.rs` | `to-auth-endpoints.test.ts` proxy/base URL scenarios (partial) |
 | `tests/security_upstream.rs`, auth flow tests | Core routes through mount (not integration-package scope) |
 

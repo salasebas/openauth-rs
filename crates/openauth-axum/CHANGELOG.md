@@ -4,6 +4,11 @@ All notable changes to `openauth-axum` are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Added parity coverage for body-consuming Tower middleware ordered before auth
+  routes, locking the stable JSON error returned for drained request bodies.
+
 ### Fixed
 
 - Fixed request base URL inference so request-derived `Host` values are not

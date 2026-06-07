@@ -1,8 +1,10 @@
 mod common;
 
-use axum::http::{Method, StatusCode};
+use axum::body::{to_bytes, Body};
+use axum::http::{Method, Request, Response, StatusCode};
+use axum::middleware::{self, Next};
 use common::*;
-use openauth::OpenAuthOptions;
+use openauth::{MemoryAdapter, OpenAuthOptions};
 use openauth_axum::{router_with_options, OpenAuthAxumOptions};
 use tower::ServiceExt;
 
@@ -55,4 +57,34 @@ async fn configurable_body_limit_allows_requests_within_limit(
 
     assert_ne!(response.status(), StatusCode::BAD_REQUEST);
     Ok(())
+}
+
+#[tokio::test]
+async fn body_consuming_middleware_before_auth_routes_returns_stable_json_error(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let app = router_with_options(
+        auth_with_adapter(MemoryAdapter::new(), OpenAuthOptions::default())?,
+        OpenAuthAxumOptions::default(),
+    )?
+    .layer(middleware::from_fn(drain_body_before_auth));
+
+    let response = app
+        .oneshot(json_request(
+            Method::POST,
+            "/api/auth/sign-in/email",
+            r#"{"email":"ada@example.com","password":"secret123"}"#,
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(response).await?;
+    assert_eq!(body["code"], "INVALID_REQUEST_BODY");
+    Ok(())
+}
+
+async fn drain_body_before_auth(request: Request<Body>, next: Next) -> Response<Body> {
+    let (parts, body) = request.into_parts();
+    let _ = to_bytes(body, BODY_LIMIT).await;
+    next.run(Request::from_parts(parts, Body::empty())).await
 }
