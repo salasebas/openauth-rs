@@ -956,6 +956,65 @@ async fn bulk_route_rejects_stale_operation_version() {
 }
 
 #[tokio::test]
+async fn bulk_delete_user_rejects_stale_operation_version_without_deprovisioning() {
+    let (adapter, router) = router_with_adapter().expect("router should build");
+    ScimProviderStore::new(adapter.as_ref())
+        .create(CreateScimProviderInput {
+            provider_id: "okta".to_owned(),
+            scim_token: "base-token".to_owned(),
+            organization_id: None,
+            user_id: None,
+        })
+        .await
+        .expect("provider should create");
+    let token = encode_bearer_token("base-token", "okta", None);
+    let created = router
+        .handle_async(json_request(
+            Method::POST,
+            "/scim/v2/Users",
+            r#"{"userName":"bulk-delete-version@example.com"}"#,
+            Some(&token),
+        ))
+        .await
+        .expect("request should succeed");
+    let user_id = json_body(created)["id"].as_str().expect("id").to_owned();
+
+    let stale_delete = router
+        .handle_async(json_request(
+            Method::POST,
+            "/scim/v2/Bulk",
+            &format!(
+                r#"{{
+                    "schemas":["urn:ietf:params:scim:api:messages:2.0:BulkRequest"],
+                    "Operations":[{{
+                        "method":"DELETE",
+                        "path":"/Users/{user_id}",
+                        "version":"W/\"stale\""
+                    }}]
+                }}"#
+            ),
+            Some(&token),
+        ))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(stale_delete.status(), StatusCode::OK);
+    let stale_body = json_body(stale_delete);
+    assert_eq!(stale_body["Operations"][0]["status"]["code"], 412);
+    assert_eq!(stale_body["Operations"][0]["response"]["status"], "412");
+
+    let fetched = router
+        .handle_async(auth_request(
+            Method::GET,
+            &format!("/scim/v2/Users/{user_id}"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(fetched.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn bulk_group_membership_patch_advances_version_and_rejects_stale_operation_version() {
     let (adapter, router, context) =
         router_with_context_and_organization(crate::scim_options_for_manual_provider_tokens())
