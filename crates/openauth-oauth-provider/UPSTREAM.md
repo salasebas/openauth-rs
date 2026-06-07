@@ -13,6 +13,8 @@
 
 `openauth-oauth-provider` ports the Better Auth OAuth provider server plugin into idiomatic Rust. This document covers only runtime server behavior: endpoint contracts, storage models, option validation, token handling, OAuth client management, consent management, metadata, rate-limit contributions, and MCP protected-resource helpers.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature Parity
 
 | Area | Status | Notes |

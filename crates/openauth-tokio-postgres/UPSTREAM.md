@@ -21,6 +21,8 @@ database-backed rate limits match upstream observable behavior. Intentional diff
 idiomatic Rust (explicit connection ownership, fail-closed migrations, escaped LIKE patterns)
 and a transaction gate instead of a pool.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature parity
 
 | Area | Status | Notes |

@@ -13,6 +13,8 @@ observable server behavior, then extends it with Groups, Bulk, `.search`,
 projection, sorting, pagination, weak ETags, audit hooks, and SCIM profile
 tables.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature Parity
 
 | Area | Status | Notes |

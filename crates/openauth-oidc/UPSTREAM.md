@@ -12,6 +12,8 @@
 
 `openauth-oidc` matches the Better Auth 1.6.9 server-side OIDC discovery helper surface where it belongs in OpenAuth: validating and hydrating external IdP configuration before `openauth-sso` uses it. It intentionally excludes SSO routes, provider storage, ID token validation, UserInfo exchange, account linking, sessions, and organization provisioning. Those server-side flows are audited as `openauth-sso` boundaries below.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature Parity
 
 | Area | Status | Notes |

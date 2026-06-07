@@ -23,6 +23,8 @@ keys under `secondary:`, adds `set_if_not_exists`/`take`, and uses different
 of upstream JSON blobs in secondary KV when `rateLimit.storage` defaults to
 `secondary-storage`.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature parity
 
 | Area | Status | Notes |

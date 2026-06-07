@@ -23,6 +23,8 @@ crypto behavior is validated in `openauth-core` and feature-specific crates;
 `openauth` tests lock the public re-export surface, initializer wiring, and
 feature-flag dependency boundaries.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature parity
 
 | Area | Status | Notes |

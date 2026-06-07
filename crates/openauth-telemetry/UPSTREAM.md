@@ -16,6 +16,8 @@ snapshot, and runtime detector payloads. It intentionally replaces Node/npm
 discovery with Rust/Cargo signals and only sends telemetry to a
 deployer-configured endpoint or custom sink.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature Parity
 
 | Area | Status | Notes |

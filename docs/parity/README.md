@@ -4,6 +4,18 @@ OpenAuth tracks behavioral parity against Better Auth **v1.6.9**. Pin and fetch
 the upstream snapshot from
 [`reference/upstream-better-auth/VERSION.md`](../../reference/upstream-better-auth/VERSION.md).
 
+## Status Symbols
+
+Crate `UPSTREAM.md` files use these symbols in feature and gap tables:
+
+| Symbol | Meaning |
+| --- | --- |
+| ✅ | Implemented for the stated in-scope server behavior. |
+| ⚠️ | Partial parity, known caveat, or behavior covered only for a subset of upstream scope. |
+| ❌ | Missing in-scope behavior or coverage that should be implemented or explicitly resolved. |
+| ➖ | Not applicable or out of scope for that crate, usually because the behavior is client-only, runtime-specific, or owned by a sibling crate. |
+| 🎯 | Intentional OpenAuth extension, hardening, or Rust-specific design that differs from Better Auth while preserving the relevant server contract. |
+
 | Audience | Document |
 | --- | --- |
 | **Library users** (crates.io) | `crates/{crate}/README.md` — short **Better Auth compatibility** blurb |

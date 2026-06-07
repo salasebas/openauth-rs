@@ -23,6 +23,8 @@ semantics. Rate limiting is a dedicated Lua store (`rate-limit:`) instead of
 upstream's JSON blobs in secondary KV when `rateLimit.storage` defaults to
 `secondary-storage` (`create-context.ts`).
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature parity
 
 | Area | Status | Notes |

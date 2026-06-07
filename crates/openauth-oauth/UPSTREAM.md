@@ -14,6 +14,8 @@ exported by Better Auth's `@better-auth/core/oauth2` package and reexported by
 `packages/better-auth/src/oauth2/` for OAuth state, account linking, and token
 encryption; those map to `openauth-core`, not this helper crate.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature Parity
 
 | Area | Status | Notes |

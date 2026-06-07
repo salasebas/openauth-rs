@@ -10,6 +10,8 @@
 
 `openauth-sqlx` maps Better Auth's Kysely runtime adapter, database wiring, schema/migration helper, shared adapter suites, and database rate-limit storage to concrete SQLx adapters. The crate covers observable server-side database behavior used by OpenAuth core and plugins, while intentionally hardening migration execution, rate-limit updates, and pattern matching where upstream runtime behavior is looser.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature Parity
 
 | Area | Status | Notes |

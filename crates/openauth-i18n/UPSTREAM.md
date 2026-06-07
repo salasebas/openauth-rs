@@ -39,6 +39,8 @@ validation, case-insensitive locale catalogs, richer `Accept-Language` matching,
 keys, optional `resolve_user_locale`, and async session user hydration before the hook on the
 async router path. Remaining partial gap: async `getLocale` callbacks.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature parity
 
 | Area | Status | Notes |

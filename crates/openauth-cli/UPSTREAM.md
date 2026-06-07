@@ -26,6 +26,8 @@ of executable server config modules. Schema emitters target versioned `.sql`
 files only (no Prisma/Drizzle generators). Rust adds `doctor`, `db status`,
 `schema print`, and standalone `plugins` commands for operational safety.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature parity
 
 | Area | Status | Notes |

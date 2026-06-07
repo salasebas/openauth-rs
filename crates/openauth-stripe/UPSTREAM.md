@@ -32,6 +32,8 @@ migrations.
 | Server tests | `test/stripe.test.ts`, `test/stripe-organization.test.ts`, `test/seat-based-billing.test.ts`, `test/metadata.test.ts`, `test/utils.test.ts` | Used as behavioral evidence for server routes/hooks/utilities. |
 | Out of scope | `src/client.ts`, `package.json`, `README.md`, `CHANGELOG.md`, `tsconfig.json`, `tsdown.config.ts`, `vitest.config.ts` | Not server runtime behavior; excluded from parity rows below. |
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature Parity
 
 | Area | Status | Notes |

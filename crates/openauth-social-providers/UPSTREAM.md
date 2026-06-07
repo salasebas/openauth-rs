@@ -22,6 +22,8 @@ OpenAuth adds **326** provider-focused Rust tests where upstream ships **0** in
 `social-providers/`. Provider hook overrides use typed Rust options on **10/35**
 providers instead of global `ProviderOptions` callbacks on every provider.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature parity
 
 | Area | Status | Notes |

@@ -12,6 +12,8 @@
 plugin modules. It is aligned with Better Auth 1.6.9 where observable server
 contracts matter, while keeping OpenAuth's Rust server boundaries.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature Parity
 
 | Area | Status | Notes |

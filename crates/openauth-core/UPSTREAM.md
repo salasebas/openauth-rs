@@ -35,6 +35,8 @@ below are closed; remaining differences are intentional Rust integration choices
 **Inventory:** 143 Rust `src/*.rs`, 81 test files, 55 upstream `@better-auth/core` server
 `.ts`, 98 upstream `better-auth` server `.ts` (excl. `client/`, `plugins/`) — all mapped.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature parity
 
 | Area | Status | Notes |

@@ -22,6 +22,8 @@ owns the `AuthPlugin`, `sso_providers` schema, and HTTP boundaries. OIDC
 end-to-end behavior matches upstream `oidc.test.ts` closely; SAML remains
 experimental until signed/encrypted paths are production-ready.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature parity
 
 | Area | Status | Notes |

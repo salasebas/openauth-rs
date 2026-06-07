@@ -21,6 +21,8 @@ and driver helpers from `openauth-tokio-postgres`. Observable database behavior
 SQL-backed rate limits) matches the non-pooled Postgres adapters. Remaining gap is
 mostly TypeScript API-shape parity, not missing Postgres semantics.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature parity
 
 | Area | Status | Notes |

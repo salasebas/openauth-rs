@@ -14,6 +14,8 @@ helpers. It is not the full SSO plugin: provider CRUD, registration, cookies,
 sessions, schema contributions, domain verification, and SAML HTTP endpoints are
 handled by `openauth-sso`.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature Parity
 
 | Area | Status | Notes |

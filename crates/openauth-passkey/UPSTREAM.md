@@ -13,6 +13,8 @@ OpenAuth exposes the same seven `/passkey/*` routes, keeps the public passkey
 JSON shape aligned, and adds Rust/OpenAuth hardening around one-time challenges,
 verification state, rate limits, and multi-instance storage expectations.
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature Parity
 
 | Area | Status | Notes |

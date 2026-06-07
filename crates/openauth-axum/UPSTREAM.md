@@ -21,6 +21,8 @@ validation). Closest upstream shapes are `toNextJsHandler`, `toSvelteKitHandler`
 `toSolidStartHandler`, and `toNodeHandler` (via `better-call/node`, not vendored in
 the reference tree).
 
+Status symbols are defined in the [parity index](../../docs/parity/README.md#status-symbols).
+
 ## Feature parity
 
 | Area | Status | Notes |
