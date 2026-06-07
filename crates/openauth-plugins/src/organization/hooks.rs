@@ -43,8 +43,9 @@ pub struct OrganizationHooks {
     pub after_remove_team_member: Option<AfterRemoveTeamMemberHook>,
 }
 
-pub type BeforeCreateOrganizationHook =
-    Arc<dyn Fn(&BeforeCreateOrganization) -> Result<(), OpenAuthError> + Send + Sync>;
+pub type BeforeCreateOrganizationHook = Arc<
+    dyn Fn(&BeforeCreateOrganization) -> Result<OrganizationHookData, OpenAuthError> + Send + Sync,
+>;
 pub type AfterCreateOrganizationHook =
     Arc<dyn Fn(&AfterCreateOrganization) -> Result<(), OpenAuthError> + Send + Sync>;
 pub type BeforeUpdateOrganizationHook = Arc<
@@ -110,9 +111,14 @@ pub type AfterRemoveTeamMemberHook =
 
 #[derive(Debug, Clone)]
 pub struct BeforeCreateOrganization {
+    pub organization: OrganizationHookData,
+    pub user: User,
+}
+
+#[derive(Debug, Clone)]
+pub struct OrganizationHookData {
     pub name: String,
     pub slug: String,
-    pub user: User,
 }
 
 #[derive(Debug, Clone)]

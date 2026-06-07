@@ -1,5 +1,6 @@
 use ::http::{Method, StatusCode};
 use openauth_core::api::{create_auth_endpoint, AsyncAuthEndpoint, AuthEndpointOptions};
+use serde::Deserialize;
 
 use crate::organization::hooks::{AfterRemoveMember, BeforeRemoveMember};
 use crate::organization::http;
@@ -7,6 +8,13 @@ use crate::organization::options::OrganizationOptions;
 use crate::organization::store::OrganizationStore;
 
 use super::validation::{is_last_owner, require_session};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LeaveBody {
+    #[serde(default)]
+    organization_id: Option<String>,
+}
 
 pub(super) fn leave(options: OrganizationOptions) -> AsyncAuthEndpoint {
     create_auth_endpoint(
@@ -19,7 +27,11 @@ pub(super) fn leave(options: OrganizationOptions) -> AsyncAuthEndpoint {
                 let adapter = http::adapter(context)?;
                 let store = OrganizationStore::new(adapter.as_ref());
                 let session = require_session(context, &request, &store).await?;
-                let Some(organization_id) = session.active_organization_id.clone() else {
+                let body: LeaveBody = http::body(&request)?;
+                let Some(organization_id) = super::resolve_organization_id(
+                    body.organization_id,
+                    session.active_organization_id.as_deref(),
+                ) else {
                     return http::organization_error(
                         StatusCode::BAD_REQUEST,
                         "NO_ACTIVE_ORGANIZATION",
@@ -63,16 +75,22 @@ pub(super) fn leave(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         user: session.user.clone(),
                     })?;
                 }
-                store
-                    .set_active_organization(&session.session.token, None)
-                    .await?;
-                if options.teams.enabled {
-                    store.set_active_team(&session.session.token, None).await?;
-                }
+                let cookies = if session.active_organization_id.as_deref() == Some(&organization_id)
+                {
+                    store
+                        .set_active_organization(&session.session.token, None)
+                        .await?;
+                    if options.teams.enabled {
+                        store.set_active_team(&session.session.token, None).await?;
+                    }
+                    http::refreshed_session_cookies(context, &session.session, &session.user)?
+                } else {
+                    Vec::new()
+                };
                 http::json_with_cookies(
                     StatusCode::OK,
                     &serde_json::json!({ "member": member }),
-                    http::refreshed_session_cookies(context, &session.session, &session.user)?,
+                    cookies,
                 )
             })
         },

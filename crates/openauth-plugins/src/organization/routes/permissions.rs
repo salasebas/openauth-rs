@@ -5,9 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::organization::http;
 use crate::organization::options::OrganizationOptions;
-use crate::organization::permissions::{
-    has_permission, permission_value_has_permission, OrganizationPermission,
-};
+use crate::organization::permissions::role_has_resource_action_with_dynamic;
 use crate::organization::store::OrganizationStore;
 
 pub fn endpoints(options: OrganizationOptions) -> Vec<AsyncAuthEndpoint> {
@@ -83,20 +81,13 @@ fn has_permission_endpoint(options: OrganizationOptions) -> AsyncAuthEndpoint {
                 };
                 let success = permissions.into_iter().all(|(resource, actions)| {
                     actions.into_iter().all(|action| {
-                        resolve_permission(&resource, &action)
-                            .map(|permission| {
-                                has_permission(&member.role, &options, permission)
-                                    || member.role.split(',').map(str::trim).any(|role| {
-                                        dynamic_roles.iter().any(|record| {
-                                            record.role == role
-                                                && permission_value_has_permission(
-                                                    &record.permission,
-                                                    permission,
-                                                )
-                                        })
-                                    })
-                            })
-                            .unwrap_or(false)
+                        role_has_resource_action_with_dynamic(
+                            &member.role,
+                            &options,
+                            &dynamic_roles,
+                            &resource,
+                            &action,
+                        )
                     })
                 });
                 http::json(
@@ -106,28 +97,4 @@ fn has_permission_endpoint(options: OrganizationOptions) -> AsyncAuthEndpoint {
             })
         },
     )
-}
-
-fn resolve_permission(resource: &str, action: &str) -> Option<OrganizationPermission> {
-    match (resource, action) {
-        ("organization", "update") => Some(OrganizationPermission::OrganizationUpdate),
-        ("organization", "delete") => Some(OrganizationPermission::OrganizationDelete),
-        ("member", "create") => Some(OrganizationPermission::MemberCreate),
-        ("member", "update") => Some(OrganizationPermission::MemberUpdate),
-        ("member", "delete") => Some(OrganizationPermission::MemberDelete),
-        ("invitation", "create") => Some(OrganizationPermission::InvitationCreate),
-        ("invitation", "cancel") => Some(OrganizationPermission::InvitationCancel),
-        ("team", "create") => Some(OrganizationPermission::TeamCreate),
-        ("team", "update") => Some(OrganizationPermission::TeamUpdate),
-        ("team", "delete") => Some(OrganizationPermission::TeamDelete),
-        ("ac", "create") => Some(OrganizationPermission::AcCreate),
-        ("ac", "read") => Some(OrganizationPermission::AcRead),
-        ("ac", "update") => Some(OrganizationPermission::AcUpdate),
-        ("ac", "delete") => Some(OrganizationPermission::AcDelete),
-        ("apiKey" | "api_key", "create") => Some(OrganizationPermission::ApiKeyCreate),
-        ("apiKey" | "api_key", "read") => Some(OrganizationPermission::ApiKeyRead),
-        ("apiKey" | "api_key", "update") => Some(OrganizationPermission::ApiKeyUpdate),
-        ("apiKey" | "api_key", "delete") => Some(OrganizationPermission::ApiKeyDelete),
-        _ => None,
-    }
 }

@@ -7,7 +7,7 @@ use super::{json_body_error, retain_returned_organization_fields};
 use crate::organization::additional_fields;
 use crate::organization::hooks::{
     AfterAddMember, AfterCreateOrganization, BeforeAddMember, BeforeCreateOrganization,
-    MemberHookData,
+    MemberHookData, OrganizationHookData,
 };
 use crate::organization::http;
 use crate::organization::models::FullOrganization;
@@ -113,25 +113,37 @@ pub(super) fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         );
                     }
                 }
-                if store.organization_by_slug(&input.slug).await?.is_some() {
+                let mut organization_data = OrganizationHookData {
+                    name: input.name,
+                    slug: input.slug,
+                };
+                if let Some(hook) = &options.hooks.before_create_organization {
+                    organization_data = hook(&BeforeCreateOrganization {
+                        organization: organization_data,
+                        user: user.clone(),
+                    })?;
+                }
+                if organization_data.name.trim().is_empty()
+                    || organization_data.slug.trim().is_empty()
+                {
+                    return super::super::validation::invalid_body();
+                }
+
+                if store
+                    .organization_by_slug(&organization_data.slug)
+                    .await?
+                    .is_some()
+                {
                     return http::organization_error(
                         StatusCode::BAD_REQUEST,
                         "ORGANIZATION_ALREADY_EXISTS",
                     );
                 }
 
-                if let Some(hook) = &options.hooks.before_create_organization {
-                    hook(&BeforeCreateOrganization {
-                        name: input.name.clone(),
-                        slug: input.slug.clone(),
-                        user: user.clone(),
-                    })?;
-                }
-
                 let mut organization = store
                     .create_organization(
-                        input.name,
-                        input.slug,
+                        organization_data.name,
+                        organization_data.slug,
                         input.logo,
                         input.metadata,
                         additional_fields,
@@ -158,6 +170,7 @@ pub(super) fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         openauth_core::db::DbRecord::new(),
                     )
                     .await?;
+                let mut teams = Vec::new();
                 if options.teams.enabled && options.teams.create_default_team {
                     let team_name = if let Some(custom) = &options.teams.custom_create_default_team
                     {
@@ -175,6 +188,7 @@ pub(super) fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
                     store
                         .create_team_member(&team.id, &user.id, openauth_core::db::DbRecord::new())
                         .await?;
+                    teams.push(team);
                 }
                 if let Some(hook) = &options.hooks.after_add_member {
                     hook(&AfterAddMember {
@@ -209,7 +223,7 @@ pub(super) fn create(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         organization,
                         members: vec![member],
                         invitations: Vec::new(),
-                        teams: Vec::new(),
+                        teams,
                     },
                     cookies,
                 )

@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use http::{Method, StatusCode};
 use openauth_core::db::MemoryAdapter;
 use openauth_plugins::organization::{
-    MemberHookData, MemberRoleUpdateData, OrganizationHooks, OrganizationOptions,
-    OrganizationUpdateData, TeamHookData,
+    MemberHookData, MemberRoleUpdateData, OrganizationHookData, OrganizationHooks,
+    OrganizationOptions, OrganizationUpdateData, TeamHookData,
 };
 use serde_json::json;
 
@@ -53,6 +53,45 @@ async fn invitation_email_hook_runs_inline() -> Result<(), Box<dyn std::error::E
     assert_eq!(sent[0].0, "invited-hook@example.com");
     assert_eq!(sent[0].1, "member");
     assert_eq!(sent[0].2, org.body["id"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn before_create_organization_hook_can_mutate_name_and_slug(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let options = OrganizationOptions::builder()
+        .hooks(OrganizationHooks {
+            before_create_organization: Some(Arc::new(|event| {
+                Ok(OrganizationHookData {
+                    name: format!("{} Hooked", event.organization.name),
+                    slug: "hooked-create-org".to_owned(),
+                })
+            })),
+            ..OrganizationHooks::default()
+        })
+        .teams(openauth_plugins::organization::TeamOptions {
+            enabled: true,
+            create_default_team: true,
+            ..Default::default()
+        })
+        .build();
+    let auth = super::test_router(Arc::new(MemoryAdapter::new()), options)?;
+
+    let ada = super::sign_up(&auth, "Ada", "ada-create-org-hook@example.com").await?;
+    let created = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Original","slug":"original-create-org"}),
+        Some(&ada.cookie),
+    )
+    .await?;
+
+    assert_eq!(created.status, StatusCode::OK);
+    assert_eq!(created.body["name"], "Original Hooked");
+    assert_eq!(created.body["slug"], "hooked-create-org");
+    assert_eq!(created.body["teams"].as_array().map(Vec::len), Some(1));
+    assert_eq!(created.body["teams"][0]["name"], "Default");
     Ok(())
 }
 

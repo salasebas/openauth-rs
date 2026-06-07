@@ -14,6 +14,10 @@ All notable changes to `openauth-plugins` are documented in this file.
   Email OTP current-email verification and legacy password-reset alias,
   Two-factor enable/disable session rotation, and Username validation/update
   edges.
+- Added organization parity coverage for dynamic access-control custom
+  resources, missing-permission reporting, creator-role guards, body-scoped
+  leave behavior, create hooks that mutate organization data, and default team
+  response shape.
 
 ### Fixed
 
@@ -40,9 +44,12 @@ All notable changes to `openauth-plugins` are documented in this file.
 - Fixed `organization.create` so unauthenticated requests cannot supply a
   `userId` to create organizations on behalf of another user.
 - Fixed the API key `api-key:by-ref:*` listing index losing concurrent writes in
-  pure `SecondaryStorage` mode by serializing its read/modify/write through an
-  in-process per-reference lock, so concurrent create/delete no longer drop live
-  keys from `/api-key/list`.
+  pure `SecondaryStorage` mode by using the new atomic compare-and-set storage
+  contract, so multi-process create/delete races no longer drop live keys from
+  `/api-key/list` on atomic backends.
+- Added `organization::provision_organization_member` so sibling crates can
+  create org memberships through the organization plugin's hooks, limits, and
+  role validation instead of writing `member` rows directly.
 
 ## [0.0.6] - 2026-05-24
 

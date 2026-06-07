@@ -8,6 +8,7 @@ mod limits;
 mod models;
 mod options;
 mod permissions;
+mod provisioning;
 mod record;
 mod routes;
 mod schema;
@@ -23,8 +24,8 @@ pub use hooks::{
     BeforeCreateOrganization, BeforeCreateTeam, BeforeDeleteOrganization, BeforeDeleteTeam,
     BeforeRejectInvitation, BeforeRemoveMember, BeforeRemoveTeamMember, BeforeUpdateMemberRole,
     BeforeUpdateOrganization, BeforeUpdateTeam, InvitationHookData, MemberHookData,
-    MemberRoleUpdateData, OrganizationHooks, OrganizationUpdateData, TeamHookData,
-    TeamMemberHookData,
+    MemberRoleUpdateData, OrganizationHookData, OrganizationHooks, OrganizationUpdateData,
+    TeamHookData, TeamMemberHookData,
 };
 pub use limits::{
     MembershipLimit, MembershipLimitCallback, OrganizationLimit, OrganizationLimitCallback,
@@ -38,6 +39,7 @@ pub use options::{
     SendInvitationEmailHook, TeamOptions,
 };
 pub use permissions::{has_permission, OrganizationPermission, OrganizationRole};
+pub use provisioning::{provision_organization_member, ProvisionOrganizationMemberInput};
 
 use openauth_core::db::{DbFieldType, DbValue};
 use openauth_core::options::SessionAdditionalField;
@@ -54,7 +56,8 @@ pub fn organization() -> AuthPlugin {
 pub fn organization_with_options(options: OrganizationOptions) -> AuthPlugin {
     let mut plugin = AuthPlugin::new(UPSTREAM_PLUGIN_ID)
         .with_version(env!("CARGO_PKG_VERSION"))
-        .with_options(options.to_metadata());
+        .with_options(options.to_metadata())
+        .with_state(options.clone());
 
     for contribution in schema::schema_contributions(&options) {
         plugin = plugin.with_schema(contribution);
@@ -86,4 +89,14 @@ pub fn organization_with_options(options: OrganizationOptions) -> AuthPlugin {
         }
         Ok(output)
     })
+}
+
+pub fn organization_options_from_context(
+    context: &openauth_core::context::AuthContext,
+) -> Option<std::sync::Arc<OrganizationOptions>> {
+    context
+        .plugins
+        .iter()
+        .find(|plugin| plugin.id == UPSTREAM_PLUGIN_ID)
+        .and_then(|plugin| plugin.state::<OrganizationOptions>())
 }

@@ -161,6 +161,43 @@ async fn unauthenticated_create_with_user_id_is_rejected() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
+async fn server_side_create_with_user_id_provisions_organization(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let auth = super::test_router(
+        Arc::new(MemoryAdapter::new()),
+        OrganizationOptions::default(),
+    )?;
+    let owner = super::sign_up(&auth, "Owner", "owner-server-create@example.com").await?;
+
+    let created = super::server_request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({
+            "name": "Delegated Org",
+            "slug": "delegated-org",
+            "userId": owner.user_id,
+        }),
+        None,
+    )
+    .await?;
+    assert_eq!(created.status, StatusCode::OK);
+    assert_eq!(created.body["name"], "Delegated Org");
+
+    let full = super::request_json(
+        &auth,
+        Method::GET,
+        "/api/auth/organization/get-full-organization?organizationSlug=delegated-org",
+        json!({}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(full.status, StatusCode::OK);
+    assert_eq!(full.body["slug"], "delegated-org");
+    Ok(())
+}
+
+#[tokio::test]
 async fn active_team_is_returned_from_get_session_when_teams_are_enabled(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let options = OrganizationOptions::builder()

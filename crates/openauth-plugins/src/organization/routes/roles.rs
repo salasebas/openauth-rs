@@ -7,7 +7,8 @@ use crate::organization::additional_fields;
 use crate::organization::http;
 use crate::organization::options::OrganizationOptions;
 use crate::organization::permissions::{
-    has_permission, validate_permission_with_access_control, OrganizationPermission,
+    missing_permissions, role_has_resource_action_with_dynamic,
+    validate_permission_with_access_control,
 };
 use crate::organization::store::OrganizationStore;
 use crate::organization::OrganizationRoleRecord;
@@ -71,7 +72,8 @@ fn create_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                     );
                 };
                 let member = require_member(&store, &organization_id, &session.user.id).await?;
-                if !has_permission(&member.role, &options, OrganizationPermission::AcCreate) {
+                let dynamic_roles = store.organization_roles(&organization_id).await?;
+                if !has_ac_permission(&member.role, &options, &dynamic_roles, "create") {
                     return http::organization_error(
                         StatusCode::FORBIDDEN,
                         "YOU_ARE_NOT_ALLOWED_TO_CREATE_A_ROLE",
@@ -86,6 +88,18 @@ fn create_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                 }
                 if !valid_permission(&input.permission, &options) {
                     return http::organization_error(StatusCode::BAD_REQUEST, "INVALID_RESOURCE");
+                }
+                let missing_permissions =
+                    missing_permissions(&member.role, &options, &dynamic_roles, &input.permission);
+                if !missing_permissions.is_empty() {
+                    return http::json(
+                        StatusCode::FORBIDDEN,
+                        &serde_json::json!({
+                            "code": "YOU_ARE_NOT_ALLOWED_TO_CREATE_A_ROLE",
+                            "message": crate::organization::errors::message("YOU_ARE_NOT_ALLOWED_TO_CREATE_A_ROLE"),
+                            "missingPermissions": missing_permissions,
+                        }),
+                    );
                 }
                 if store
                     .organization_role_by_name(&organization_id, &role)
@@ -160,7 +174,8 @@ fn delete_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                     );
                 };
                 let member = require_member(&store, &organization_id, &session.user.id).await?;
-                if !has_permission(&member.role, &options, OrganizationPermission::AcDelete) {
+                let dynamic_roles = store.organization_roles(&organization_id).await?;
+                if !has_ac_permission(&member.role, &options, &dynamic_roles, "delete") {
                     return http::organization_error(
                         StatusCode::FORBIDDEN,
                         "YOU_ARE_NOT_ALLOWED_TO_DELETE_A_ROLE",
@@ -216,7 +231,8 @@ fn list_roles(options: OrganizationOptions) -> AsyncAuthEndpoint {
                     );
                 };
                 let member = require_member(&store, &organization_id, &session.user.id).await?;
-                if !has_permission(&member.role, &options, OrganizationPermission::AcRead) {
+                let dynamic_roles = store.organization_roles(&organization_id).await?;
+                if !has_ac_permission(&member.role, &options, &dynamic_roles, "read") {
                     return http::organization_error(
                         StatusCode::FORBIDDEN,
                         "YOU_ARE_NOT_ALLOWED_TO_LIST_A_ROLE",
@@ -252,7 +268,8 @@ fn get_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                     );
                 };
                 let member = require_member(&store, &organization_id, &session.user.id).await?;
-                if !has_permission(&member.role, &options, OrganizationPermission::AcRead) {
+                let dynamic_roles = store.organization_roles(&organization_id).await?;
+                if !has_ac_permission(&member.role, &options, &dynamic_roles, "read") {
                     return http::organization_error(
                         StatusCode::FORBIDDEN,
                         "YOU_ARE_NOT_ALLOWED_TO_GET_A_ROLE",
@@ -326,7 +343,8 @@ fn update_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                     );
                 };
                 let member = require_member(&store, &organization_id, &session.user.id).await?;
-                if !has_permission(&member.role, &options, OrganizationPermission::AcUpdate) {
+                let dynamic_roles = store.organization_roles(&organization_id).await?;
+                if !has_ac_permission(&member.role, &options, &dynamic_roles, "update") {
                     return http::organization_error(
                         StatusCode::FORBIDDEN,
                         "YOU_ARE_NOT_ALLOWED_TO_UPDATE_A_ROLE",
@@ -342,6 +360,18 @@ fn update_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         return http::organization_error(
                             StatusCode::BAD_REQUEST,
                             "INVALID_RESOURCE",
+                        );
+                    }
+                    let missing_permissions =
+                        missing_permissions(&member.role, &options, &dynamic_roles, permission);
+                    if !missing_permissions.is_empty() {
+                        return http::json(
+                            StatusCode::FORBIDDEN,
+                            &serde_json::json!({
+                                "code": "YOU_ARE_NOT_ALLOWED_TO_UPDATE_A_ROLE",
+                                "message": crate::organization::errors::message("YOU_ARE_NOT_ALLOWED_TO_UPDATE_A_ROLE"),
+                                "missingPermissions": missing_permissions,
+                            }),
                         );
                     }
                 }
@@ -425,7 +455,7 @@ fn is_predefined_role(role: &str, options: &OrganizationOptions) -> bool {
 }
 
 fn valid_permission(permission: &serde_json::Value, options: &OrganizationOptions) -> bool {
-    if !permission_shape_is_valid(permission) {
+    if !permission_shape_is_valid(permission, options.access_control.is_none()) {
         return false;
     }
     if options.dynamic_access_control.enabled && options.access_control.is_some() {
@@ -435,18 +465,29 @@ fn valid_permission(permission: &serde_json::Value, options: &OrganizationOption
     }
 }
 
-fn permission_shape_is_valid(permission: &serde_json::Value) -> bool {
+fn permission_shape_is_valid(permission: &serde_json::Value, builtin_only: bool) -> bool {
     let Some(object) = permission.as_object() else {
         return false;
     };
     object.iter().all(|(resource, actions)| {
-        matches!(
-            resource.as_str(),
-            "organization" | "member" | "invitation" | "team" | "ac" | "apiKey" | "api_key"
-        ) && actions
-            .as_array()
-            .is_some_and(|actions| actions.iter().all(serde_json::Value::is_string))
+        (!builtin_only
+            || matches!(
+                resource.as_str(),
+                "organization" | "member" | "invitation" | "team" | "ac" | "apiKey" | "api_key"
+            ))
+            && actions
+                .as_array()
+                .is_some_and(|actions| actions.iter().all(serde_json::Value::is_string))
     })
+}
+
+fn has_ac_permission(
+    role: &str,
+    options: &OrganizationOptions,
+    dynamic_roles: &[OrganizationRoleRecord],
+    action: &str,
+) -> bool {
+    role_has_resource_action_with_dynamic(role, options, dynamic_roles, "ac", action)
 }
 
 fn query_param(request: &openauth_core::api::ApiRequest, name: &str) -> Option<String> {

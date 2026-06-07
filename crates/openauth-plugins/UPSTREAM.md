@@ -23,7 +23,7 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | Additional fields server helper | 🎯 | OpenAuth-only helper around core user/session additional field schema; not counted as a Better Auth server plugin export. |
 | Admin | ✅ | User/session management, impersonation, permissions, schema fields, and OpenAPI metadata are implemented. |
 | Anonymous users | ✅ | Anonymous sign-in, deletion, custom identity callbacks, and link hooks are implemented. |
-| API key | ✅ | Lifecycle, verification, metadata, sessions, org references, configuration, hashing, schema, storage modes, and listing behavior are implemented; pure secondary-storage multi-process listing is an intentional storage-contract boundary documented below. |
+| API key | ✅ | Lifecycle, verification, metadata, sessions, org references, configuration, hashing, schema, storage modes, and listing behavior are implemented; pure secondary-storage listing indexes use the atomic `SecondaryStorage` CAS contract. |
 | Bearer sessions | ✅ | Authorization header parsing and session lookup behavior are covered. |
 | CAPTCHA | ✅ | Server verify hooks and provider handlers are implemented. |
 | Custom session | ✅ | Session response extension hooks and cookie behavior are implemented. |
@@ -40,7 +40,7 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | One Tap | ✅ | Server callback, account linking, disabled sign-up, session/cookie behavior, additional fields, and metadata are implemented; missing-email response shape intentionally differs. |
 | One-time token | ✅ | Token generation, verification, session/user output, cookie-cache preservation, and expiry rejection are implemented. |
 | OpenAPI | ✅ | Generated auth schemas and optional Scalar reference UI are implemented. |
-| Organization | ⚠️ | Core org/member/invitation/team/session/access-control paths are implemented; hook ordering, dynamic policy, role merge, and team/member edge cases need ongoing parity tests. |
+| Organization | ✅ | Core org/member/invitation/team/session/access-control paths are implemented, including dynamic AC custom resources, missing-permission reporting, creator-role guards, hook mutations, default-team response shape, and shared server-side provisioning for sibling crates. |
 | Phone number | ✅ | OTP, sign-in, verification, password reset, hooks, schema, and rate limit paths are implemented. |
 | SIWE | ✅ | Nonce, verify, wallet account linking, schema, and address handling are implemented. |
 | Two-factor | ✅ | TOTP, OTP, backup codes, trust-device cookies, passwordless option, custom table, storage paths, verified-method filtering, credential-only enforcement scope, and session rotation on enable/disable are implemented. |
@@ -52,11 +52,11 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 
 | Surface | OpenAuth tests | Upstream tests | Notes |
 | --- | ---: | ---: | --- |
-| Mapped server plugin scope | 649 | 931 | Verify with `cargo nextest run -p openauth-plugins`. |
+| Mapped server plugin scope | 655 | 931 | Verify with `cargo nextest run -p openauth-plugins`. |
 | Server module inventory | 26 | 25 | Upstream count is exported server plugins after excluding `test-utils` and replaced `oidc-provider`, plus `@better-auth/api-key`; Rust adds `additional_fields` as a server helper. |
 | Server route literals | 139 | 132 | No upstream server-route candidates were missing after excluding replaced/non-server paths; Rust includes additional hardening/support endpoints. |
-| API key | 56 | 176 | Rust covers lifecycle, verify, expiry, refill windows, metadata, sessions, org refs, schema, storage, configurations, and pure/fallback secondary-storage behavior. |
-| Organization | 36 | 180 | Rust covers core routes, teams, session, limits, hooks, and additional fields; parity risk remains high due large upstream surface. |
+| API key | 56 | 176 | Rust covers lifecycle, verify, expiry, refill windows, metadata, sessions, org refs, schema, storage, configurations, and pure/fallback secondary-storage behavior with atomic reference-index CAS. |
+| Organization | 42 | 180 | Rust covers core routes, dynamic AC, teams, session, limits, hook mutation/order, shared provisioning, server-only `userId` contracts, and additional fields; parity risk remains due the large upstream surface but the known G2 gaps are closed. |
 | Email OTP | 37 | 73 | Rust covers send/verify, expired OTPs, hooks, storage, server behavior, password reset and legacy alias, change-email current-email verification, resend, rate limits, race protection, and additional fields. |
 | Two-factor | 25 | 55 | Rust covers TOTP, OTP, backup codes, cookies, storage, passwordless option, trust-device validation, session rotation, and enforcement scope. |
 | Username | 17 | 33 | Rust covers flow, availability validation, duplicate checks, display username behavior, normalization, and schema. |
@@ -71,7 +71,7 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | OAuth proxy payloads | Object transport | Rust-owned encrypted structs | Payload is OpenAuth-to-OpenAuth transport, not a public cross-implementation API. |
 | Generic OAuth HTTP | Baseline outbound fetch behavior | SSRF-guarded default HTTP transport | Auth boundary should fail closed for private/internal targets. |
 | API-key cache revalidation | Cache-first secondary storage | Optional DB revalidation for cache hits | Preserves compatibility by default while offering immediate revocation visibility. |
-| API-key pure secondary listing across processes | Cache-first `customStorage` get/set/delete index | In-process serialization plus database fallback/revalidation options | The shared `SecondaryStorage` contract has no atomic collection primitive; multi-process deployments that require immediate list consistency should use database fallback or an externally atomic secondary-storage implementation. |
+| API-key pure secondary listing across processes | Cache-first `customStorage` get/set/delete index | Atomic `SecondaryStorage::compare_and_set` / `delete_if_value` index updates, plus database fallback/revalidation options | Rust storage backends can provide cross-process compare-and-set semantics without forcing database fallback. |
 | Additional fields helper | Core user/session additional fields | Dedicated Rust server plugin helper | Gives Rust callers a plugin-shaped way to contribute schema/runtime metadata. |
 | `oidc-provider` | Built-in plugin export | `openauth-oauth-provider` sibling crate | OAuth/OIDC provider behavior is large enough to own separately. |
 
@@ -80,16 +80,16 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | ID | Gap | Severity | Notes |
 | --- | --- | --- | --- |
 | G1 | Test count is below upstream | Low | 649 Rust tests vs 931 mapped upstream declarations because Rust ports observable server scenarios rather than the full TypeScript/client matrix; non-organization API-key, Email OTP, Two-factor, and Username edges were re-audited against Better Auth 1.6.9 and covered with focused parity tests. |
-| G2 | Organization behavior is broad and complex | High | Async hook ordering, dynamic organization creation policy, role merge semantics, and team/member edges need continued parity tests. |
-| G3 | API-key pure secondary-storage listing consistency is bounded by storage contract | Low | OpenAuth serializes `api-key:by-ref:*` index updates in-process and offers database fallback/revalidation; cross-process pure secondary-storage deployments need an externally atomic backend or the fallback mode for strict `/api-key/list` consistency. |
+| G2 | Organization behavior is broad and complex | Med | Known access-control, role, hook, creator-role, default-team, and leave-contract gaps are covered; continue adding focused parity tests as new upstream scenarios are mapped. |
+| G3 | API-key pure secondary-storage listing consistency | Low | Closed for backends that implement atomic `SecondaryStorage` CAS; default best-effort implementations are still suitable only for single-process/local storage. |
 
 ## Hardening Notes
 
 - Keep Generic OAuth and OAuth proxy outbound requests on SSRF-guarded HTTP transports.
 - Prefer explicit errors at auth boundaries; avoid silent fallbacks for malformed
   cookies, forged API keys, expired OTPs, or invalid OAuth state.
-- Use API-key database fallback/revalidation or an externally atomic
-  secondary-storage backend for multi-process deployments that require strict
+- Use API-key database fallback/revalidation or a secondary-storage backend with
+  atomic `compare_and_set` / `delete_if_value` for strict multi-process
   `/api-key/list` consistency.
 - Add focused tests for status codes, JSON error codes, DB mutations, cookies,
   and headers before changing plugin behavior.

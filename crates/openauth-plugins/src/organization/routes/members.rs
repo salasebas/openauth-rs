@@ -382,6 +382,23 @@ fn update_member_role(options: OrganizationOptions) -> AsyncAuthEndpoint {
                 if !roles_exist(&store, &organization_id, &next_role, &options).await? {
                     return http::organization_error(StatusCode::BAD_REQUEST, "ROLE_NOT_FOUND");
                 }
+                if !actor_member
+                    .role
+                    .split(',')
+                    .any(|role| role.trim() == options.creator_role)
+                    && (target
+                        .role
+                        .split(',')
+                        .any(|role| role.trim() == options.creator_role)
+                        || next_role
+                            .split(',')
+                            .any(|role| role.trim() == options.creator_role))
+                {
+                    return http::organization_error(
+                        StatusCode::FORBIDDEN,
+                        "YOU_ARE_NOT_ALLOWED_TO_UPDATE_THIS_MEMBER",
+                    );
+                }
                 if target.user_id == session.user.id
                     && target
                         .role

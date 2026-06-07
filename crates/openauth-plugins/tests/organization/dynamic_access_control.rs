@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use http::{Method, StatusCode};
 use openauth_core::db::MemoryAdapter;
+use openauth_plugins::access::{create_access_control, statements};
 use openauth_plugins::organization::{DynamicAccessControlOptions, OrganizationOptions};
 use serde_json::json;
 
@@ -109,6 +110,162 @@ async fn dynamic_access_control_crud_roles_and_rejects_assigned_delete(
     assert_eq!(assigned_delete.status, StatusCode::BAD_REQUEST);
     assert_eq!(assigned_delete.body["code"], "ROLE_IS_ASSIGNED_TO_MEMBERS");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn has_permission_allows_custom_ac_resource_for_dynamic_role(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let access_control = create_access_control(statements([
+        ("project", vec!["read", "write"]),
+        ("ac", vec!["create", "read", "update", "delete"]),
+    ]))?;
+    let options = OrganizationOptions::builder()
+        .access_control(access_control)
+        .dynamic_access_control(DynamicAccessControlOptions {
+            enabled: true,
+            maximum_roles_per_organization: Some(3),
+        })
+        .build();
+    let auth = super::test_router(adapter, options)?;
+
+    let ada = super::sign_up(&auth, "Ada", "ada-custom-ac@example.com").await?;
+    super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Custom AC","slug":"custom-ac"}),
+        Some(&ada.cookie),
+    )
+    .await?;
+    let role = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create-role",
+        json!({
+            "role": "project_writer",
+            "permission": { "project": ["write"], "ac": ["read"] }
+        }),
+        Some(&ada.cookie),
+    )
+    .await?;
+    assert_eq!(role.status, StatusCode::OK);
+
+    let ben = super::sign_up(&auth, "Ben", "ben-custom-ac@example.com").await?;
+    let added = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({"userId": ben.user_id, "role": "project_writer"}),
+        Some(&ada.cookie),
+    )
+    .await?;
+    assert_eq!(added.status, StatusCode::OK);
+    let active = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/set-active",
+        json!({"organizationId": added.body["organizationId"]}),
+        Some(&ben.cookie),
+    )
+    .await?;
+    assert_eq!(active.status, StatusCode::OK);
+
+    let permission = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/has-permission",
+        json!({"permissions": {"project": ["write"]}}),
+        Some(&ben.cookie),
+    )
+    .await?;
+
+    assert_eq!(permission.status, StatusCode::OK);
+    assert_eq!(permission.body["success"], true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_role_rejects_permissions_actor_lacks_with_missing_permissions(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let access_control = create_access_control(statements([
+        ("project", vec!["read", "write"]),
+        ("ac", vec!["create", "read", "update", "delete"]),
+    ]))?;
+    let options = OrganizationOptions::builder()
+        .access_control(access_control)
+        .dynamic_access_control(DynamicAccessControlOptions {
+            enabled: true,
+            maximum_roles_per_organization: Some(5),
+        })
+        .build();
+    let auth = super::test_router(adapter, options)?;
+
+    let ada = super::sign_up(&auth, "Ada", "ada-escalation@example.com").await?;
+    super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Escalation","slug":"escalation"}),
+        Some(&ada.cookie),
+    )
+    .await?;
+    let limited = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create-role",
+        json!({
+            "role": "limited_admin",
+            "permission": { "project": ["read"], "ac": ["create", "read"] }
+        }),
+        Some(&ada.cookie),
+    )
+    .await?;
+    assert_eq!(limited.status, StatusCode::OK);
+
+    let ben = super::sign_up(&auth, "Ben", "ben-escalation@example.com").await?;
+    let added = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({"userId": ben.user_id, "role": "limited_admin"}),
+        Some(&ada.cookie),
+    )
+    .await?;
+    assert_eq!(added.status, StatusCode::OK);
+    let active = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/set-active",
+        json!({"organizationId": added.body["organizationId"]}),
+        Some(&ben.cookie),
+    )
+    .await?;
+    assert_eq!(active.status, StatusCode::OK);
+
+    let escalated = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create-role",
+        json!({
+            "role": "escalated",
+            "permission": { "project": ["write"], "ac": ["read"] }
+        }),
+        Some(&ben.cookie),
+    )
+    .await?;
+
+    assert_eq!(escalated.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        escalated.body["code"],
+        "YOU_ARE_NOT_ALLOWED_TO_CREATE_A_ROLE"
+    );
+    assert_eq!(
+        escalated.body["missingPermissions"],
+        json!({ "project": ["write"] })
+    );
     Ok(())
 }
 

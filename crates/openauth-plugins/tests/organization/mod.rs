@@ -202,6 +202,170 @@ async fn organization_routes_cover_create_members_and_invitations(
     Ok(())
 }
 
+#[tokio::test]
+async fn non_creator_cannot_update_creator_member_or_assign_creator_role(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let auth = test_router(adapter, OrganizationOptions::default())?;
+
+    let owner = sign_up(&auth, "Owner", "owner-guard@example.com").await?;
+    let admin = sign_up(&auth, "Admin", "admin-guard@example.com").await?;
+    let member = sign_up(&auth, "Member", "member-guard@example.com").await?;
+    let org = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Creator Guard","slug":"creator-guard"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+
+    let admin_added = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({"userId": admin.user_id, "role": "admin"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(admin_added.status, StatusCode::OK);
+    let member_added = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({"userId": member.user_id, "role": "member"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(member_added.status, StatusCode::OK);
+    let owner_member_id = org.body["members"][0]["id"]
+        .as_str()
+        .ok_or("missing owner member id")?;
+    let member_id = member_added.body["id"]
+        .as_str()
+        .ok_or("missing member id")?;
+    let organization_id = org.body["id"].clone();
+
+    let target_creator = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/update-member-role",
+        json!({"organizationId": organization_id, "memberId": owner_member_id, "role": "member"}),
+        Some(&admin.cookie),
+    )
+    .await?;
+    assert_eq!(target_creator.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        target_creator.body["code"],
+        "YOU_ARE_NOT_ALLOWED_TO_UPDATE_THIS_MEMBER"
+    );
+
+    let assign_creator = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/update-member-role",
+        json!({"organizationId": organization_id, "memberId": member_id, "role": "owner"}),
+        Some(&admin.cookie),
+    )
+    .await?;
+    assert_eq!(assign_creator.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        assign_creator.body["code"],
+        "YOU_ARE_NOT_ALLOWED_TO_UPDATE_THIS_MEMBER"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn leave_organization_uses_body_organization_id_not_active_org(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let auth = test_router(adapter, OrganizationOptions::default())?;
+
+    let owner = sign_up(&auth, "Owner", "owner-leave@example.com").await?;
+    let member = sign_up(&auth, "Member", "member-leave@example.com").await?;
+    let first = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"First Leave","slug":"first-leave"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(first.status, StatusCode::OK);
+    let first_id = first.body["id"].clone();
+    let second = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Second Leave","slug":"second-leave"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(second.status, StatusCode::OK);
+    let second_id = second.body["id"].clone();
+    for organization_id in [&first_id, &second_id] {
+        let added = request_json(
+            &auth,
+            Method::POST,
+            "/api/auth/organization/add-member",
+            json!({"organizationId": organization_id, "userId": member.user_id, "role": "member"}),
+            Some(&owner.cookie),
+        )
+        .await?;
+        assert_eq!(added.status, StatusCode::OK);
+    }
+    let active = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/set-active",
+        json!({"organizationId": second_id}),
+        Some(&member.cookie),
+    )
+    .await?;
+    assert_eq!(active.status, StatusCode::OK);
+
+    let left = request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/leave",
+        json!({"organizationId": first_id}),
+        Some(&member.cookie),
+    )
+    .await?;
+    assert_eq!(left.status, StatusCode::OK);
+
+    let first_members = request_json(
+        &auth,
+        Method::GET,
+        &format!(
+            "/api/auth/organization/list-members?organizationId={}",
+            first_id.as_str().ok_or("first id")?
+        ),
+        json!({}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    let second_members = request_json(
+        &auth,
+        Method::GET,
+        &format!(
+            "/api/auth/organization/list-members?organizationId={}",
+            second_id.as_str().ok_or("second id")?
+        ),
+        json!({}),
+        Some(&owner.cookie),
+    )
+    .await?;
+
+    assert_eq!(first_members.status, StatusCode::OK);
+    assert_eq!(second_members.status, StatusCode::OK);
+    assert_eq!(first_members.body["total"], 1);
+    assert_eq!(second_members.body["total"], 2);
+    Ok(())
+}
+
 fn test_router(
     adapter: Arc<MemoryAdapter>,
     options: OrganizationOptions,
@@ -260,12 +424,36 @@ async fn sign_up(
     })
 }
 
+/// Drive a request through the trusted server-side entry point
+/// ([`AuthRouter::handle_async_server`]) so server-only inputs such as explicit
+/// `userId` are honored for trusted backend callers.
+async fn server_request_json(
+    router: &AuthRouter,
+    method: Method,
+    path: &str,
+    body: Value,
+    cookie: Option<&str>,
+) -> Result<TestResponse, Box<dyn std::error::Error>> {
+    dispatch_json(router, method, path, body, cookie, true).await
+}
+
 async fn request_json(
     router: &AuthRouter,
     method: Method,
     path: &str,
     body: Value,
     cookie: Option<&str>,
+) -> Result<TestResponse, Box<dyn std::error::Error>> {
+    dispatch_json(router, method, path, body, cookie, false).await
+}
+
+async fn dispatch_json(
+    router: &AuthRouter,
+    method: Method,
+    path: &str,
+    body: Value,
+    cookie: Option<&str>,
+    server_side: bool,
 ) -> Result<TestResponse, Box<dyn std::error::Error>> {
     let payload = if method == Method::GET && body == json!({}) {
         Vec::new()
@@ -283,7 +471,12 @@ async fn request_json(
     if let Some(cookie) = cookie {
         builder = builder.header(header::COOKIE, cookie);
     }
-    let response = router.handle_async(builder.body(payload)?).await?;
+    let request = builder.body(payload)?;
+    let response = if server_side {
+        router.handle_async_server(request).await?
+    } else {
+        router.handle_async(request).await?
+    };
     let status = response.status();
     let set_cookie = response
         .headers()
