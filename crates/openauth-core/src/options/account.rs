@@ -1,3 +1,44 @@
+use std::fmt;
+use std::sync::Arc;
+
+use crate::api::ApiRequest;
+use crate::error::OpenAuthError;
+
+pub trait TrustedProvidersProvider: Send + Sync + 'static {
+    fn trusted_providers(&self) -> Result<Vec<String>, OpenAuthError>;
+}
+
+impl<F> TrustedProvidersProvider for F
+where
+    F: Fn() -> Result<Vec<String>, OpenAuthError> + Send + Sync + 'static,
+{
+    fn trusted_providers(&self) -> Result<Vec<String>, OpenAuthError> {
+        self()
+    }
+}
+
+pub trait TrustedProvidersRequestProvider: Send + Sync + 'static {
+    fn trusted_providers_for_request(
+        &self,
+        request: Option<&ApiRequest>,
+    ) -> Result<Vec<String>, OpenAuthError>;
+}
+
+impl<F> TrustedProvidersRequestProvider for F
+where
+    F: for<'a> Fn(Option<&'a ApiRequest>) -> Result<Vec<String>, OpenAuthError>
+        + Send
+        + Sync
+        + 'static,
+{
+    fn trusted_providers_for_request(
+        &self,
+        request: Option<&ApiRequest>,
+    ) -> Result<Vec<String>, OpenAuthError> {
+        self(request)
+    }
+}
+
 /// Account and OAuth account behavior.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountOptions {
@@ -5,6 +46,7 @@ pub struct AccountOptions {
     pub encrypt_oauth_tokens: bool,
     pub store_account_cookie: bool,
     pub store_state_strategy: OAuthStateStoreStrategy,
+    pub skip_state_cookie_check: bool,
     pub account_linking: AccountLinkingOptions,
 }
 
@@ -15,6 +57,7 @@ impl Default for AccountOptions {
             encrypt_oauth_tokens: false,
             store_account_cookie: false,
             store_state_strategy: OAuthStateStoreStrategy::Cookie,
+            skip_state_cookie_check: false,
             account_linking: AccountLinkingOptions::default(),
         }
     }
@@ -54,6 +97,12 @@ impl AccountOptions {
     }
 
     #[must_use]
+    pub fn skip_state_cookie_check(mut self, skip: bool) -> Self {
+        self.skip_state_cookie_check = skip;
+        self
+    }
+
+    #[must_use]
     pub fn account_linking(mut self, account_linking: AccountLinkingOptions) -> Self {
         self.account_linking = account_linking;
         self
@@ -75,11 +124,13 @@ pub enum OAuthStateStoreStrategy {
     Database,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct AccountLinkingOptions {
     pub enabled: bool,
     pub disable_implicit_linking: bool,
     pub trusted_providers: Vec<String>,
+    pub trusted_providers_provider: Option<Arc<dyn TrustedProvidersProvider>>,
+    pub trusted_providers_request_provider: Option<Arc<dyn TrustedProvidersRequestProvider>>,
     pub allow_different_emails: bool,
     pub allow_unlinking_all: bool,
     pub update_user_info_on_link: bool,
@@ -91,6 +142,8 @@ impl Default for AccountLinkingOptions {
             enabled: true,
             disable_implicit_linking: false,
             trusted_providers: Vec::new(),
+            trusted_providers_provider: None,
+            trusted_providers_request_provider: None,
             allow_different_emails: false,
             allow_unlinking_all: false,
             update_user_info_on_link: false,
@@ -137,6 +190,24 @@ impl AccountLinkingOptions {
     }
 
     #[must_use]
+    pub fn trusted_providers_provider<P>(mut self, provider: P) -> Self
+    where
+        P: TrustedProvidersProvider,
+    {
+        self.trusted_providers_provider = Some(Arc::new(provider));
+        self
+    }
+
+    #[must_use]
+    pub fn trusted_providers_for_request_provider<P>(mut self, provider: P) -> Self
+    where
+        P: TrustedProvidersRequestProvider,
+    {
+        self.trusted_providers_request_provider = Some(Arc::new(provider));
+        self
+    }
+
+    #[must_use]
     pub fn allow_different_emails(mut self, enabled: bool) -> Self {
         self.allow_different_emails = enabled;
         self
@@ -154,3 +225,48 @@ impl AccountLinkingOptions {
         self
     }
 }
+
+impl fmt::Debug for AccountLinkingOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AccountLinkingOptions")
+            .field("enabled", &self.enabled)
+            .field("disable_implicit_linking", &self.disable_implicit_linking)
+            .field("trusted_providers", &self.trusted_providers)
+            .field(
+                "trusted_providers_provider",
+                &self
+                    .trusted_providers_provider
+                    .as_ref()
+                    .map(|_| "<dynamic>"),
+            )
+            .field(
+                "trusted_providers_request_provider",
+                &self
+                    .trusted_providers_request_provider
+                    .as_ref()
+                    .map(|_| "<request-dynamic>"),
+            )
+            .field("allow_different_emails", &self.allow_different_emails)
+            .field("allow_unlinking_all", &self.allow_unlinking_all)
+            .field("update_user_info_on_link", &self.update_user_info_on_link)
+            .finish()
+    }
+}
+
+impl PartialEq for AccountLinkingOptions {
+    fn eq(&self, other: &Self) -> bool {
+        self.enabled == other.enabled
+            && self.disable_implicit_linking == other.disable_implicit_linking
+            && self.trusted_providers == other.trusted_providers
+            && self.trusted_providers_provider.is_some()
+                == other.trusted_providers_provider.is_some()
+            && self.trusted_providers_request_provider.is_some()
+                == other.trusted_providers_request_provider.is_some()
+            && self.allow_different_emails == other.allow_different_emails
+            && self.allow_unlinking_all == other.allow_unlinking_all
+            && self.update_user_info_on_link == other.update_user_info_on_link
+    }
+}
+
+impl Eq for AccountLinkingOptions {}

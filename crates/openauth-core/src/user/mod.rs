@@ -9,8 +9,8 @@ use time::OffsetDateTime;
 
 use crate::crypto::random::generate_random_string;
 use crate::db::{
-    Account, Create, DbAdapter, DbValue, Delete, DeleteMany, FindMany, FindOne, JoinOption, Update,
-    User, Where,
+    Account, Count, Create, DbAdapter, DbValue, Delete, DeleteMany, FindMany, FindOne, JoinOption,
+    Sort, SortDirection, Update, User, Where,
 };
 use crate::error::OpenAuthError;
 pub use input::{
@@ -241,6 +241,35 @@ impl<'a> DbUserStore<'a> {
             .await?;
 
         record.map(user_from_record).transpose()
+    }
+
+    pub async fn list_users(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+        sort_field: Option<&str>,
+        sort_direction: SortDirection,
+    ) -> Result<Vec<User>, OpenAuthError> {
+        let mut query = FindMany::new(USER_MODEL).select(USER_FIELDS);
+        if let Some(limit) = limit {
+            query = query.limit(limit);
+        }
+        if let Some(offset) = offset {
+            query = query.offset(offset);
+        }
+        if let Some(field) = sort_field {
+            query = query.sort_by(Sort::new(field, sort_direction));
+        }
+        self.adapter
+            .find_many(query)
+            .await?
+            .into_iter()
+            .map(user_from_record)
+            .collect()
+    }
+
+    pub async fn count_total_users(&self) -> Result<u64, OpenAuthError> {
+        self.adapter.count(Count::new(USER_MODEL)).await
     }
 
     pub async fn find_user_by_username_with_accounts(

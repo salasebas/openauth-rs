@@ -42,6 +42,7 @@ async fn social_sign_in_oauth2_and_callback_routes_work_over_axum(
             None,
         )?)
         .await?;
+    let oauth_state_cookie = cookie_header(&sign_in).ok_or("missing oauth state cookie")?;
     let sign_in_body = body_json(sign_in).await?;
     let auth_url = sign_in_body["url"].as_str().ok_or("missing auth url")?;
     let state = query_value(auth_url, "state").ok_or("missing oauth state")?;
@@ -52,7 +53,7 @@ async fn social_sign_in_oauth2_and_callback_routes_work_over_axum(
             Method::GET,
             &format!("/api/auth/callback/github?code=ok&state={state}"),
             "",
-            None,
+            Some(&oauth_state_cookie),
         )?)
         .await?;
     assert_eq!(callback.status(), StatusCode::FOUND);

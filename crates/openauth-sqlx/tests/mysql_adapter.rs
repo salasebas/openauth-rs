@@ -26,7 +26,8 @@ use openauth_core::options::{
     RateLimitStore,
 };
 use openauth_core::plugin::{
-    PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook,
+    PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook, PluginMigration,
+    PluginMigrationBody, PluginMigrationStep,
 };
 use openauth_sqlx::migration::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_sqlx::{MySqlAdapter, MySqlRateLimitStore};
@@ -766,6 +767,7 @@ async fn mysql_adapter_plan_migrations_warns_for_foreign_key_mismatch() -> Resul
     let prefix = unique_prefix();
     let users_table = format!("{prefix}_users");
     let sessions_table = format!("{prefix}_sessions");
+    let foreign_key_name = format!("{prefix}_fk_user");
     let schema = auth_schema(AuthSchemaOptions {
         user: table_options(&prefix, "users"),
         session: table_options(&prefix, "sessions"),
@@ -782,7 +784,7 @@ async fn mysql_adapter_plan_migrations_warns_for_foreign_key_mismatch() -> Resul
     .await
     .map_err(sql_error)?;
     sqlx::query(&format!(
-        "CREATE TABLE {sessions_table} (id VARCHAR(255) PRIMARY KEY, user_id VARCHAR(255), CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES {users_table}(id) ON DELETE RESTRICT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        "CREATE TABLE {sessions_table} (id VARCHAR(255) PRIMARY KEY, user_id VARCHAR(255), CONSTRAINT {foreign_key_name} FOREIGN KEY (user_id) REFERENCES {users_table}(id) ON DELETE RESTRICT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     ))
     .execute(&pool)
     .await
@@ -809,6 +811,32 @@ async fn mysql_adapter_plan_migrations_warns_for_foreign_key_mismatch() -> Resul
         "expected FK mismatch warning, got {:?}",
         plan.warnings
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mysql_adapter_run_plugin_migrations_executes_sql_bodies() -> Result<(), OpenAuthError> {
+    let prefix = unique_prefix();
+    let table = format!("{prefix}_audit_log");
+    let pool = test_pool(1).await?;
+    let adapter = MySqlAdapter::new(pool.clone());
+    let migrations = vec![
+        PluginMigration::new("create_audit_log").body(PluginMigrationBody::Sql(format!(
+            "CREATE TABLE {table} (id VARCHAR(255) PRIMARY KEY)"
+        ))),
+        PluginMigration::new("seed_audit_log").body(PluginMigrationBody::Plan(vec![
+            PluginMigrationStep::new("insert row")
+                .sql(format!("INSERT INTO {table} (id) VALUES ('row_1')")),
+        ])),
+    ];
+
+    adapter.run_plugin_migrations(&migrations).await?;
+
+    let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+        .fetch_one(&pool)
+        .await
+        .map_err(sql_error)?;
+    assert_eq!(count, 1);
     Ok(())
 }
 

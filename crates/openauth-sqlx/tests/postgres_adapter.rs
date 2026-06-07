@@ -26,7 +26,8 @@ use openauth_core::options::{
     RateLimitStore,
 };
 use openauth_core::plugin::{
-    PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook,
+    PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook, PluginMigration,
+    PluginMigrationBody, PluginMigrationStep,
 };
 use openauth_sqlx::migration::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_sqlx::{PostgresAdapter, PostgresRateLimitStore};
@@ -813,6 +814,32 @@ async fn postgres_adapter_plan_migrations_warns_for_foreign_key_mismatch(
         "expected FK mismatch warning, got {:?}",
         plan.warnings
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn postgres_adapter_run_plugin_migrations_executes_sql_bodies() -> Result<(), OpenAuthError> {
+    let prefix = unique_prefix();
+    let table = format!("{prefix}_audit_log");
+    let pool = test_pool(1).await?;
+    let adapter = PostgresAdapter::new(pool.clone());
+    let migrations = vec![
+        PluginMigration::new("create_audit_log").body(PluginMigrationBody::Sql(format!(
+            "CREATE TABLE {table} (id TEXT PRIMARY KEY)"
+        ))),
+        PluginMigration::new("seed_audit_log").body(PluginMigrationBody::Plan(vec![
+            PluginMigrationStep::new("insert row")
+                .sql(format!("INSERT INTO {table} (id) VALUES ('row_1')")),
+        ])),
+    ];
+
+    adapter.run_plugin_migrations(&migrations).await?;
+
+    let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+        .fetch_one(&pool)
+        .await
+        .map_err(sql_error)?;
+    assert_eq!(count, 1);
     Ok(())
 }
 

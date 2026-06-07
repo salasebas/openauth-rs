@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::shared::{
-    current_session, error_response, invalid_additional_field_response, json_openapi_response,
-    json_response, unauthorized,
+    auth_session_cookies, current_session, error_response, invalid_additional_field_response,
+    json_openapi_response, json_response, unauthorized,
 };
 use crate::api::additional_fields::update_values;
 use crate::api::{
@@ -16,6 +16,7 @@ use crate::api::{
 use crate::db::DbAdapter;
 use crate::db::DbValue;
 use crate::error::OpenAuthError;
+use crate::session::SessionStore;
 use crate::user::{DbUserStore, UpdateUserInput};
 
 #[derive(Debug, Deserialize)]
@@ -54,7 +55,7 @@ pub(super) fn update_user_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
         move |context, request| {
             let adapter = Arc::clone(&adapter);
             Box::pin(async move {
-                let Some((_, user, cookies)) =
+                let Some((session, user, mut cookies)) =
                     current_session(adapter.as_ref(), context, &request).await?
                 else {
                     return unauthorized();
@@ -179,9 +180,16 @@ pub(super) fn update_user_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
                     );
                 }
 
-                let _updated = DbUserStore::new(adapter.as_ref())
+                let updated = DbUserStore::new(adapter.as_ref())
                     .update_user(&user.id, input)
+                    .await?
+                    .ok_or_else(|| OpenAuthError::Api("user not found".to_owned()))?;
+                SessionStore::new(adapter.as_ref(), context)
+                    .refresh_user_sessions(&user.id)
                     .await?;
+                if context.options.session.cookie_cache.enabled {
+                    cookies.extend(auth_session_cookies(context, &session, &updated, false)?);
+                }
                 json_response(
                     StatusCode::OK,
                     &UpdateUserResponse { status: true },

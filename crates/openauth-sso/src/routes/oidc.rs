@@ -8,10 +8,11 @@ use openauth_core::api::{
     OpenApiOperation,
 };
 use openauth_core::auth::oauth::{
-    handle_oauth_user_info, parse_oauth_state, HandleOAuthUserInfoInput, OAuthAccountInput,
-    OAuthUserInfo,
+    handle_oauth_user_info, parse_oauth_state_with_input, HandleOAuthUserInfoInput,
+    OAuthAccountInput, OAuthStateParseInput, OAuthUserInfo,
 };
 use openauth_core::context::AuthContext;
+use openauth_core::cookies::parse_cookies;
 use openauth_oauth::oauth2::{
     validate_authorization_code_with_client, AuthorizationCodeRequest, ClientAuthentication,
     ClientId, ClientTokenRequest, OAuth2Tokens, ProviderOptions,
@@ -74,7 +75,22 @@ async fn callback(
     let Some(adapter) = context.adapter.as_deref() else {
         return redirect_with_error(&default_error_url, "invalid_state");
     };
-    let state_data = match parse_oauth_state(context, Some(adapter), &state).await {
+    let oauth_state = oauth_state_cookie_value(context, &request);
+    // SSO OIDC callbacks may be delivered as cross-site requests where
+    // SameSite=Lax cookies are not sent. Validate the nonce whenever the cookie
+    // is available, while preserving OIDC cross-site callback compatibility.
+    let state_data = match parse_oauth_state_with_input(
+        context,
+        Some(adapter),
+        OAuthStateParseInput {
+            state: &state,
+            oauth_state: oauth_state.as_deref(),
+            skip_state_cookie_check: context.options.account.skip_state_cookie_check
+                || oauth_state.is_none(),
+        },
+    )
+    .await
+    {
         Ok(data) => data,
         Err(_) => return redirect_with_error(&default_error_url, "invalid_state"),
     };
@@ -265,6 +281,18 @@ async fn callback(
     let target_url =
         utils::safe_redirect_url(context, target_url).unwrap_or_else(|| context.base_url.clone());
     redirect_with_cookies(&target_url, cookies)
+}
+
+fn oauth_state_cookie_value(context: &AuthContext, request: &ApiRequest) -> Option<String> {
+    request
+        .headers()
+        .get(http::header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|header| {
+            parse_cookies(header)
+                .get(&context.auth_cookies.oauth_state.name)
+                .cloned()
+        })
 }
 
 fn is_trusted_sso_provider(

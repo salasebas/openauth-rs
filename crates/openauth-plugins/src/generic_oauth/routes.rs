@@ -1,14 +1,14 @@
 use http::{Method, StatusCode};
 use openauth_core::api::{
-    create_auth_endpoint, parse_request_body, ApiRequest, ApiResponse, AsyncAuthEndpoint,
-    AuthEndpointOptions,
+    create_auth_endpoint, parse_request_body, redirect_openapi_response, ApiRequest, ApiResponse,
+    AsyncAuthEndpoint, AuthEndpointOptions, OpenApiOperation,
 };
 use openauth_core::auth::oauth::{
-    generate_oauth_state, handle_oauth_user_info, parse_oauth_state, HandleOAuthUserInfoInput,
-    OAuthStateInput, OAuthStateLink,
+    generate_oauth_state, handle_oauth_user_info, parse_oauth_state_with_input,
+    HandleOAuthUserInfoInput, OAuthStateInput, OAuthStateLink, OAuthStateParseInput,
 };
 use openauth_core::context::AuthContext;
-use openauth_core::cookies::{set_session_cookie, SessionCookieOptions};
+use openauth_core::cookies::{parse_cookies, set_session_cookie, Cookie, SessionCookieOptions};
 use openauth_core::error::OpenAuthError;
 use openauth_oauth::oauth2::{
     SocialAuthorizationCodeRequest, SocialAuthorizationUrlRequest, SocialOAuthProvider,
@@ -118,7 +118,11 @@ pub fn sign_in_oauth2_endpoint(
                     scopes: body.scopes,
                     login_hint: None,
                 })?;
-                redirect_json_response(url.to_string(), !body.disable_redirect)
+                redirect_json_response(
+                    url.to_string(),
+                    !body.disable_redirect,
+                    vec![oauth_state_cookie(context, &state.data.oauth_state)],
+                )
             })
         },
     )
@@ -131,7 +135,13 @@ pub fn oauth2_callback_endpoint(
     create_auth_endpoint(
         "/oauth2/callback/:providerId",
         Method::GET,
-        AuthEndpointOptions::new().operation_id("oAuth2Callback"),
+        AuthEndpointOptions::new()
+            .operation_id("oAuth2Callback")
+            .openapi(
+                OpenApiOperation::new("oAuth2Callback")
+                    .description("Handle generic OAuth2 callback")
+                    .response("302", redirect_openapi_response("OAuth callback redirect")),
+            ),
         move |context, request| {
             let options = options.clone();
             let discovery_cache = discovery_cache.clone();
@@ -210,7 +220,11 @@ pub fn oauth2_link_endpoint(
                     scopes: body.scopes,
                     login_hint: None,
                 })?;
-                redirect_json_response(url.to_string(), true)
+                redirect_json_response(
+                    url.to_string(),
+                    true,
+                    vec![oauth_state_cookie(context, &state.data.oauth_state)],
+                )
             })
         },
     )
@@ -246,7 +260,18 @@ async fn callback_get(
     let Some(state) = query_param(&request, "state") else {
         return redirect_with_error(&default_error_url(context), "invalid_state");
     };
-    let state_data = match parse_oauth_state(context, Some(adapter.as_ref()), &state).await {
+    let oauth_state = oauth_state_cookie_value(context, &request);
+    let state_data = match parse_oauth_state_with_input(
+        context,
+        Some(adapter.as_ref()),
+        OAuthStateParseInput {
+            state: &state,
+            oauth_state: oauth_state.as_deref(),
+            skip_state_cookie_check: context.options.account.skip_state_cookie_check,
+        },
+    )
+    .await
+    {
         Ok(data) => data,
         Err(_) => return redirect_with_error(&default_error_url(context), "invalid_state"),
     };
@@ -344,6 +369,26 @@ async fn callback_get(
         &state_data.callback_url
     };
     redirect(target, cookies)
+}
+
+fn oauth_state_cookie(context: &AuthContext, oauth_state: &str) -> Cookie {
+    Cookie {
+        name: context.auth_cookies.oauth_state.name.clone(),
+        value: oauth_state.to_owned(),
+        attributes: context.auth_cookies.oauth_state.attributes.clone(),
+    }
+}
+
+fn oauth_state_cookie_value(context: &AuthContext, request: &ApiRequest) -> Option<String> {
+    request
+        .headers()
+        .get(http::header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|header| {
+            parse_cookies(header)
+                .get(&context.auth_cookies.oauth_state.name)
+                .cloned()
+        })
 }
 
 fn callback_config_error_code(error: &OpenAuthError) -> &'static str {

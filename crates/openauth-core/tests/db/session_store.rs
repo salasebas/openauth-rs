@@ -15,6 +15,7 @@ struct InMemorySessionAdapter {
     records: Mutex<HashMap<String, DbRecord>>,
     creates: Mutex<Vec<Create>>,
     updates: Mutex<Vec<Update>>,
+    update_many: Mutex<Vec<UpdateMany>>,
     deletes: Mutex<Vec<Delete>>,
     delete_many: Mutex<Vec<DeleteMany>>,
 }
@@ -50,6 +51,18 @@ impl DbAdapter for InMemorySessionAdapter {
 
     fn find_many<'a>(&'a self, query: FindMany) -> AdapterFuture<'a, Vec<DbRecord>> {
         Box::pin(async move {
+            if let Some(tokens) = token_in_filter(&query.where_clauses)? {
+                return Ok(self
+                    .records
+                    .lock()
+                    .await
+                    .values()
+                    .filter(|record| {
+                        matches!(record.get("token"), Some(DbValue::String(value)) if tokens.iter().any(|token| token == value))
+                    })
+                    .cloned()
+                    .collect());
+            }
             let user_id = user_filter(&query.where_clauses)?;
             Ok(self
                 .records
@@ -85,8 +98,23 @@ impl DbAdapter for InMemorySessionAdapter {
         })
     }
 
-    fn update_many<'a>(&'a self, _query: UpdateMany) -> AdapterFuture<'a, u64> {
-        Box::pin(async { Ok(0) })
+    fn update_many<'a>(&'a self, query: UpdateMany) -> AdapterFuture<'a, u64> {
+        Box::pin(async move {
+            self.update_many.lock().await.push(query.clone());
+            let user_id = user_filter(&query.where_clauses)?;
+            let mut records = self.records.lock().await;
+            let mut updated = 0;
+            for record in records.values_mut() {
+                if matches!(record.get("user_id"), Some(DbValue::String(value)) if value == user_id)
+                {
+                    for (key, value) in &query.data {
+                        record.insert(key.clone(), value.clone());
+                    }
+                    updated += 1;
+                }
+            }
+            Ok(updated)
+        })
     }
 
     fn delete<'a>(&'a self, query: Delete) -> AdapterFuture<'a, ()> {
@@ -281,6 +309,47 @@ async fn db_session_store_deletes_all_sessions_for_user() -> Result<(), OpenAuth
 }
 
 #[tokio::test]
+async fn db_session_store_refresh_user_sessions_bumps_updated_at() -> Result<(), OpenAuthError> {
+    let adapter = InMemorySessionAdapter::default();
+    let expires_at = OffsetDateTime::now_utc() + Duration::hours(1);
+    let original = OffsetDateTime::now_utc() - Duration::hours(1);
+    let mut first = session_record("session_1", "user_1", "token_1", expires_at);
+    first.insert("updated_at".to_owned(), DbValue::Timestamp(original));
+    let mut second = session_record("session_2", "user_1", "token_2", expires_at);
+    second.insert("updated_at".to_owned(), DbValue::Timestamp(original));
+    let mut other = session_record("session_3", "user_2", "token_3", expires_at);
+    other.insert("updated_at".to_owned(), DbValue::Timestamp(original));
+    adapter.insert(first).await?;
+    adapter.insert(second).await?;
+    adapter.insert(other).await?;
+
+    let refreshed = DbSessionStore::new(&adapter)
+        .refresh_user_sessions("user_1")
+        .await?;
+
+    assert_eq!(refreshed, 2);
+    let records = adapter.records.lock().await;
+    for token in ["token_1", "token_2"] {
+        let updated = records
+            .get(token)
+            .and_then(|record| record.get("updated_at"))
+            .ok_or_else(|| OpenAuthError::Adapter("missing updated_at".to_owned()))?;
+        assert!(matches!(updated, DbValue::Timestamp(value) if *value > original));
+    }
+    assert_eq!(
+        records
+            .get("token_3")
+            .and_then(|record| record.get("updated_at")),
+        Some(&DbValue::Timestamp(original))
+    );
+    let updates = adapter.update_many.lock().await;
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].model, "session");
+    assert_eq!(user_filter(&updates[0].where_clauses)?, "user_1");
+    Ok(())
+}
+
+#[tokio::test]
 async fn db_session_store_lists_active_sessions_for_user() -> Result<(), OpenAuthError> {
     let adapter = InMemorySessionAdapter::default();
     let active_expiry = OffsetDateTime::now_utc() + Duration::hours(1);
@@ -315,6 +384,30 @@ async fn db_session_store_lists_active_sessions_for_user() -> Result<(), OpenAut
 
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].token, "token_1");
+    Ok(())
+}
+
+#[tokio::test]
+async fn db_session_store_finds_sessions_by_tokens() -> Result<(), OpenAuthError> {
+    let adapter = InMemorySessionAdapter::default();
+    let expires_at = OffsetDateTime::now_utc() + Duration::hours(1);
+    adapter
+        .insert(session_record("session_1", "user_1", "token_1", expires_at))
+        .await?;
+    adapter
+        .insert(session_record("session_2", "user_1", "token_2", expires_at))
+        .await?;
+    adapter
+        .insert(session_record("session_3", "user_1", "token_3", expires_at))
+        .await?;
+
+    let sessions = DbSessionStore::new(&adapter)
+        .find_sessions(["token_3", "missing", "token_1"])
+        .await?;
+
+    assert_eq!(sessions.len(), 2);
+    assert!(sessions.iter().any(|session| session.token == "token_1"));
+    assert!(sessions.iter().any(|session| session.token == "token_3"));
     Ok(())
 }
 
@@ -361,6 +454,27 @@ fn string_filter<'a>(where_clauses: &'a [Where], field: &str) -> Result<&'a str,
             }
         })
         .ok_or_else(|| OpenAuthError::Adapter(format!("missing {field} filter")))
+}
+
+fn token_in_filter(where_clauses: &[Where]) -> Result<Option<Vec<String>>, OpenAuthError> {
+    where_clauses
+        .iter()
+        .find_map(|where_clause| {
+            match (
+                where_clause.field.as_str(),
+                where_clause.operator,
+                &where_clause.value,
+            ) {
+                ("token", WhereOperator::In, DbValue::StringArray(values)) => {
+                    Some(Ok(values.clone()))
+                }
+                ("token", WhereOperator::In, _) => Some(Err(OpenAuthError::Adapter(
+                    "token IN filter must use string array".to_owned(),
+                ))),
+                _ => None,
+            }
+        })
+        .transpose()
 }
 
 fn string_field<'a>(record: &'a DbRecord, field: &str) -> Result<&'a str, OpenAuthError> {

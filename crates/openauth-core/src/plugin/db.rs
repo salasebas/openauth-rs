@@ -11,7 +11,7 @@ pub use handler::{
     PluginDatabaseAfterHookFuture, PluginDatabaseAfterHookHandler, PluginDatabaseBeforeHookFuture,
     PluginDatabaseBeforeHookHandler, PluginDatabaseHookContext,
 };
-pub use migration::PluginMigration;
+pub use migration::{PluginMigration, PluginMigrationBody, PluginMigrationStep};
 
 use errors::{mismatched_after_input, mismatched_before_input};
 

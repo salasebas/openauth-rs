@@ -13,6 +13,7 @@ pub fn get_cookies(options: &OpenAuthOptions) -> Result<AuthCookies, OpenAuthErr
         session_data: create_auth_cookie(options, "session_data", Some(cache_max_age))?,
         account_data: create_auth_cookie(options, "account_data", Some(cache_max_age))?,
         dont_remember_token: create_auth_cookie(options, "dont_remember", None)?,
+        oauth_state: create_auth_cookie(options, "oauth_state", Some(60 * 10))?,
     })
 }
 

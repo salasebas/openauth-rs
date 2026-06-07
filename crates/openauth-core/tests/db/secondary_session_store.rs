@@ -292,3 +292,38 @@ async fn secondary_session_store_update_expiry_refreshes_user_index_ttl(
     assert!(refreshed_ttl > initial_ttl);
     Ok(())
 }
+
+#[tokio::test]
+async fn secondary_session_store_refresh_user_sessions_bumps_updated_at(
+) -> Result<(), OpenAuthError> {
+    let adapter = MemoryAdapter::new();
+    let storage = Arc::new(TtlAwareSecondaryStorage::default());
+    let store = secondary_store(&adapter, storage.clone());
+    let expires_at = OffsetDateTime::now_utc() + Duration::hours(2);
+
+    let created = store
+        .create_session(
+            CreateSessionInput::new("user_1", expires_at)
+                .token("token_1")
+                .id("session_1"),
+        )
+        .await?;
+    let initial_ttl = storage
+        .ttl_for_key("session:token_1")?
+        .ok_or_else(|| OpenAuthError::Adapter("missing initial session TTL".to_owned()))?;
+
+    let refreshed = store.refresh_user_sessions("user_1").await?;
+    let session = store
+        .find_session("token_1")
+        .await?
+        .ok_or_else(|| OpenAuthError::Adapter("missing refreshed session".to_owned()))?;
+    let refreshed_ttl = storage
+        .ttl_for_key("session:token_1")?
+        .ok_or_else(|| OpenAuthError::Adapter("missing refreshed session TTL".to_owned()))?;
+
+    assert_eq!(refreshed, 1);
+    assert!(session.updated_at >= created.updated_at);
+    assert!(refreshed_ttl <= initial_ttl);
+    assert!(refreshed_ttl > 0);
+    Ok(())
+}

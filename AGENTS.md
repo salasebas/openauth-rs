@@ -35,6 +35,18 @@ down observable behavior, validation, serialization, error handling, and
 integration contracts. When porting from Better Auth, inspect the matching
 upstream tests and adapt the relevant scenarios to Rust.
 
+Before running integration tests that depend on external services, start the
+required Docker Compose services with the repo helper. For SQLx/Postgres/MySQL
+or distributed storage coverage, prefer:
+
+```bash
+./scripts/ensure-test-services.sh postgres mysql redis valkey
+```
+
+For narrower reruns, request only the services the affected tests need, such as
+`./scripts/ensure-test-services.sh postgres mysql` before Postgres/MySQL
+adapter or public API integration tests.
+
 ## Builds and Artifacts
 
 Use the local workspace `target/` directory by default. Do not document or use

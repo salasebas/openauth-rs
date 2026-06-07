@@ -278,6 +278,20 @@ async fn generated_schema_audits_all_server_plugin_endpoints(
             "string"
         );
     }
+    let callback = &generic_paths["/oauth2/callback/{providerId}"]["get"];
+    assert_eq!(callback["operationId"], "oAuth2Callback");
+    assert_eq!(
+        callback["responses"]["302"]["description"],
+        "OAuth callback redirect"
+    );
+    assert!(
+        callback["parameters"]
+            .as_array()
+            .is_some_and(|parameters| parameters.iter().any(|parameter| {
+                parameter["name"] == "providerId" && parameter["in"] == "path"
+            })),
+        "generic OAuth callback should document providerId path parameter"
+    );
 
     Ok(())
 }

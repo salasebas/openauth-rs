@@ -11,9 +11,10 @@ use crate::auth::oauth::account_linking::{
     ACCOUNT_ALREADY_LINKED_TO_DIFFERENT_USER, EMAIL_DOES_NOT_MATCH_LINKED_USER,
 };
 use crate::auth::oauth::{
-    handle_oauth_user_info, HandleOAuthUserInfoInput, OAuthAccountInput, OAuthStateLink,
-    OAuthUserInfo,
+    handle_oauth_user_info, parse_oauth_state_with_input, HandleOAuthUserInfoInput,
+    OAuthAccountInput, OAuthStateLink, OAuthStateParseInput, OAuthUserInfo,
 };
+use crate::cookies::parse_cookies;
 use crate::db::DbAdapter;
 use crate::error::OpenAuthError;
 use crate::user::{CreateOAuthAccountInput, DbUserStore, UpdateAccountInput, UpdateUserInput};
@@ -108,11 +109,21 @@ pub(super) async fn callback_get(
         Some(state) => state,
         None => return redirect(&default_error_url, Vec::new()),
     };
-    let state_data =
-        match crate::auth::oauth::parse_oauth_state(context, Some(adapter), &state).await {
-            Ok(data) => data,
-            Err(_) => return redirect_with_error(&default_error_url, "invalid_state"),
-        };
+    let oauth_state = oauth_state_cookie_value(context, &request);
+    let state_data = match parse_oauth_state_with_input(
+        context,
+        Some(adapter),
+        OAuthStateParseInput {
+            state: &state,
+            oauth_state: oauth_state.as_deref(),
+            skip_state_cookie_check: context.options.account.skip_state_cookie_check,
+        },
+    )
+    .await
+    {
+        Ok(data) => data,
+        Err(_) => return redirect_with_error(&default_error_url, "invalid_state"),
+    };
     let error_url = state_data.error_url.clone().unwrap_or(default_error_url);
     if let Some(error) = query_param(&request, "error") {
         return redirect_with_error(&error_url, &error);
@@ -149,6 +160,7 @@ pub(super) async fn callback_get(
             &user_info,
             &tokens,
             LinkOAuthAccountOptions {
+                trusted_providers: context.trusted_providers_for_request(Some(&request))?,
                 update_existing_account_tokens: true,
                 update_user_info_on_link: false,
             },
@@ -194,6 +206,21 @@ pub(super) async fn callback_get(
         &state_data.callback_url
     };
     redirect(target, cookies)
+}
+
+fn oauth_state_cookie_value(
+    context: &crate::context::AuthContext,
+    request: &ApiRequest,
+) -> Option<String> {
+    request
+        .headers()
+        .get(http::header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|header| {
+            parse_cookies(header)
+                .get(&context.auth_cookies.oauth_state.name)
+                .cloned()
+        })
 }
 
 pub(super) fn callback_post_redirect(
@@ -297,6 +324,7 @@ pub(super) async fn link_with_id_token(
         &info,
         &tokens,
         LinkOAuthAccountOptions {
+            trusted_providers: context.trusted_providers_for_request(None)?,
             update_existing_account_tokens: false,
             update_user_info_on_link: context
                 .options
@@ -325,8 +353,9 @@ fn link_status_response() -> Result<ApiResponse, OpenAuthError> {
     )
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct LinkOAuthAccountOptions {
+    trusted_providers: Vec<String>,
     update_existing_account_tokens: bool,
     update_user_info_on_link: bool,
 }
@@ -357,7 +386,7 @@ async fn link_oauth_account(
 ) -> Result<(), LinkOAuthAccountError> {
     let normalized = normalize_user_info(info)?;
     let linking = &context.options.account.account_linking;
-    let trusted_provider = linking
+    let trusted_provider = options
         .trusted_providers
         .iter()
         .any(|provider_id| provider_id == provider.id());

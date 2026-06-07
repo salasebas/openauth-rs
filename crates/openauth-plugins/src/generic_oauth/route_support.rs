@@ -1,8 +1,10 @@
 use http::{header, HeaderValue, StatusCode};
-use openauth_core::api::{ApiRequest, ApiResponse, PathParams};
+use openauth_core::api::{serialize_cookie, ApiRequest, ApiResponse, PathParams};
 use openauth_core::auth::oauth::OAuthUserInfoError;
 use openauth_core::context::AuthContext;
-use openauth_core::cookies::{get_session_cookie, verify_cookie_value, SECURE_COOKIE_PREFIX};
+use openauth_core::cookies::{
+    get_session_cookie, verify_cookie_value, Cookie, SECURE_COOKIE_PREFIX,
+};
 use openauth_core::db::DbAdapter;
 use openauth_core::error::OpenAuthError;
 use openauth_core::session::DbSessionStore;
@@ -217,6 +219,7 @@ pub(super) fn config_error_response(error: OpenAuthError) -> Result<ApiResponse,
 pub(super) fn redirect_json_response(
     url: String,
     redirect: bool,
+    cookies: Vec<Cookie>,
 ) -> Result<ApiResponse, OpenAuthError> {
     let mut response = json_response(
         StatusCode::OK,
@@ -229,6 +232,13 @@ pub(super) fn redirect_json_response(
         response.headers_mut().insert(
             header::LOCATION,
             HeaderValue::from_str(&url).map_err(|error| OpenAuthError::Api(error.to_string()))?,
+        );
+    }
+    for cookie in cookies {
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&serialize_cookie(&cookie))
+                .map_err(|error| OpenAuthError::Cookie(error.to_string()))?,
         );
     }
     Ok(response)

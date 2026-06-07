@@ -287,9 +287,11 @@ fn can_implicitly_link(context: &AuthContext, input: &HandleOAuthUserInfoInput) 
     if !linking.enabled || linking.disable_implicit_linking {
         return false;
     }
+    let trusted_providers = context
+        .trusted_providers_for_request(None)
+        .unwrap_or_default();
     let trusted = input.is_trusted_provider
-        || linking
-            .trusted_providers
+        || trusted_providers
             .iter()
             .any(|provider| provider == &input.account.provider_id);
     if input.require_trusted_provider_for_implicit_link {

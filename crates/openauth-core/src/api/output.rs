@@ -4,13 +4,15 @@ use serde::Serialize;
 use serde_json::Value;
 use time::OffsetDateTime;
 
-use crate::api::additional_fields::insert_returned_fields;
+use crate::api::additional_fields::{db_value_to_json, insert_returned_fields};
 use crate::context::AuthContext;
 use crate::cookies::{
     set_cookie_cache, set_session_cookie, Cookie, CookieCachePayload, CookieOptions,
     SessionCookieOptions,
 };
-use crate::db::{DbAdapter, DbRecord, DbValue, FindOne, Session, User, Where};
+use crate::db::{
+    filter_output_fields, DbAdapter, DbRecord, DbValue, FindOne, Session, User, Where,
+};
 use crate::error::OpenAuthError;
 
 #[derive(Debug, Serialize)]
@@ -66,12 +68,6 @@ pub async fn user_output_value(
     context: &AuthContext,
     user: &User,
 ) -> Result<Value, OpenAuthError> {
-    if context.options.user.additional_fields.is_empty() {
-        return serde_json::to_value(user).map_err(|error| OpenAuthError::Serialization {
-            context: "serializing user output",
-            message: error.to_string(),
-        });
-    }
     let record = adapter
         .find_one(
             FindOne::new("user").where_clause(Where::new("id", DbValue::String(user.id.clone()))),
@@ -89,6 +85,7 @@ pub async fn user_output_value(
     };
     if let Some(record) = record {
         insert_returned_fields(object, &context.options.user.additional_fields, &record)?;
+        insert_schema_returned_fields(context, "user", object, &record)?;
     }
     Ok(value)
 }
@@ -98,12 +95,6 @@ pub async fn session_output_value(
     context: &AuthContext,
     session: &Session,
 ) -> Result<Value, OpenAuthError> {
-    if context.options.session.additional_fields.is_empty() {
-        return serde_json::to_value(session).map_err(|error| OpenAuthError::Serialization {
-            context: "serializing session output",
-            message: error.to_string(),
-        });
-    }
     let record = adapter
         .find_one(
             FindOne::new("session")
@@ -136,7 +127,26 @@ pub fn session_value_from_record(
         });
     };
     insert_returned_fields(object, &context.options.session.additional_fields, record)?;
+    insert_schema_returned_fields(context, "session", object, record)?;
     Ok(value)
+}
+
+fn insert_schema_returned_fields(
+    context: &AuthContext,
+    table: &str,
+    object: &mut serde_json::Map<String, Value>,
+    record: &DbRecord,
+) -> Result<(), OpenAuthError> {
+    let Some(table) = context.db_schema.table(table) else {
+        return Ok(());
+    };
+    for (logical_name, value) in filter_output_fields(record, &table.fields) {
+        if object.contains_key(&logical_name) {
+            continue;
+        }
+        object.insert(logical_name, db_value_to_json(&value)?);
+    }
+    Ok(())
 }
 
 pub fn session_response_cookies(

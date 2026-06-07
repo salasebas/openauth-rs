@@ -96,6 +96,8 @@ pub(super) fn change_password_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuth
                     token = Some(new_session.token);
                 }
 
+                let user = super::shared::user_response_value(adapter.as_ref(), context, &user)
+                    .await?;
                 json_response(StatusCode::OK, &TokenUserResponse { token, user }, cookies)
             })
         },

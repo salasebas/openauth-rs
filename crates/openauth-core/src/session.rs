@@ -6,7 +6,7 @@ use crate::context::AuthContext;
 use crate::crypto::random::generate_random_string;
 use crate::db::{
     Create, DbAdapter, DbRecord, DbValue, Delete, DeleteMany, FindMany, FindOne, Session, Update,
-    Where,
+    UpdateMany, Where, WhereOperator,
 };
 use crate::error::OpenAuthError;
 use crate::options::SecondaryStorage;
@@ -152,6 +152,39 @@ impl<'a> DbSessionStore<'a> {
             .transpose()
     }
 
+    pub async fn find_sessions<I, S>(&self, tokens: I) -> Result<Vec<Session>, OpenAuthError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let tokens = tokens
+            .into_iter()
+            .map(|token| token.as_ref().to_owned())
+            .collect::<Vec<_>>();
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let now = OffsetDateTime::now_utc();
+        self.adapter
+            .find_many(
+                FindMany::new(SESSION_MODEL)
+                    .where_clause(
+                        Where::new("token", DbValue::StringArray(tokens))
+                            .operator(WhereOperator::In),
+                    )
+                    .select(SESSION_FIELDS),
+            )
+            .await?
+            .into_iter()
+            .map(session_from_record)
+            .filter_map(|result| match result {
+                Ok(session) if session.expires_at > now => Some(Ok(session)),
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect()
+    }
+
     pub async fn update_session_expiry(
         &self,
         token: &str,
@@ -181,6 +214,16 @@ impl<'a> DbSessionStore<'a> {
             .delete_many(
                 DeleteMany::new(SESSION_MODEL)
                     .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned()))),
+            )
+            .await
+    }
+
+    pub async fn refresh_user_sessions(&self, user_id: &str) -> Result<u64, OpenAuthError> {
+        self.adapter
+            .update_many(
+                UpdateMany::new(SESSION_MODEL)
+                    .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned())))
+                    .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc())),
             )
             .await
     }
@@ -284,6 +327,44 @@ impl<'a> SessionStore<'a> {
         }
     }
 
+    pub async fn find_sessions<I, S>(&self, tokens: I) -> Result<Vec<Session>, OpenAuthError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let tokens = tokens
+            .into_iter()
+            .map(|token| token.as_ref().to_owned())
+            .collect::<Vec<_>>();
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(storage) = &self.secondary_storage else {
+            return self.database.find_sessions(tokens).await;
+        };
+        let now = OffsetDateTime::now_utc();
+        let mut sessions = Vec::new();
+        let mut missing_tokens = Vec::new();
+        for token in tokens {
+            let Some(session) = self
+                .find_secondary_session(storage.as_ref(), &token)
+                .await?
+            else {
+                missing_tokens.push(token);
+                continue;
+            };
+            if session.expires_at > now {
+                sessions.push(session);
+            } else {
+                storage.delete(&session_key(&token)).await?;
+            }
+        }
+        if self.store_session_in_database && !missing_tokens.is_empty() {
+            sessions.extend(self.database.find_sessions(missing_tokens).await?);
+        }
+        Ok(sessions)
+    }
+
     pub async fn update_session_expiry(
         &self,
         token: &str,
@@ -349,6 +430,35 @@ impl<'a> SessionStore<'a> {
             self.database.delete_user_sessions(user_id).await?;
         }
         Ok(deleted)
+    }
+
+    pub async fn refresh_user_sessions(&self, user_id: &str) -> Result<u64, OpenAuthError> {
+        let Some(storage) = &self.secondary_storage else {
+            return self.database.refresh_user_sessions(user_id).await;
+        };
+        let tokens = self.user_session_tokens(storage.as_ref(), user_id).await?;
+        let now = OffsetDateTime::now_utc();
+        let mut refreshed = 0;
+        for token in &tokens {
+            let Some(mut session) = self.find_secondary_session(storage.as_ref(), token).await?
+            else {
+                continue;
+            };
+            if session.expires_at <= now {
+                storage.delete(&session_key(&session.token)).await?;
+                continue;
+            }
+            session.updated_at = now;
+            self.set_secondary_session(storage.as_ref(), &session)
+                .await?;
+            refreshed += 1;
+        }
+        self.set_user_session_tokens(storage.as_ref(), user_id, &tokens)
+            .await?;
+        if self.store_session_in_database {
+            self.database.refresh_user_sessions(user_id).await?;
+        }
+        Ok(refreshed)
     }
 
     pub async fn list_user_sessions(&self, user_id: &str) -> Result<Vec<Session>, OpenAuthError> {

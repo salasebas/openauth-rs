@@ -1,16 +1,19 @@
 use crate::common::with_test_defaults;
 use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{
-    create_auth_endpoint, empty_openapi_response, path_param, query_param,
-    redirect_openapi_response, response, AuthEndpointOptions, AuthRouter, BodyField, BodySchema,
-    EndpointMiddleware, JsonSchemaType, OpenApiOperation,
+    create_auth_endpoint, empty_openapi_response, fresh_session_middleware, path_param,
+    query_param, redirect_openapi_response, response, AuthEndpointOptions, AuthRouter, BodyField,
+    BodySchema, EndpointMiddleware, JsonSchemaType, OpenApiOperation,
 };
 use openauth_core::context::create_auth_context;
+use openauth_core::context::request_state::set_current_session;
+use openauth_core::db::{Session, User};
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::OpenAuthOptions;
+use openauth_core::options::{OpenAuthOptions, SessionOptions};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use time::{Duration, OffsetDateTime};
 
 #[tokio::test]
 async fn create_auth_endpoint_exposes_metadata_and_openapi(
@@ -320,6 +323,142 @@ async fn create_auth_endpoint_runs_endpoint_middleware_before_handler(
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(response.body(), b"blocked");
     Ok(())
+}
+
+#[tokio::test]
+async fn fresh_session_middleware_rejects_stale_session_before_handler(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let called = Arc::new(AtomicBool::new(false));
+    let called_in_handler = Arc::clone(&called);
+    let endpoint = create_auth_endpoint(
+        "/fresh",
+        Method::POST,
+        AuthEndpointOptions::new()
+            .middleware(session_state_from_extension_middleware())
+            .middleware(fresh_session_middleware()),
+        move |_context, _request| {
+            called_in_handler.store(true, Ordering::SeqCst);
+            Box::pin(async move { response(StatusCode::OK, b"handler".to_vec()) })
+        },
+    );
+    let context = create_auth_context(with_test_defaults(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        session: SessionOptions {
+            fresh_age: Some(60),
+            ..SessionOptions::default()
+        },
+        ..OpenAuthOptions::default()
+    }))?;
+    let router = AuthRouter::with_async_endpoints(context, Vec::new(), vec![endpoint])?;
+
+    let response = router
+        .handle_async_server(
+            Request::builder()
+                .method(Method::POST)
+                .uri("http://localhost:3000/api/auth/fresh")
+                .extension(SetFreshSession::stale())
+                .body(Vec::new())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "SESSION_EXPIRED");
+    assert!(!called.load(Ordering::SeqCst));
+    Ok(())
+}
+
+#[tokio::test]
+async fn fresh_session_middleware_allows_fresh_session() -> Result<(), Box<dyn std::error::Error>> {
+    let endpoint = create_auth_endpoint(
+        "/fresh",
+        Method::POST,
+        AuthEndpointOptions::new()
+            .middleware(session_state_from_extension_middleware())
+            .middleware(fresh_session_middleware()),
+        |_context, _request| Box::pin(async move { response(StatusCode::OK, b"handler".to_vec()) }),
+    );
+    let context = create_auth_context(with_test_defaults(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        session: SessionOptions {
+            fresh_age: Some(60),
+            ..SessionOptions::default()
+        },
+        ..OpenAuthOptions::default()
+    }))?;
+    let router = AuthRouter::with_async_endpoints(context, Vec::new(), vec![endpoint])?;
+
+    let response = router
+        .handle_async_server(
+            Request::builder()
+                .method(Method::POST)
+                .uri("http://localhost:3000/api/auth/fresh")
+                .extension(SetFreshSession::fresh())
+                .body(Vec::new())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.body(), b"handler");
+    Ok(())
+}
+
+#[derive(Clone)]
+struct SetFreshSession {
+    session: Session,
+    user: User,
+}
+
+impl SetFreshSession {
+    fn fresh() -> Self {
+        let now = OffsetDateTime::now_utc();
+        Self {
+            session: Session {
+                id: "session_1".to_owned(),
+                user_id: "user_1".to_owned(),
+                expires_at: now + Duration::hours(1),
+                token: "token_1".to_owned(),
+                ip_address: None,
+                user_agent: None,
+                created_at: now,
+                updated_at: now,
+            },
+            user: User {
+                id: "user_1".to_owned(),
+                name: "Ada".to_owned(),
+                email: "ada@example.com".to_owned(),
+                email_verified: true,
+                image: None,
+                username: None,
+                display_username: None,
+                created_at: now,
+                updated_at: now,
+            },
+        }
+    }
+
+    fn stale() -> Self {
+        let now = OffsetDateTime::now_utc();
+        Self {
+            session: Session {
+                created_at: now - Duration::hours(1),
+                ..Self::fresh().session
+            },
+            ..Self::fresh()
+        }
+    }
+}
+
+fn session_state_from_extension_middleware() -> EndpointMiddleware {
+    EndpointMiddleware::new(|_context, request| {
+        let session = request.extensions().get::<SetFreshSession>().cloned();
+        Box::pin(async move {
+            if let Some(session) = session {
+                set_current_session(session.session, session.user)?;
+            }
+            Ok(None)
+        })
+    })
 }
 
 fn router(

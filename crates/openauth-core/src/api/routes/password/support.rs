@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use super::super::shared::{error_response, json_response};
 use crate::api::{ApiRequest, ApiResponse, BodyField, BodySchema, JsonSchemaType, PathParams};
-use crate::db::User;
 use crate::error::OpenAuthError;
+use serde_json::Value;
 
 const PASSWORD_RESET_MESSAGE: &str =
     "If this email exists in our system, check your email for the reset link";
@@ -59,7 +59,7 @@ struct RequestPasswordResetResponse {
 #[derive(Debug, Serialize)]
 pub(super) struct TokenUserResponse {
     pub(super) token: Option<String>,
-    pub(super) user: User,
+    pub(super) user: Value,
 }
 
 pub(super) fn change_password_body_schema() -> BodySchema {

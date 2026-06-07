@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::db::schema::DbSchema;
 use crate::error::OpenAuthError;
+use crate::plugin::PluginMigration;
 
 use super::capabilities::{AdapterCapabilities, SchemaCreation};
 use super::query::{Count, Create, Delete, DeleteMany, FindMany, FindOne, Update, UpdateMany};
@@ -77,6 +78,13 @@ pub trait DbAdapter: Send + Sync {
             ))
         })
     }
+
+    fn run_plugin_migrations<'a>(
+        &'a self,
+        _migrations: &'a [PluginMigration],
+    ) -> AdapterFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 impl<A> DbAdapter for &A
@@ -137,6 +145,13 @@ where
 
     fn run_migrations<'a>(&'a self, schema: &'a DbSchema) -> AdapterFuture<'a, ()> {
         (**self).run_migrations(schema)
+    }
+
+    fn run_plugin_migrations<'a>(
+        &'a self,
+        migrations: &'a [PluginMigration],
+    ) -> AdapterFuture<'a, ()> {
+        (**self).run_plugin_migrations(migrations)
     }
 }
 
@@ -199,6 +214,13 @@ where
     fn run_migrations<'a>(&'a self, schema: &'a DbSchema) -> AdapterFuture<'a, ()> {
         (**self).run_migrations(schema)
     }
+
+    fn run_plugin_migrations<'a>(
+        &'a self,
+        migrations: &'a [PluginMigration],
+    ) -> AdapterFuture<'a, ()> {
+        (**self).run_plugin_migrations(migrations)
+    }
 }
 
 impl<A> DbAdapter for Arc<A>
@@ -259,5 +281,12 @@ where
 
     fn run_migrations<'a>(&'a self, schema: &'a DbSchema) -> AdapterFuture<'a, ()> {
         (**self).run_migrations(schema)
+    }
+
+    fn run_plugin_migrations<'a>(
+        &'a self,
+        migrations: &'a [PluginMigration],
+    ) -> AdapterFuture<'a, ()> {
+        (**self).run_plugin_migrations(migrations)
     }
 }

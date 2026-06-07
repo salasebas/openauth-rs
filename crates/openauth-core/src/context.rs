@@ -85,6 +85,7 @@ pub struct AuthContext {
 pub struct AuthEnvironment {
     pub openauth_secret: Option<String>,
     pub openauth_secrets: Option<String>,
+    pub openauth_trusted_origins: Option<String>,
 }
 
 impl fmt::Debug for AuthEnvironment {
@@ -99,6 +100,7 @@ impl fmt::Debug for AuthEnvironment {
                 "openauth_secrets",
                 &self.openauth_secrets.as_ref().map(|_| "<redacted>"),
             )
+            .field("openauth_trusted_origins", &self.openauth_trusted_origins)
             .finish()
     }
 }
@@ -108,6 +110,7 @@ impl AuthEnvironment {
         Self {
             openauth_secret: std::env::var("OPENAUTH_SECRET").ok(),
             openauth_secrets: std::env::var("OPENAUTH_SECRETS").ok(),
+            openauth_trusted_origins: std::env::var("OPENAUTH_TRUSTED_ORIGINS").ok(),
         }
     }
 }
@@ -208,6 +211,29 @@ impl AuthContext {
             }
         }
         Ok(origins)
+    }
+
+    pub fn trusted_providers_for_request(
+        &self,
+        request: Option<&Request<Vec<u8>>>,
+    ) -> Result<Vec<String>, OpenAuthError> {
+        let linking = &self.options.account.account_linking;
+        let mut providers = linking.trusted_providers.clone();
+        if let Some(provider) = &linking.trusted_providers_provider {
+            for trusted in provider.trusted_providers()? {
+                if !providers.iter().any(|existing| existing == &trusted) {
+                    providers.push(trusted);
+                }
+            }
+        }
+        if let Some(provider) = &linking.trusted_providers_request_provider {
+            for trusted in provider.trusted_providers_for_request(request)? {
+                if !providers.iter().any(|existing| existing == &trusted) {
+                    providers.push(trusted);
+                }
+            }
+        }
+        Ok(providers)
     }
 
     pub fn is_trusted_origin_for_request(

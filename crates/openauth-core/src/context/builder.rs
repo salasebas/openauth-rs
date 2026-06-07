@@ -89,7 +89,7 @@ pub fn create_auth_context_with_environment_and_adapter(
         .clone()
         .unwrap_or_else(|| "/api/auth".to_owned());
     let base_url = options.base_url.clone().unwrap_or_default();
-    let trusted_origins = resolve_trusted_origins(&base_url, &options);
+    let trusted_origins = resolve_trusted_origins(&base_url, &options, &environment);
     let auth_cookies = get_cookies(&options)?;
     #[cfg(feature = "oauth")]
     let social_providers = resolve_social_providers(&options)?;

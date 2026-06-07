@@ -7,11 +7,12 @@ use crate::common::with_test_defaults;
 
 use http::{Method, Request, Response, StatusCode};
 use openauth_core::api::{
-    create_auth_endpoint, response, ApiRequest, ApiResponse, AuthEndpoint, AuthEndpointOptions,
-    AuthRouter, EndpointMiddleware,
+    create_auth_endpoint, require_resource_ownership, response, ApiRequest, ApiResponse,
+    AuthEndpoint, AuthEndpointOptions, AuthRouter, EndpointMiddleware,
 };
 use openauth_core::context::{create_auth_context, create_auth_context_with_adapter, AuthContext};
-use openauth_core::db::{Create, DbField, DbFieldType, DbValue, MemoryAdapter};
+use openauth_core::cookies::{set_session_cookie, Cookie, SessionCookieOptions};
+use openauth_core::db::{Create, DbAdapter, DbField, DbFieldType, DbValue, MemoryAdapter};
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     OpenAuthOptions, RateLimitOptions, RateLimitPathRule, RateLimitRule, SessionAdditionalField,
@@ -20,7 +21,8 @@ use openauth_core::options::{
 use openauth_core::plugin::{
     AuthPlugin, PluginAfterHookAction, PluginBeforeHookAction, PluginDatabaseBeforeAction,
     PluginDatabaseBeforeInput, PluginDatabaseHook, PluginErrorCode, PluginInitOutput,
-    PluginRateLimitRule, PluginRequestAction, PluginSchemaContribution,
+    PluginMigration, PluginMigrationBody, PluginRateLimitRule, PluginRequestAction,
+    PluginSchemaContribution,
 };
 
 fn endpoint(
@@ -73,6 +75,28 @@ fn on_request_plugin_can_replace_request() -> Result<(), Box<dyn std::error::Err
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.body(), b"PLUGIN");
+    Ok(())
+}
+
+#[test]
+fn plugin_migration_metadata_preserves_body() -> Result<(), Box<dyn std::error::Error>> {
+    let migration = PluginMigration::new("create_audit_table").body(PluginMigrationBody::Sql(
+        "create table audit_log (id text primary key)".to_owned(),
+    ));
+    let context = create_auth_context(with_test_defaults(OpenAuthOptions {
+        plugins: vec![AuthPlugin::new("audit").with_migration(migration)],
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    }))?;
+
+    assert_eq!(context.plugin_migrations.len(), 1);
+    assert_eq!(context.plugin_migrations[0].name, "create_audit_table");
+    assert_eq!(
+        context.plugin_migrations[0].body,
+        Some(PluginMigrationBody::Sql(
+            "create table audit_log (id text primary key)".to_owned()
+        ))
+    );
     Ok(())
 }
 
@@ -335,6 +359,155 @@ async fn plugin_endpoint_is_registered_and_handled() -> Result<(), Box<dyn std::
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.body(), b"HELLO");
     Ok(())
+}
+
+#[tokio::test]
+async fn resource_ownership_middleware_blocks_non_owner() -> Result<(), Box<dyn std::error::Error>>
+{
+    let adapter = Arc::new(MemoryAdapter::new());
+    adapter
+        .create(
+            Create::new("api_key")
+                .data("id", DbValue::String("key_1".to_owned()))
+                .data("user_id", DbValue::String("user_2".to_owned()))
+                .force_allow_id(),
+        )
+        .await?;
+    let endpoint = create_auth_endpoint(
+        "/api-key/:id",
+        Method::GET,
+        AuthEndpointOptions::new()
+            .middleware(require_resource_ownership("api_key", "id", "user_id")),
+        |_context, _request| Box::pin(async { response(StatusCode::OK, b"OK".to_vec()) }),
+    );
+    let plugin = AuthPlugin::new("resource-plugin").with_endpoint(endpoint);
+    let context = create_auth_context_with_adapter(
+        with_test_defaults(OpenAuthOptions {
+            plugins: vec![plugin],
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            ..OpenAuthOptions::default()
+        }),
+        adapter.clone(),
+    )?;
+    seed_auth_user_session(adapter.as_ref(), "user_1", "token_1").await?;
+    let cookie = session_cookie(&context, "token_1")?;
+    let router = AuthRouter::with_async_endpoints(context, Vec::new(), Vec::new())?;
+
+    let response = router
+        .handle_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/api-key/key_1")
+                .header(http::header::COOKIE, cookie)
+                .body(Vec::new())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_ownership_middleware_allows_owner() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    adapter
+        .create(
+            Create::new("api_key")
+                .data("id", DbValue::String("key_1".to_owned()))
+                .data("user_id", DbValue::String("user_1".to_owned()))
+                .force_allow_id(),
+        )
+        .await?;
+    let endpoint = create_auth_endpoint(
+        "/api-key/:id",
+        Method::GET,
+        AuthEndpointOptions::new()
+            .middleware(require_resource_ownership("api_key", "id", "user_id")),
+        |_context, _request| Box::pin(async { response(StatusCode::OK, b"OK".to_vec()) }),
+    );
+    let plugin = AuthPlugin::new("resource-plugin").with_endpoint(endpoint);
+    let context = create_auth_context_with_adapter(
+        with_test_defaults(OpenAuthOptions {
+            plugins: vec![plugin],
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            ..OpenAuthOptions::default()
+        }),
+        adapter.clone(),
+    )?;
+    seed_auth_user_session(adapter.as_ref(), "user_1", "token_1").await?;
+    let cookie = session_cookie(&context, "token_1")?;
+    let router = AuthRouter::with_async_endpoints(context, Vec::new(), Vec::new())?;
+
+    let response = router
+        .handle_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/api-key/key_1")
+                .header(http::header::COOKIE, cookie)
+                .body(Vec::new())?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.body(), b"OK");
+    Ok(())
+}
+
+async fn seed_auth_user_session(
+    adapter: &dyn DbAdapter,
+    user_id: &str,
+    token: &str,
+) -> Result<(), OpenAuthError> {
+    let now = time::OffsetDateTime::now_utc();
+    adapter
+        .create(
+            Create::new("user")
+                .data("id", DbValue::String(user_id.to_owned()))
+                .data("name", DbValue::String("Ada".to_owned()))
+                .data("email", DbValue::String("ada@example.com".to_owned()))
+                .data("email_verified", DbValue::Boolean(true))
+                .data("image", DbValue::Null)
+                .data("created_at", DbValue::Timestamp(now))
+                .data("updated_at", DbValue::Timestamp(now))
+                .force_allow_id(),
+        )
+        .await?;
+    adapter
+        .create(
+            Create::new("session")
+                .data("id", DbValue::String("session_1".to_owned()))
+                .data("user_id", DbValue::String(user_id.to_owned()))
+                .data(
+                    "expires_at",
+                    DbValue::Timestamp(now + time::Duration::hours(1)),
+                )
+                .data("token", DbValue::String(token.to_owned()))
+                .data("ip_address", DbValue::Null)
+                .data("user_agent", DbValue::Null)
+                .data("created_at", DbValue::Timestamp(now))
+                .data("updated_at", DbValue::Timestamp(now))
+                .force_allow_id(),
+        )
+        .await?;
+    Ok(())
+}
+
+fn session_cookie(context: &AuthContext, token: &str) -> Result<String, OpenAuthError> {
+    let cookies = set_session_cookie(
+        &context.auth_cookies,
+        &context.secret,
+        token,
+        SessionCookieOptions::default(),
+    )?;
+    Ok(cookie_header(&cookies))
+}
+
+fn cookie_header(cookies: &[Cookie]) -> String {
+    cookies
+        .iter()
+        .map(|cookie| format!("{}={}", cookie.name, cookie.value))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[tokio::test]

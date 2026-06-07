@@ -13,6 +13,7 @@ pub(crate) struct PassthroughPayload {
     pub user_info: OAuthUserInfo,
     pub account: OAuthAccountInput,
     pub state: String,
+    pub oauth_state: Option<String>,
     pub callback_url: String,
     pub new_user_url: Option<String>,
     pub error_url: Option<String>,
@@ -26,6 +27,7 @@ impl PassthroughPayload {
             && !self.user_info.email.is_empty()
             && !self.account.provider_id.is_empty()
             && !self.account.account_id.is_empty()
+            && self.oauth_state.is_some()
             && !self.callback_url.is_empty()
             && self.timestamp > 0
     }

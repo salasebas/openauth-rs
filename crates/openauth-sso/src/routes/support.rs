@@ -44,6 +44,7 @@ struct RedirectBody {
 pub(super) fn redirect_json_response(
     url: String,
     redirect: bool,
+    cookies: Vec<openauth_core::cookies::Cookie>,
 ) -> Result<ApiResponse, OpenAuthError> {
     let mut response = utils::json(
         http::StatusCode::OK,
@@ -56,6 +57,13 @@ pub(super) fn redirect_json_response(
         response.headers_mut().insert(
             header::LOCATION,
             HeaderValue::from_str(&url).map_err(|error| OpenAuthError::Api(error.to_string()))?,
+        );
+    }
+    for cookie in cookies {
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&serialize_cookie(&cookie))
+                .map_err(|error| OpenAuthError::Cookie(error.to_string()))?,
         );
     }
     Ok(response)

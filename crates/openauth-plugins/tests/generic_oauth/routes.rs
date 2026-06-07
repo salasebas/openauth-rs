@@ -515,18 +515,24 @@ async fn oauth2_callback_uses_custom_redirect_uri_in_token_exchange() {
     let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
     let context = context_with_plugin(adapter, oauth_plugin(config));
     let router = AuthRouter::try_new(context, Vec::new()).unwrap();
-    let sign_in = sign_in_url(&router, "example", "/dashboard", None, false)
-        .await
-        .unwrap();
+    let (sign_in, oauth_state_cookie) =
+        sign_in_url_with_oauth_cookie(&router, "example", "/dashboard", None, false)
+            .await
+            .unwrap();
     assert_eq!(
         query_value(&sign_in, "redirect_uri"),
         Some("https://app.example.com/custom/oauth/callback".to_owned())
     );
     let state = query_value(&sign_in, "state").unwrap();
 
-    let response = oauth_callback(&router, "example", "code-1", &state)
-        .await
-        .unwrap();
+    let response = oauth_callback(
+        &router,
+        "example",
+        "code-1",
+        &state_with_oauth_cookie(state, oauth_state_cookie),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::FOUND);
     assert_eq!(
@@ -655,6 +661,27 @@ async fn oauth2_callback_rejects_missing_state() {
 }
 
 #[tokio::test]
+async fn oauth2_callback_rejects_missing_oauth_state_cookie() {
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    let context = context_with_plugin(adapter, oauth_plugin(oauth_flow_config("oauth-user-6")));
+    let router = AuthRouter::try_new(context, Vec::new()).unwrap();
+    let state = sign_in_state(&router, "example", "/dashboard", None, false)
+        .await
+        .unwrap();
+    let (state, _) = split_state_with_oauth_cookie(&state);
+
+    let response = oauth_callback(&router, "example", "code-1", state)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        location(&response),
+        Some("https://app.example.com/error?error=invalid_state")
+    );
+}
+
+#[tokio::test]
 async fn sign_in_oauth2_caches_discovery_by_provider() {
     let hits = Arc::new(AtomicUsize::new(0));
     let discovery_url = discovery_server(Arc::clone(&hits));
@@ -731,6 +758,7 @@ async fn oauth2_callback_rejects_issuer_mismatch() {
         )
         .await
         .unwrap();
+    let oauth_state_cookie = oauth_state_cookie_header(&sign_in).unwrap();
     let body: Value = serde_json::from_slice(sign_in.body()).unwrap();
     let auth_url = url::Url::parse(body["url"].as_str().unwrap()).unwrap();
     let state = query_value(&auth_url, "state").unwrap();
@@ -739,6 +767,7 @@ async fn oauth2_callback_rejects_issuer_mismatch() {
             Request::builder()
                 .method(Method::GET)
                 .uri(format!("https://app.example.com/api/auth/oauth2/callback/example?code=code-1&state={state}&iss=https%3A%2F%2Fwrong.example.com"))
+                .header(header::COOKIE, oauth_state_cookie)
                 .body(Vec::new())
                 .unwrap(),
         )
@@ -768,14 +797,20 @@ async fn oauth2_callback_rejects_missing_required_issuer() {
         }),
     );
     let router = AuthRouter::try_new(context, Vec::new()).unwrap();
-    let sign_in = sign_in_url(&router, "example", "/dashboard", None, false)
-        .await
-        .unwrap();
+    let (sign_in, oauth_state_cookie) =
+        sign_in_url_with_oauth_cookie(&router, "example", "/dashboard", None, false)
+            .await
+            .unwrap();
     let state = query_value(&sign_in, "state").unwrap();
 
-    let response = oauth_callback(&router, "example", "code-1", &state)
-        .await
-        .unwrap();
+    let response = oauth_callback(
+        &router,
+        "example",
+        "code-1",
+        &state_with_oauth_cookie(state, oauth_state_cookie),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::FOUND);
     assert_eq!(
@@ -811,6 +846,7 @@ async fn oauth2_callback_appends_error_to_error_callback_url_with_query() {
         )
         .await
         .unwrap();
+    let oauth_state_cookie = oauth_state_cookie_header(&sign_in).unwrap();
     let body: Value = serde_json::from_slice(sign_in.body()).unwrap();
     let auth_url = url::Url::parse(body["url"].as_str().unwrap()).unwrap();
     let state = query_value(&auth_url, "state").unwrap();
@@ -819,6 +855,7 @@ async fn oauth2_callback_appends_error_to_error_callback_url_with_query() {
             Request::builder()
                 .method(Method::GET)
                 .uri(format!("https://app.example.com/api/auth/oauth2/callback/example?code=code-1&state={state}&iss=https%3A%2F%2Fwrong.example.com"))
+                .header(header::COOKIE, oauth_state_cookie)
                 .body(Vec::new())
                 .unwrap(),
         )

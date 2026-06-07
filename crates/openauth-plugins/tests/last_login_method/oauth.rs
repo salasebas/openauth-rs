@@ -34,13 +34,14 @@ async fn oauth_callback_persists_provider_id_and_sets_last_method_cookie(
     let body: Value = serde_json::from_slice(sign_in.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_state_cookie = oauth_state_cookie_header(&sign_in)?;
 
     let callback = router
         .handle_async(json_request(
             Method::GET,
             &format!("/api/auth/callback/github?code=ok&state={state}"),
             "",
-            None,
+            Some(&oauth_state_cookie),
         )?)
         .await?;
 
@@ -82,13 +83,14 @@ async fn failed_oauth_callback_does_not_persist_or_set_cookie(
     let body: Value = serde_json::from_slice(sign_in.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_state_cookie = oauth_state_cookie_header(&sign_in)?;
 
     let callback = router
         .handle_async(json_request(
             Method::GET,
             &format!("/api/auth/callback/github?error=access_denied&state={state}"),
             "",
-            None,
+            Some(&oauth_state_cookie),
         )?)
         .await?;
 
@@ -116,4 +118,24 @@ fn query_value(url: &str, key: &str) -> Option<String> {
         .ok()?
         .query_pairs()
         .find_map(|(name, value)| (name == key).then(|| value.into_owned()))
+}
+
+fn oauth_state_cookie_header(
+    response: &http::Response<Vec<u8>>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(|cookie| {
+            let (name, rest) = cookie.split_once('=')?;
+            (name == "open-auth.oauth_state" || name == "__Secure-open-auth.oauth_state").then(
+                || {
+                    let value = rest.split(';').next().unwrap_or_default();
+                    format!("{name}={value}")
+                },
+            )
+        })
+        .ok_or_else(|| "missing oauth_state cookie".into())
 }

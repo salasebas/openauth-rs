@@ -16,6 +16,7 @@ use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitRecord, RateLimitStore,
 };
+use openauth_core::plugin::{PluginMigration, PluginMigrationBody};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use tokio::sync::Mutex;
@@ -271,6 +272,38 @@ impl DbAdapter for PostgresAdapter {
             execute_migration_plan_on_pool(&self.pool, &plan).await
         })
     }
+
+    fn run_plugin_migrations<'a>(
+        &'a self,
+        migrations: &'a [PluginMigration],
+    ) -> AdapterFuture<'a, ()> {
+        Box::pin(async move {
+            for migration in migrations {
+                execute_plugin_migration_postgres(&self.pool, migration).await?;
+            }
+            Ok(())
+        })
+    }
+}
+
+async fn execute_plugin_migration_postgres(
+    pool: &PgPool,
+    migration: &PluginMigration,
+) -> Result<(), OpenAuthError> {
+    match &migration.body {
+        Some(PluginMigrationBody::Sql(sql)) => {
+            sqlx::query(sql).execute(pool).await.map_err(sql_error)?;
+        }
+        Some(PluginMigrationBody::Plan(steps)) => {
+            for step in steps {
+                if let Some(sql) = &step.sql {
+                    sqlx::query(sql).execute(pool).await.map_err(sql_error)?;
+                }
+            }
+        }
+        None => {}
+    }
+    Ok(())
 }
 
 struct PostgresTxAdapter<'tx> {

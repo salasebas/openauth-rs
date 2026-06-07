@@ -1,6 +1,7 @@
 use openauth_core::context::request_state::{
     current_new_session, current_session, define_request_state, has_request_state,
     run_with_request_state, set_current_new_session, set_current_session,
+    set_should_skip_session_refresh, should_skip_session_refresh,
 };
 use openauth_core::db::{Session, User};
 use openauth_core::error::OpenAuthError;
@@ -75,6 +76,22 @@ async fn request_state_returns_error_outside_scope() {
     let state = define_request_state(|| Marker { id: "initial" });
 
     assert_eq!(state.get(), Err(OpenAuthError::RequestStateMissing));
+}
+
+#[tokio::test]
+async fn should_skip_session_refresh_defaults_to_false_outside_scope() {
+    assert!(!should_skip_session_refresh());
+}
+
+#[tokio::test]
+async fn should_skip_session_refresh_can_be_set_inside_scope() -> Result<(), OpenAuthError> {
+    run_with_request_state(async {
+        assert!(!should_skip_session_refresh());
+        set_should_skip_session_refresh(true)?;
+        assert!(should_skip_session_refresh());
+        Ok(())
+    })
+    .await
 }
 
 #[tokio::test]

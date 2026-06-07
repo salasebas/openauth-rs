@@ -9,6 +9,7 @@ use crate::auth::email_password::{AuthFlowError, AuthFlowErrorCode};
 use crate::auth::session::{GetSessionInput, SessionAuth};
 use crate::context::request_state::{
     has_request_state, set_current_new_session, set_current_session_user,
+    should_skip_session_refresh,
 };
 use crate::context::AuthContext;
 use crate::cookies::Cookie;
@@ -179,6 +180,9 @@ async fn current_session_with_cache_policy(
     let mut input = GetSessionInput::new(cookie_header);
     if disable_cookie_cache {
         input = input.disable_cookie_cache();
+    }
+    if should_skip_session_refresh() {
+        input = input.disable_refresh();
     }
     let Some(result) = SessionAuth::new(adapter, context)
         .get_session(input)

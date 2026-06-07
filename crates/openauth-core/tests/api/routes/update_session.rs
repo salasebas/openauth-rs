@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
-use openauth_core::db::DbFieldType;
+use openauth_core::db::{DbField, DbFieldType};
 use openauth_core::options::{SessionAdditionalField, SessionOptions};
+use openauth_core::plugin::PluginSchemaContribution;
 
 use super::*;
 
@@ -36,6 +37,73 @@ async fn update_session_route_updates_allowed_custom_fields(
         updated.get("theme"),
         Some(&DbValue::String("dark".to_owned()))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_session_route_filters_hidden_plugin_session_fields(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(RouteAdapter::default());
+    let now = OffsetDateTime::now_utc();
+    adapter.insert_user(user(now)).await;
+    let mut record = session_record(session(now, now + Duration::hours(1)));
+    record.insert(
+        "tenant_id".to_owned(),
+        DbValue::String("tenant_1".to_owned()),
+    );
+    adapter.create(create_query("session", record)).await?;
+    let router = router_with_options(adapter.clone(), hidden_plugin_session_field_options())?;
+    let cookie = signed_session_cookie("token_1")?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::GET,
+            "/api/auth/get-session",
+            "",
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert!(body["session"].get("tenant_id").is_none());
+    let stored = record_by_string(&adapter, "session", "token", "token_1")
+        .await?
+        .ok_or("missing session")?;
+    assert_eq!(
+        stored.get("tenant_id"),
+        Some(&DbValue::String("tenant_1".to_owned()))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_session_route_returns_plugin_session_output_fields(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(RouteAdapter::default());
+    let now = OffsetDateTime::now_utc();
+    adapter.insert_user(user(now)).await;
+    let mut record = session_record(session(now, now + Duration::hours(1)));
+    record.insert(
+        "tenant_id".to_owned(),
+        DbValue::String("tenant_1".to_owned()),
+    );
+    adapter.create(create_query("session", record)).await?;
+    let router = router_with_options(adapter, plugin_session_field_options())?;
+    let cookie = signed_session_cookie("token_1")?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::GET,
+            "/api/auth/get-session",
+            "",
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["session"]["tenant_id"], "tenant_1");
     Ok(())
 }
 
@@ -209,6 +277,34 @@ fn session_field_options() -> OpenAuthOptions {
             )]),
             ..SessionOptions::default()
         },
+        ..OpenAuthOptions::default()
+    }
+}
+
+fn hidden_plugin_session_field_options() -> OpenAuthOptions {
+    OpenAuthOptions {
+        plugins: vec![
+            AuthPlugin::new("tenant").with_schema(PluginSchemaContribution::field(
+                "session",
+                "tenant_id",
+                DbField::new("tenant_id", DbFieldType::String)
+                    .optional()
+                    .hidden(),
+            )),
+        ],
+        ..OpenAuthOptions::default()
+    }
+}
+
+fn plugin_session_field_options() -> OpenAuthOptions {
+    OpenAuthOptions {
+        plugins: vec![
+            AuthPlugin::new("tenant").with_schema(PluginSchemaContribution::field(
+                "session",
+                "tenant_id",
+                DbField::new("tenant_id", DbFieldType::String).optional(),
+            )),
+        ],
         ..OpenAuthOptions::default()
     }
 }

@@ -89,13 +89,14 @@ async fn callback_oauth_creates_user_account_session_and_redirects(
     let body: Value = serde_json::from_slice(sign_in.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_cookie = oauth_state_cookie_header(&sign_in)?;
 
     let callback = router
         .handle_async(json_request(
             Method::GET,
             &format!("/api/auth/callback/github?code=ok&state={state}"),
             "",
-            None,
+            Some(&oauth_cookie),
         )?)
         .await?;
 
@@ -112,6 +113,99 @@ async fn callback_oauth_creates_user_account_session_and_redirects(
         .any(|value| value.starts_with("open-auth.session_token=")));
     assert_eq!(adapter.len("user").await, 1);
     assert_eq!(adapter.len("account").await, 1);
+    assert_eq!(adapter.len("session").await, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn callback_oauth_rejects_missing_oauth_state_cookie(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(RouteAdapter::default());
+    let router = router_with_options(
+        adapter,
+        OpenAuthOptions {
+            base_url: Some("http://localhost:3000/api/auth".to_owned()),
+            social_providers: vec![Arc::new(FakeProvider::new("github"))],
+            ..OpenAuthOptions::default()
+        },
+    )?;
+    let sign_in = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-in/social",
+            r#"{"provider":"github","callbackURL":"/dashboard"}"#,
+            None,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(sign_in.body())?;
+    let state =
+        query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+
+    let callback = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!("/api/auth/callback/github?code=ok&state={state}"),
+            "",
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(callback.status(), StatusCode::FOUND);
+    assert_eq!(
+        callback
+            .headers()
+            .get(header::LOCATION)
+            .ok_or("missing location")?,
+        "http://localhost:3000/api/auth/error?error=invalid_state"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn callback_oauth_skip_state_cookie_check_allows_missing_cookie(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(RouteAdapter::default());
+    let router = router_with_options(
+        adapter.clone(),
+        OpenAuthOptions {
+            base_url: Some("http://localhost:3000/api/auth".to_owned()),
+            account: openauth_core::options::AccountOptions {
+                skip_state_cookie_check: true,
+                ..openauth_core::options::AccountOptions::default()
+            },
+            social_providers: vec![Arc::new(FakeProvider::new("github"))],
+            ..OpenAuthOptions::default()
+        },
+    )?;
+    let sign_in = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-in/social",
+            r#"{"provider":"github","callbackURL":"/dashboard"}"#,
+            None,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(sign_in.body())?;
+    let state =
+        query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+
+    let callback = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!("/api/auth/callback/github?code=ok&state={state}"),
+            "",
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(callback.status(), StatusCode::FOUND);
+    assert_eq!(
+        callback
+            .headers()
+            .get(header::LOCATION)
+            .ok_or("missing location")?,
+        "/dashboard"
+    );
     assert_eq!(adapter.len("session").await, 1);
     Ok(())
 }
@@ -140,13 +234,14 @@ async fn callback_oauth_rejects_unverified_existing_email_when_provider_is_not_t
     let body: Value = serde_json::from_slice(sign_in.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_cookie = oauth_state_cookie_header(&sign_in)?;
 
     let callback = router
         .handle_async(json_request(
             Method::GET,
             &format!("/api/auth/callback/github?code=ok&state={state}"),
             "",
-            None,
+            Some(&oauth_cookie),
         )?)
         .await?;
 
@@ -192,13 +287,14 @@ async fn callback_oauth_links_unverified_existing_email_when_provider_is_trusted
     let body: Value = serde_json::from_slice(sign_in.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_cookie = oauth_state_cookie_header(&sign_in)?;
 
     let callback = router
         .handle_async(json_request(
             Method::GET,
             &format!("/api/auth/callback/github?code=ok&state={state}"),
             "",
-            None,
+            Some(&oauth_cookie),
         )?)
         .await?;
 
@@ -242,13 +338,14 @@ async fn callback_oauth_sets_account_cookie_when_enabled() -> Result<(), Box<dyn
     let body: Value = serde_json::from_slice(sign_in.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_cookie = oauth_state_cookie_header(&sign_in)?;
 
     let callback = router
         .handle_async(json_request(
             Method::GET,
             &format!("/api/auth/callback/github?code=ok&state={state}"),
             "",
-            None,
+            Some(&oauth_cookie),
         )?)
         .await?;
     let cookies = set_cookie_values(&callback);
@@ -352,13 +449,14 @@ async fn link_social_callback_rejects_account_owned_by_different_user(
     let body: Value = serde_json::from_slice(linked.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_cookie = oauth_state_cookie_header(&linked)?;
 
     let callback = router
         .handle_async(json_request(
             Method::GET,
             &format!("/api/auth/callback/github?code=ok&state={state}"),
             "",
-            None,
+            Some(&oauth_cookie),
         )?)
         .await?;
 
@@ -740,13 +838,14 @@ async fn callback_link_social_updates_existing_account_tokens(
     let body: Value = serde_json::from_slice(link.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_cookie = oauth_state_cookie_header(&link)?;
 
     let callback = router
         .handle_async(json_request(
             Method::GET,
             &format!("/api/auth/callback/github?code=ok&state={state}"),
             "",
-            None,
+            Some(&oauth_cookie),
         )?)
         .await?;
     let account = record_by_string(&adapter, "account", "id", "account_1")
@@ -802,13 +901,14 @@ async fn callback_link_social_redirects_when_account_belongs_to_different_user(
     let body: Value = serde_json::from_slice(link.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_cookie = oauth_state_cookie_header(&link)?;
 
     let callback = router
         .handle_async(json_request(
             Method::GET,
             &format!("/api/auth/callback/github?code=ok&state={state}"),
             "",
-            None,
+            Some(&oauth_cookie),
         )?)
         .await?;
 
@@ -852,13 +952,14 @@ async fn callback_link_social_redirects_when_provider_is_untrusted_and_unverifie
     let body: Value = serde_json::from_slice(link.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_cookie = oauth_state_cookie_header(&link)?;
 
     let callback = router
         .handle_async(json_request(
             Method::GET,
             &format!("/api/auth/callback/github?code=ok&state={state}"),
             "",
-            None,
+            Some(&oauth_cookie),
         )?)
         .await?;
 
@@ -918,6 +1019,21 @@ fn query_value(url: &str, key: &str) -> Option<String> {
         let (name, value) = pair.split_once('=')?;
         (name == key).then(|| value.to_owned())
     })
+}
+
+fn oauth_state_cookie_header(
+    response: &http::Response<Vec<u8>>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    set_cookie_values(response)
+        .into_iter()
+        .find_map(|cookie| {
+            let (name, rest) = cookie.split_once('=')?;
+            (name == "open-auth.oauth_state").then(|| {
+                let value = rest.split(';').next().unwrap_or_default();
+                format!("{name}={value}")
+            })
+        })
+        .ok_or_else(|| "missing oauth_state cookie".into())
 }
 
 #[derive(Debug)]

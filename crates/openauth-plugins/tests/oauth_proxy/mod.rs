@@ -8,7 +8,7 @@ use openauth_core::crypto::{symmetric_decrypt, symmetric_encrypt};
 use openauth_core::db::{Count, DbAdapter, MemoryAdapter};
 use openauth_core::options::{
     AccountLinkingOptions, AccountOptions, AdvancedOptions, OAuthStateStoreStrategy,
-    OpenAuthOptions,
+    OpenAuthOptions, RateLimitOptions,
 };
 use openauth_core::user::{CreateUserInput, DbUserStore};
 use openauth_oauth::oauth2::{
@@ -282,10 +282,18 @@ async fn preview_callback_creates_user_account_and_session(
         OAuthProxyOptions::new().current_url("http://preview.example.com"),
     )?;
     let preview_adapter = Arc::new(MemoryAdapter::default());
-    let preview = router(
+    let preview = router_with_options(
         preview_adapter.clone(),
-        "http://preview.example.com/api/auth",
-        OAuthProxyOptions::new(),
+        OpenAuthOptions {
+            base_url: Some("http://preview.example.com/api/auth".to_owned()),
+            account: AccountOptions {
+                skip_state_cookie_check: true,
+                ..AccountOptions::default()
+            },
+            rate_limit: RateLimitOptions::new().enabled(false),
+            plugins: vec![oauth_proxy(OAuthProxyOptions::new())],
+            ..test_options()
+        },
     )?;
     let sign_in = production
         .handle_async(json_request(
@@ -336,11 +344,13 @@ async fn same_origin_does_not_proxy() -> Result<(), Box<dyn std::error::Error>> 
     let body: Value = serde_json::from_slice(sign_in.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_cookie = oauth_state_cookie_header(&sign_in)?;
     let callback = router
-        .handle_async(json_request(
+        .handle_async(json_request_with_cookie(
             Method::GET,
             &format!("http://localhost:3000/api/auth/callback/google?code=ok&state={state}"),
             "",
+            &oauth_cookie,
         )?)
         .await?;
     assert_eq!(callback.status(), StatusCode::FOUND);
@@ -384,6 +394,7 @@ async fn rejects_invalid_and_expired_profiles() -> Result<(), Box<dyn std::error
             "scope": null
         },
         "state": "state",
+        "oauth_state": "oauth-state",
         "callback_url": "/dashboard",
         "new_user_url": null,
         "error_url": null,
@@ -627,13 +638,15 @@ async fn skip_header_bypasses_oauth_proxy() -> Result<(), Box<dyn std::error::Er
     let body: Value = serde_json::from_slice(sign_in.body())?;
     let state =
         query_value(body["url"].as_str().ok_or("missing url")?, "state").ok_or("missing state")?;
+    let oauth_cookie = oauth_state_cookie_header(&sign_in)?;
     assert!(symmetric_decrypt(SECRET, &state).is_ok());
 
     let callback = router
-        .handle_async(json_request(
+        .handle_async(json_request_with_cookie(
             Method::GET,
             &format!("https://login.example.com/api/auth/callback/google?code=ok&state={state}"),
             "",
+            &oauth_cookie,
         )?)
         .await?;
     assert_eq!(location(&callback)?, "/dashboard");
@@ -722,10 +735,17 @@ async fn existing_preview_user_links_account_without_duplicate(
     DbUserStore::new(preview_adapter.as_ref())
         .create_user(CreateUserInput::new("Existing Ada", "ada@example.com").id("user_1"))
         .await?;
-    let preview = router(
+    let preview = router_with_options(
         preview_adapter.clone(),
-        "http://preview.example.com/api/auth",
-        OAuthProxyOptions::new(),
+        OpenAuthOptions {
+            base_url: Some("http://preview.example.com/api/auth".to_owned()),
+            account: AccountOptions {
+                skip_state_cookie_check: true,
+                ..AccountOptions::default()
+            },
+            plugins: vec![oauth_proxy(OAuthProxyOptions::new())],
+            ..test_options()
+        },
     )?;
     let sign_in = production
         .handle_async(json_request(
@@ -765,10 +785,18 @@ async fn preview_callback_rejects_unverified_existing_user_when_google_is_not_tr
     DbUserStore::new(preview_adapter.as_ref())
         .create_user(CreateUserInput::new("Existing Ada", "ada@example.com").id("user_1"))
         .await?;
-    let preview = router(
+    let preview = router_with_options(
         preview_adapter.clone(),
-        "http://preview.example.com/api/auth",
-        OAuthProxyOptions::new(),
+        OpenAuthOptions {
+            base_url: Some("http://preview.example.com/api/auth".to_owned()),
+            account: AccountOptions {
+                skip_state_cookie_check: true,
+                ..AccountOptions::default()
+            },
+            rate_limit: RateLimitOptions::new().enabled(false),
+            plugins: vec![oauth_proxy(OAuthProxyOptions::new())],
+            ..test_options()
+        },
     )?;
     let mut payload = passthrough_payload_json();
     payload["user_info"]["email_verified"] = Value::Bool(false);
@@ -785,6 +813,7 @@ async fn preview_callback_rejects_unverified_existing_user_when_google_is_not_tr
         )?)
         .await?;
 
+    assert_eq!(response.status(), StatusCode::FOUND);
     assert!(location(&response)?.contains("error=user_creation_failed"));
     assert_eq!(preview_adapter.count(Count::new("account")).await?, 0);
     assert_eq!(preview_adapter.count(Count::new("session")).await?, 0);
@@ -803,6 +832,7 @@ async fn preview_callback_links_unverified_existing_user_when_google_is_trusted(
         OpenAuthOptions {
             base_url: Some("http://preview.example.com/api/auth".to_owned()),
             account: AccountOptions {
+                skip_state_cookie_check: true,
                 account_linking: AccountLinkingOptions::default().trusted_provider("google"),
                 ..AccountOptions::default()
             },
@@ -987,6 +1017,22 @@ fn json_request(method: Method, uri: &str, body: &str) -> Result<Request<Vec<u8>
     builder.body(body.as_bytes().to_vec())
 }
 
+fn json_request_with_cookie(
+    method: Method,
+    uri: &str,
+    body: &str,
+    cookie: &str,
+) -> Result<Request<Vec<u8>>, http::Error> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::COOKIE, cookie);
+    if !body.is_empty() {
+        builder = builder.header(header::CONTENT_TYPE, "application/json");
+    }
+    builder.body(body.as_bytes().to_vec())
+}
+
 fn form_request(method: Method, uri: &str, body: &str) -> Result<Request<Vec<u8>>, http::Error> {
     Request::builder()
         .method(method)
@@ -1008,6 +1054,26 @@ fn query_value(url: &str, key: &str) -> Option<String> {
         .ok()?
         .query_pairs()
         .find_map(|(name, value)| (name == key).then(|| value.into_owned()))
+}
+
+fn oauth_state_cookie_header(
+    response: &http::Response<Vec<u8>>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(|cookie| {
+            let (name, rest) = cookie.split_once('=')?;
+            (name == "open-auth.oauth_state" || name == "__Secure-open-auth.oauth_state").then(
+                || {
+                    let value = rest.split(';').next().unwrap_or_default();
+                    format!("{name}={value}")
+                },
+            )
+        })
+        .ok_or_else(|| "missing oauth_state cookie".into())
 }
 
 fn url_encode(value: &str) -> String {
@@ -1089,6 +1155,7 @@ fn passthrough_payload_json() -> Value {
             "scope": null
         },
         "state": "state",
+        "oauth_state": "oauth-state",
         "callback_url": "/dashboard",
         "new_user_url": null,
         "error_url": null,

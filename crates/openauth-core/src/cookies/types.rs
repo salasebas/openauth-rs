@@ -20,6 +20,7 @@ pub struct AuthCookies {
     pub session_data: AuthCookie,
     pub account_data: AuthCookie,
     pub dont_remember_token: AuthCookie,
+    pub oauth_state: AuthCookie,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

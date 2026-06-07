@@ -24,7 +24,8 @@ use openauth_core::options::{
     RateLimitStore,
 };
 use openauth_core::plugin::{
-    PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook,
+    PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook, PluginMigration,
+    PluginMigrationBody, PluginMigrationStep,
 };
 use openauth_sqlx::migration::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_sqlx::{SqliteAdapter, SqliteRateLimitStore};
@@ -715,6 +716,34 @@ async fn sqlite_adapter_run_migrations_applies_plugin_aware_schema() -> Result<(
     .await
     .map_err(sql_error)?;
     assert_eq!(tenant_column_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_adapter_run_plugin_migrations_executes_sql_bodies() -> Result<(), OpenAuthError> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(|error| OpenAuthError::Adapter(error.to_string()))?;
+    let adapter = SqliteAdapter::new(pool.clone());
+    let migrations = vec![
+        PluginMigration::new("create_audit_log").body(PluginMigrationBody::Sql(
+            "create table audit_log (id text primary key);".to_owned(),
+        )),
+        PluginMigration::new("seed_audit_log").body(PluginMigrationBody::Plan(vec![
+            PluginMigrationStep::new("insert row")
+                .sql("insert into audit_log (id) values ('row_1');"),
+        ])),
+    ];
+
+    adapter.run_plugin_migrations(&migrations).await?;
+
+    let count: i64 = sqlx::query_scalar("select count(*) from audit_log")
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| OpenAuthError::Adapter(error.to_string()))?;
+    assert_eq!(count, 1);
     Ok(())
 }
 

@@ -240,6 +240,32 @@ fn auth_router_allows_cookie_post_with_trusted_origin() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn auth_router_blocks_cookie_post_with_null_origin() -> Result<(), Box<dyn std::error::Error>> {
+    let context = create_auth_context(with_test_defaults(OpenAuthOptions {
+        trusted_origins: TrustedOriginOptions::Static(vec!["https://app.example.com".to_owned()]),
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    }))?;
+    let router = AuthRouter::new(context, vec![post_ok_endpoint()]);
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("http://localhost:3000/api/auth/post-ok")
+        .header("cookie", "session=abc")
+        .header("origin", "null")
+        .body(Vec::new())?;
+
+    let response = router.handle(request)?;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_error_body(
+        &response,
+        "MISSING_OR_NULL_ORIGIN",
+        "Missing or null Origin",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn auth_router_allows_cookie_post_with_dynamic_trusted_origin(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let context = create_auth_context(with_test_defaults(OpenAuthOptions {

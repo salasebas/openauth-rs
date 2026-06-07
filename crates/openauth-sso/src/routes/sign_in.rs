@@ -10,6 +10,8 @@ use openauth_core::api::{
 #[cfg(feature = "oidc")]
 use openauth_core::auth::oauth::{generate_oauth_state, OAuthStateInput};
 use openauth_core::context::AuthContext;
+#[cfg(feature = "oidc")]
+use openauth_core::cookies::Cookie;
 #[cfg(any(feature = "oidc", feature = "saml"))]
 use openauth_core::crypto::random::generate_random_string;
 #[cfg(feature = "saml")]
@@ -261,7 +263,11 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                     .map_err(|error| {
                         openauth_core::error::OpenAuthError::OAuth(error.to_string())
                     })?;
-                    redirect_json_response(authorization_url.to_string(), true)
+                    redirect_json_response(
+                        authorization_url.to_string(),
+                        true,
+                        vec![oauth_state_cookie(context, &state.data.oauth_state)],
+                    )
                 }
             })
         },
@@ -361,7 +367,16 @@ async fn saml_sign_in(
         )
         .await?;
 
-    redirect_json_response(authn_request.redirect_url, true)
+    redirect_json_response(authn_request.redirect_url, true, Vec::new())
+}
+
+#[cfg(feature = "oidc")]
+fn oauth_state_cookie(context: &AuthContext, oauth_state: &str) -> Cookie {
+    Cookie {
+        name: context.auth_cookies.oauth_state.name.clone(),
+        value: oauth_state.to_owned(),
+        attributes: context.auth_cookies.oauth_state.attributes.clone(),
+    }
 }
 
 #[cfg(feature = "saml")]

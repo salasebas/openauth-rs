@@ -19,7 +19,7 @@ use crate::api::{
     BodySchema, JsonSchemaType, OpenApiOperation,
 };
 use crate::context::request_state::{
-    has_request_state, set_current_session, set_current_session_user,
+    has_request_state, set_current_session, set_current_session_user, should_skip_session_refresh,
 };
 use crate::db::DbAdapter;
 use crate::error::OpenAuthError;
@@ -75,7 +75,8 @@ pub(super) fn get_session_endpoint(
                     CurrentSessionInput {
                         cookie_header,
                         disable_cookie_cache: query_bool(&request, "disableCookieCache"),
-                        disable_refresh: query_bool(&request, "disableRefresh"),
+                        disable_refresh: query_bool(&request, "disableRefresh")
+                            || should_skip_session_refresh(),
                         defer_refresh: deferred_get,
                     },
                 )

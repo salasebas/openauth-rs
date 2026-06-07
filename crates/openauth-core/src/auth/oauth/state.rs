@@ -22,6 +22,7 @@ pub struct OAuthStateLink {
 pub struct OAuthStateData {
     pub callback_url: String,
     pub code_verifier: String,
+    pub oauth_state: String,
     pub error_url: Option<String>,
     pub new_user_url: Option<String>,
     pub link: Option<OAuthStateLink>,
@@ -61,6 +62,13 @@ pub struct GeneratedOAuthState {
     pub data: OAuthStateData,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OAuthStateParseInput<'a> {
+    pub state: &'a str,
+    pub oauth_state: Option<&'a str>,
+    pub skip_state_cookie_check: bool,
+}
+
 pub async fn generate_oauth_state(
     context: &AuthContext,
     adapter: Option<&dyn DbAdapter>,
@@ -72,6 +80,7 @@ pub async fn generate_oauth_state(
     let data = OAuthStateData {
         callback_url: input.callback_url,
         code_verifier: generate_random_string(128),
+        oauth_state: generate_random_string(32),
         error_url: input.error_url,
         new_user_url: input.new_user_url,
         link: input.link,
@@ -127,6 +136,24 @@ pub async fn parse_oauth_state(
     adapter: Option<&dyn DbAdapter>,
     state: &str,
 ) -> Result<OAuthStateData, OpenAuthError> {
+    parse_oauth_state_with_input(
+        context,
+        adapter,
+        OAuthStateParseInput {
+            state,
+            oauth_state: None,
+            skip_state_cookie_check: true,
+        },
+    )
+    .await
+}
+
+pub async fn parse_oauth_state_with_input(
+    context: &AuthContext,
+    adapter: Option<&dyn DbAdapter>,
+    input: OAuthStateParseInput<'_>,
+) -> Result<OAuthStateData, OpenAuthError> {
+    let state = input.state;
     let data = match context.options.account.store_state_strategy {
         OAuthStateStoreStrategy::Cookie => {
             // Enforce single-use when a server-side marker exists. Cookie-mode
@@ -165,6 +192,9 @@ pub async fn parse_oauth_state(
     };
     if data.expires_at <= OffsetDateTime::now_utc() {
         return Err(OpenAuthError::Api("OAuth state expired".to_owned()));
+    }
+    if !input.skip_state_cookie_check && input.oauth_state != Some(data.oauth_state.as_str()) {
+        return Err(OpenAuthError::Api("invalid OAuth state".to_owned()));
     }
     Ok(data)
 }

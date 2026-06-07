@@ -1,12 +1,22 @@
+use super::AuthEnvironment;
 use crate::options::OpenAuthOptions;
 
-pub(super) fn resolve_trusted_origins(base_url: &str, options: &OpenAuthOptions) -> Vec<String> {
+pub(super) fn resolve_trusted_origins(
+    base_url: &str,
+    options: &OpenAuthOptions,
+    environment: &AuthEnvironment,
+) -> Vec<String> {
     let mut origins = Vec::new();
     if let Some(origin) = origin_from_url(base_url) {
         push_trusted_origin(&mut origins, origin);
     }
     for origin in options.trusted_origins.as_static_slice() {
         push_trusted_origin(&mut origins, origin.clone());
+    }
+    if let Some(env_origins) = &environment.openauth_trusted_origins {
+        for origin in env_origins.split(',') {
+            push_trusted_origin(&mut origins, origin.trim().to_owned());
+        }
     }
     origins
 }

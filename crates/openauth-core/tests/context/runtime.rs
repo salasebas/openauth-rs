@@ -4,7 +4,8 @@ use openauth_core::context::{
 #[cfg(feature = "oauth")]
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
-    OpenAuthOptions, PasswordOptions, RateLimitOptions, RateLimitStorageOption, SessionOptions,
+    AccountLinkingOptions, AccountOptions, OpenAuthOptions, PasswordOptions, RateLimitOptions,
+    RateLimitStorageOption, SessionOptions,
 };
 #[cfg(feature = "oauth")]
 use openauth_core::plugin::{AuthPlugin, PluginInitOutput};
@@ -57,6 +58,21 @@ fn create_auth_context_applies_session_and_password_options(
 }
 
 #[test]
+fn create_auth_context_preserves_fresh_age_zero() -> Result<(), Box<dyn std::error::Error>> {
+    let ctx = create_auth_context(crate::common::with_test_defaults(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        session: SessionOptions {
+            fresh_age: Some(0),
+            ..SessionOptions::default()
+        },
+        ..OpenAuthOptions::default()
+    }))?;
+
+    assert_eq!(ctx.session_config.fresh_age, 0);
+    Ok(())
+}
+
+#[test]
 fn create_auth_context_rejects_missing_secret_in_production() {
     let result = create_auth_context(crate::common::with_test_defaults(OpenAuthOptions {
         production: true,
@@ -78,6 +94,87 @@ fn create_auth_context_uses_openauth_secret_from_environment(
     )?;
 
     assert_eq!(ctx.secret, "env-secret-at-least-32-chars-long!!");
+    Ok(())
+}
+
+#[test]
+fn create_auth_context_merges_trusted_origins_from_environment(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ctx = create_auth_context_with_environment(
+        OpenAuthOptions {
+            base_url: Some("https://app.example.com/api/auth".to_owned()),
+            trusted_origins: openauth_core::options::TrustedOriginOptions::Static(vec![
+                "https://static.example.com".to_owned(),
+            ]),
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            ..OpenAuthOptions::default()
+        },
+        AuthEnvironment {
+            openauth_trusted_origins: Some(
+                "https://env.example.com, ,https://static.example.com".to_owned(),
+            ),
+            ..AuthEnvironment::default()
+        },
+    )?;
+
+    assert_eq!(
+        ctx.trusted_origins,
+        vec![
+            "https://app.example.com",
+            "https://static.example.com",
+            "https://env.example.com",
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn create_auth_context_uses_default_and_custom_app_name() -> Result<(), Box<dyn std::error::Error>>
+{
+    let default_ctx = create_auth_context(crate::common::with_test_defaults(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        ..OpenAuthOptions::default()
+    }))?;
+    let custom_ctx = create_auth_context(crate::common::with_test_defaults(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        app_name: Some("Example Auth".to_owned()),
+        ..OpenAuthOptions::default()
+    }))?;
+
+    assert_eq!(default_ctx.app_name, "OpenAuth");
+    assert_eq!(custom_ctx.app_name, "Example Auth");
+    Ok(())
+}
+
+#[test]
+fn create_auth_context_resolves_trusted_providers_per_request(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ctx = create_auth_context(crate::common::with_test_defaults(OpenAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        account: AccountOptions {
+            account_linking: AccountLinkingOptions::default()
+                .trusted_provider("static")
+                .trusted_providers_for_request_provider(
+                    |request: Option<&openauth_core::api::ApiRequest>| {
+                        let tenant = request
+                            .and_then(|request| request.headers().get("x-tenant"))
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or("default");
+                        Ok(vec![format!("{tenant}-provider")])
+                    },
+                ),
+            ..AccountOptions::default()
+        },
+        ..OpenAuthOptions::default()
+    }))?;
+    let request = http::Request::builder()
+        .uri("https://app.example.com/api/auth")
+        .header("x-tenant", "acme")
+        .body(Vec::new())?;
+
+    let providers = ctx.trusted_providers_for_request(Some(&request))?;
+
+    assert_eq!(providers, vec!["static", "acme-provider"]);
     Ok(())
 }
 
@@ -110,6 +207,7 @@ fn create_auth_context_builds_secret_config_from_environment_secrets(
                     .to_owned(),
             ),
             openauth_secret: Some("legacy-secret-at-least-32-chars!!".to_owned()),
+            ..AuthEnvironment::default()
         },
     )?;
 

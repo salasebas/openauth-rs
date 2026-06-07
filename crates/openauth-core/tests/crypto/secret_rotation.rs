@@ -74,3 +74,14 @@ fn symmetric_decrypt_uses_legacy_secret_for_bare_payload() -> Result<(), Box<dyn
     assert_eq!(symmetric_decrypt(&config, &bare)?, "legacy data");
     Ok(())
 }
+
+#[test]
+fn symmetric_decrypt_rejects_tampered_versioned_envelope() -> Result<(), Box<dyn std::error::Error>>
+{
+    let config = SecretConfig::new([(2, "secret-b-at-least-32-chars-long!!")]);
+    let encrypted = symmetric_encrypt(&config, "rotated data")?;
+    let tampered = format!("{encrypted}a");
+
+    assert!(symmetric_decrypt(&config, &tampered).is_err());
+    Ok(())
+}

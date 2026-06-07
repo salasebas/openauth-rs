@@ -4,9 +4,11 @@ use openauth_core::api::{
     AuthEndpointOptions, OpenApiOperation,
 };
 use openauth_core::auth::oauth::{
-    handle_oauth_user_info, parse_oauth_state, HandleOAuthUserInfoInput,
+    handle_oauth_user_info, parse_oauth_state_with_input, HandleOAuthUserInfoInput,
+    OAuthStateParseInput,
 };
 use openauth_core::error::OpenAuthError;
+use openauth_core::options::OAuthStateStoreStrategy;
 use time::OffsetDateTime;
 
 use super::options::OAuthProxyOptions;
@@ -60,7 +62,31 @@ async fn handle_callback(
     let Some(adapter) = context.adapter() else {
         return redirect_error(error_url, "user_creation_failed");
     };
-    let _ = parse_oauth_state(context, Some(adapter.as_ref()), &payload.state).await;
+    if !context.options.account.skip_state_cookie_check {
+        match context.options.account.store_state_strategy {
+            OAuthStateStoreStrategy::Cookie => {
+                if parse_oauth_state_with_input(
+                    context,
+                    None,
+                    OAuthStateParseInput {
+                        state: &payload.state,
+                        oauth_state: payload.oauth_state.as_deref(),
+                        skip_state_cookie_check: false,
+                    },
+                )
+                .await
+                .is_err()
+                {
+                    return redirect_error(error_url, "invalid_state");
+                }
+            }
+            OAuthStateStoreStrategy::Database => {
+                if payload.oauth_state.as_deref().map_or(true, str::is_empty) {
+                    return redirect_error(error_url, "invalid_state");
+                }
+            }
+        }
+    }
     let trusted_provider = is_trusted_provider(context, &payload.account.provider_id);
     let result = handle_oauth_user_info(
         context,

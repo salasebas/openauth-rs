@@ -7,6 +7,7 @@ pub mod routes;
 pub mod additional_fields;
 mod endpoint;
 mod error;
+mod middleware;
 mod on_api_error;
 mod openapi;
 mod path;
@@ -26,6 +27,7 @@ pub use endpoint::{
     EndpointMiddlewareHandler, RequestBaseUrl,
 };
 pub use error::{api_error, response, ApiErrorCode, ApiErrorResponse};
+pub use middleware::{fresh_session_middleware, require_resource_ownership};
 pub use openapi::{
     build_openapi_schema, empty_openapi_response, json_openapi_response, path_param, query_param,
     redirect_openapi_response, OpenApiOperation,

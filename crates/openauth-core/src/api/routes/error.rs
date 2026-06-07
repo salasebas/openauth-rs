@@ -36,7 +36,11 @@ pub(super) fn error_endpoint() -> AsyncAuthEndpoint {
                     let separator = if "/".contains('?') { '&' } else { '?' };
                     return redirect(&format!("/{separator}error={}", percent_encode(&safe_code)));
                 }
-                html_response(&safe_code, description.as_deref())
+                html_response(
+                    &context.options.on_api_error.default_error_page,
+                    &safe_code,
+                    description.as_deref(),
+                )
             })
         },
     )
@@ -57,27 +61,33 @@ fn error_query(request: &ApiRequest) -> (String, Option<String>) {
     (code, description)
 }
 
-fn html_response(code: &str, description: Option<&str>) -> Result<ApiResponse, OpenAuthError> {
+fn html_response(
+    page: &crate::options::DefaultErrorPage,
+    code: &str,
+    description: Option<&str>,
+) -> Result<ApiResponse, OpenAuthError> {
     let description = description
         .map(sanitize_html)
-        .unwrap_or_else(|| "We encountered an unexpected error.".to_owned());
+        .unwrap_or_else(|| sanitize_html(&page.message));
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Error</title>
+  <title>{}</title>
 </head>
 <body>
   <main>
     <h1>ERROR</h1>
-    <h2>Something went wrong</h2>
+    <h2>{}</h2>
     <p>CODE: <code>{}</code></p>
     <p>{}</p>
   </main>
 </body>
 </html>"#,
+        sanitize_html(&page.title),
+        sanitize_html(&page.heading),
         sanitize_html(code),
         description
     );

@@ -216,6 +216,24 @@ pub(super) async fn sign_in_url(
     new_user_url: Option<&str>,
     request_sign_up: bool,
 ) -> Result<url::Url, Box<dyn std::error::Error>> {
+    sign_in_url_with_oauth_cookie(
+        router,
+        provider_id,
+        callback_url,
+        new_user_url,
+        request_sign_up,
+    )
+    .await
+    .map(|(url, _)| url)
+}
+
+pub(super) async fn sign_in_url_with_oauth_cookie(
+    router: &AuthRouter,
+    provider_id: &str,
+    callback_url: &str,
+    new_user_url: Option<&str>,
+    request_sign_up: bool,
+) -> Result<(url::Url, String), Box<dyn std::error::Error>> {
     let new_user = new_user_url
         .map(|url| format!(r#","newUserCallbackURL":"{url}""#))
         .unwrap_or_default();
@@ -238,8 +256,12 @@ pub(super) async fn sign_in_url(
                 )?,
         )
         .await?;
+    let oauth_state = oauth_state_cookie_header(&response)?;
     let body: Value = serde_json::from_slice(response.body())?;
-    Ok(url::Url::parse(body["url"].as_str().ok_or("missing url")?)?)
+    Ok((
+        url::Url::parse(body["url"].as_str().ok_or("missing url")?)?,
+        oauth_state,
+    ))
 }
 
 pub(super) async fn sign_in_state(
@@ -249,7 +271,7 @@ pub(super) async fn sign_in_state(
     new_user_url: Option<&str>,
     request_sign_up: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let url = sign_in_url(
+    let (url, oauth_state) = sign_in_url_with_oauth_cookie(
         router,
         provider_id,
         callback_url,
@@ -257,7 +279,8 @@ pub(super) async fn sign_in_state(
         request_sign_up,
     )
     .await?;
-    query_value(&url, "state").ok_or_else(|| "missing state".into())
+    let state = query_value(&url, "state").ok_or("missing state")?;
+    Ok(state_with_oauth_cookie(state, oauth_state))
 }
 
 pub(super) async fn link_state(
@@ -278,6 +301,7 @@ pub(super) async fn link_state(
                 )?,
         )
         .await?;
+    let oauth_state = oauth_state_cookie_header(&response)?;
     let body: Value = serde_json::from_slice(response.body())?;
     let url = url::Url::parse(body["url"].as_str().ok_or_else(|| {
         format!(
@@ -286,7 +310,8 @@ pub(super) async fn link_state(
             String::from_utf8_lossy(response.body())
         )
     })?)?;
-    query_value(&url, "state").ok_or_else(|| "missing state".into())
+    let state = query_value(&url, "state").ok_or("missing state")?;
+    Ok(state_with_oauth_cookie(state, oauth_state))
 }
 
 pub(super) async fn oauth_callback(
@@ -295,17 +320,45 @@ pub(super) async fn oauth_callback(
     code: &str,
     state: &str,
 ) -> Result<Response<Vec<u8>>, openauth_core::error::OpenAuthError> {
-    router
-        .handle_async(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!(
-                    "https://app.example.com/api/auth/oauth2/callback/{provider_id}?code={code}&state={state}"
-                ))
-                .body(Vec::new())
-                .unwrap(),
-        )
-        .await
+    let (state, oauth_cookie) = split_state_with_oauth_cookie(state);
+    let mut builder = Request::builder().method(Method::GET).uri(format!(
+        "https://app.example.com/api/auth/oauth2/callback/{provider_id}?code={code}&state={state}"
+    ));
+    if let Some(cookie) = oauth_cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    router.handle_async(builder.body(Vec::new()).unwrap()).await
+}
+
+pub(super) fn state_with_oauth_cookie(state: String, cookie: String) -> String {
+    format!("{state}\n{cookie}")
+}
+
+pub(super) fn split_state_with_oauth_cookie(state: &str) -> (&str, Option<&str>) {
+    match state.split_once('\n') {
+        Some((state, cookie)) => (state, Some(cookie)),
+        None => (state, None),
+    }
+}
+
+pub(super) fn oauth_state_cookie_header(
+    response: &Response<Vec<u8>>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(|cookie| {
+            let (name, rest) = cookie.split_once('=')?;
+            (name == "open-auth.oauth_state" || name == "__Secure-open-auth.oauth_state").then(
+                || {
+                    let value = rest.split(';').next().unwrap_or_default();
+                    format!("{name}={value}")
+                },
+            )
+        })
+        .ok_or_else(|| "missing oauth_state cookie".into())
 }
 
 pub(super) fn location(response: &Response<Vec<u8>>) -> Option<&str> {

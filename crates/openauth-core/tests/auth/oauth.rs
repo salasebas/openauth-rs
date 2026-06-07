@@ -1,7 +1,8 @@
 use openauth_core::auth::oauth::{
     decrypt_oauth_token, generate_oauth_state, handle_oauth_user_info, missing_email_log_message,
-    parse_oauth_state, set_token_util, HandleOAuthUserInfoInput, OAuthAccountInput,
-    OAuthStateInput, OAuthStateLink, OAuthUserInfo, OAuthUserInfoError,
+    parse_oauth_state, parse_oauth_state_with_input, set_token_util, HandleOAuthUserInfoInput,
+    OAuthAccountInput, OAuthStateInput, OAuthStateLink, OAuthStateParseInput, OAuthUserInfo,
+    OAuthUserInfoError,
 };
 use openauth_core::context::create_auth_context;
 #[cfg(feature = "jose")]
@@ -126,15 +127,85 @@ async fn oauth_state_cookie_strategy_round_trips_without_database(
 
     assert_eq!(state.data.callback_url, "https://app.example.com/callback");
     assert_eq!(state.data.code_verifier.len(), 128);
+    assert_eq!(state.data.oauth_state.len(), 32);
     assert!(state.data.expires_at > OffsetDateTime::now_utc());
 
-    let parsed = parse_oauth_state(&context, None, &state.state).await?;
+    let parsed = parse_oauth_state_with_input(
+        &context,
+        None,
+        OAuthStateParseInput {
+            state: &state.state,
+            oauth_state: Some(&state.data.oauth_state),
+            skip_state_cookie_check: false,
+        },
+    )
+    .await?;
 
     assert_eq!(parsed.callback_url, "https://app.example.com/callback");
     assert_eq!(
         parsed.link.as_ref().map(|link| link.user_id.as_str()),
         Some("user_1")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn parse_oauth_state_rejects_oauth_state_nonce_mismatch(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = test_context(AccountOptions::default())?;
+    let state = generate_oauth_state(
+        &context,
+        None,
+        OAuthStateInput {
+            callback_url: "https://app.example.com/callback".to_owned(),
+            ..OAuthStateInput::default()
+        },
+    )
+    .await?;
+
+    assert!(parse_oauth_state_with_input(
+        &context,
+        None,
+        OAuthStateParseInput {
+            state: &state.state,
+            oauth_state: Some("wrong-oauth-state"),
+            skip_state_cookie_check: false,
+        },
+    )
+    .await
+    .is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn parse_oauth_state_can_explicitly_skip_oauth_state_nonce_check(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = test_context(AccountOptions {
+        skip_state_cookie_check: true,
+        ..AccountOptions::default()
+    })?;
+    let state = generate_oauth_state(
+        &context,
+        None,
+        OAuthStateInput {
+            callback_url: "https://app.example.com/callback".to_owned(),
+            ..OAuthStateInput::default()
+        },
+    )
+    .await?;
+
+    let parsed = parse_oauth_state_with_input(
+        &context,
+        None,
+        OAuthStateParseInput {
+            state: &state.state,
+            oauth_state: None,
+            skip_state_cookie_check: context.options.account.skip_state_cookie_check,
+        },
+    )
+    .await?;
+
+    assert_eq!(parsed.callback_url, "https://app.example.com/callback");
     Ok(())
 }
 
@@ -547,6 +618,35 @@ async fn handle_oauth_user_info_uses_trusted_provider_configuration_and_disable_
     .await?;
     assert!(new_user.error.is_none());
     assert!(new_user.is_register);
+    Ok(())
+}
+
+#[tokio::test]
+async fn handle_oauth_user_info_uses_dynamic_trusted_providers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = MemoryAdapter::new();
+    let context = test_context(AccountOptions {
+        account_linking: AccountLinkingOptions::default()
+            .trusted_providers_provider(|| Ok(vec!["github".to_owned()])),
+        ..AccountOptions::default()
+    })?;
+    DbUserStore::new(&adapter)
+        .create_user(CreateUserInput::new("Ada", "ada@example.com").id("user_1"))
+        .await?;
+
+    let linked = handle_oauth_user_info(
+        &context,
+        &adapter,
+        HandleOAuthUserInfoInput {
+            user_info: oauth_user("github_ada", "ada@example.com", false),
+            account: oauth_account("github", "github_ada", None),
+            ..HandleOAuthUserInfoInput::default()
+        },
+    )
+    .await?;
+
+    assert!(linked.error.is_none());
+    assert_eq!(adapter.len("account").await, 1);
     Ok(())
 }
 

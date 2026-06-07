@@ -13,7 +13,49 @@ pub struct OnApiErrorOptions {
     pub throw: bool,
     /// Default redirect target for OAuth-style error flows.
     pub error_url: Option<String>,
+    pub default_error_page: DefaultErrorPage,
     pub on_error: Option<Arc<dyn OnApiErrorHandler>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefaultErrorPage {
+    pub title: String,
+    pub heading: String,
+    pub message: String,
+}
+
+impl Default for DefaultErrorPage {
+    fn default() -> Self {
+        Self {
+            title: "Error".to_owned(),
+            heading: "Something went wrong".to_owned(),
+            message: "We encountered an unexpected error.".to_owned(),
+        }
+    }
+}
+
+impl DefaultErrorPage {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    #[must_use]
+    pub fn heading(mut self, heading: impl Into<String>) -> Self {
+        self.heading = heading.into();
+        self
+    }
+
+    #[must_use]
+    pub fn message(mut self, message: impl Into<String>) -> Self {
+        self.message = message.into();
+        self
+    }
 }
 
 impl fmt::Debug for OnApiErrorOptions {
@@ -22,6 +64,7 @@ impl fmt::Debug for OnApiErrorOptions {
             .debug_struct("OnApiErrorOptions")
             .field("throw", &self.throw)
             .field("error_url", &self.error_url)
+            .field("default_error_page", &self.default_error_page)
             .field(
                 "on_error",
                 &self.on_error.as_ref().map(|_| "<on-api-error>"),
@@ -44,6 +87,12 @@ impl OnApiErrorOptions {
     #[must_use]
     pub fn error_url(mut self, url: impl Into<String>) -> Self {
         self.error_url = Some(url.into());
+        self
+    }
+
+    #[must_use]
+    pub fn default_error_page(mut self, page: DefaultErrorPage) -> Self {
+        self.default_error_page = page;
         self
     }
 

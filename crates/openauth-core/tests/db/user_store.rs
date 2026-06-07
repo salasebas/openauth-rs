@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use openauth_core::db::{
     run_transaction_without_native_support, Account, AdapterFuture, Count, Create, DbAdapter,
-    DbRecord, DbValue, Delete, DeleteMany, FindMany, FindOne, TransactionCallback, Update,
-    UpdateMany, User, Where, WhereOperator,
+    DbRecord, DbValue, Delete, DeleteMany, FindMany, FindOne, SortDirection, TransactionCallback,
+    Update, UpdateMany, User, Where, WhereOperator,
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::user::{
@@ -117,6 +117,30 @@ impl DbAdapter for InMemoryUserAdapter {
         Box::pin(async move {
             self.find_many.lock().await.push(query.clone());
             match query.model.as_str() {
+                "user" => {
+                    let mut records = self
+                        .users
+                        .lock()
+                        .await
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if let Some(sort) = &query.sort_by {
+                        if sort.field == "email" && sort.direction == SortDirection::Asc {
+                            records.sort_by(|left, right| {
+                                string_field(left, "email")
+                                    .unwrap_or_default()
+                                    .cmp(string_field(right, "email").unwrap_or_default())
+                            });
+                        }
+                    }
+                    let offset = query.offset.unwrap_or(0);
+                    let iter = records.into_iter().skip(offset);
+                    Ok(match query.limit {
+                        Some(limit) => iter.take(limit).collect(),
+                        None => iter.collect(),
+                    })
+                }
                 "account" => {
                     let user_id = string_filter(&query.where_clauses, "user_id")?;
                     Ok(self
@@ -137,8 +161,13 @@ impl DbAdapter for InMemoryUserAdapter {
         })
     }
 
-    fn count<'a>(&'a self, _query: Count) -> AdapterFuture<'a, u64> {
-        Box::pin(async { Ok(0) })
+    fn count<'a>(&'a self, query: Count) -> AdapterFuture<'a, u64> {
+        Box::pin(async move {
+            match query.model.as_str() {
+                "user" => Ok(self.users.lock().await.len() as u64),
+                _ => Ok(0),
+            }
+        })
     }
 
     fn update<'a>(&'a self, _query: Update) -> AdapterFuture<'a, Option<DbRecord>> {
@@ -440,6 +469,90 @@ async fn db_user_store_finds_credential_account_for_user() -> Result<(), OpenAut
     };
     assert_eq!(account.provider_id, "credential");
     assert_eq!(account.user_id, "user_1");
+    Ok(())
+}
+
+#[tokio::test]
+async fn db_user_store_lists_users_with_pagination_and_sorting() -> Result<(), OpenAuthError> {
+    let adapter = InMemoryUserAdapter::default();
+    let now = OffsetDateTime::now_utc();
+    adapter
+        .insert_user(User {
+            id: "user_1".to_owned(),
+            name: "Grace".to_owned(),
+            email: "grace@example.com".to_owned(),
+            email_verified: true,
+            image: None,
+            username: None,
+            display_username: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await;
+    adapter
+        .insert_user(User {
+            id: "user_2".to_owned(),
+            name: "Ada".to_owned(),
+            email: "ada@example.com".to_owned(),
+            email_verified: true,
+            image: None,
+            username: None,
+            display_username: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await;
+
+    let users = DbUserStore::new(&adapter)
+        .list_users(Some(1), Some(0), Some("email"), SortDirection::Asc)
+        .await?;
+
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].email, "ada@example.com");
+    let find_many = adapter.find_many.lock().await;
+    let query = find_many
+        .last()
+        .ok_or_else(|| OpenAuthError::Adapter("missing list users query".to_owned()))?;
+    assert_eq!(query.model, "user");
+    assert_eq!(query.limit, Some(1));
+    assert_eq!(query.offset, Some(0));
+    Ok(())
+}
+
+#[tokio::test]
+async fn db_user_store_counts_total_users() -> Result<(), OpenAuthError> {
+    let adapter = InMemoryUserAdapter::default();
+    let now = OffsetDateTime::now_utc();
+    adapter
+        .insert_user(User {
+            id: "user_1".to_owned(),
+            name: "Ada".to_owned(),
+            email: "ada@example.com".to_owned(),
+            email_verified: true,
+            image: None,
+            username: None,
+            display_username: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await;
+    adapter
+        .insert_user(User {
+            id: "user_2".to_owned(),
+            name: "Grace".to_owned(),
+            email: "grace@example.com".to_owned(),
+            email_verified: true,
+            image: None,
+            username: None,
+            display_username: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await;
+
+    let count = DbUserStore::new(&adapter).count_total_users().await?;
+
+    assert_eq!(count, 2);
     Ok(())
 }
 

@@ -249,6 +249,7 @@ pub(crate) fn before_callback(
                     scope: (!tokens.scopes.is_empty()).then(|| tokens.scopes.join(",")),
                 },
                 state: package.state,
+                oauth_state: Some(state_data.oauth_state),
                 callback_url: final_callback,
                 new_user_url: state_data.new_user_url,
                 error_url: state_data.error_url,

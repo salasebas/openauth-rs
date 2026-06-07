@@ -96,7 +96,10 @@ impl OpenAuth {
                 "OpenAuth::run_migrations requires an adapter-backed instance".to_owned(),
             )
         })?;
-        adapter.run_migrations(&self.context.db_schema).await
+        adapter.run_migrations(&self.context.db_schema).await?;
+        adapter
+            .run_plugin_migrations(&self.context.plugin_migrations)
+            .await
     }
 
     #[cfg(feature = "telemetry")]

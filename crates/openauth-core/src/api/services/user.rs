@@ -191,12 +191,8 @@ pub(in crate::api) async fn delete_user_with_password_or_fresh_session(
         return Ok(DeleteUserResult::VerificationSent);
     }
 
-    if context.session_config.fresh_age != 0 {
-        let age = OffsetDateTime::now_utc() - session.created_at;
-        if age.whole_seconds() >= context.session_config.fresh_age as i64 {
-            return Err(DeleteUserError::SessionExpired.into());
-        }
-    }
+    crate::api::middleware::ensure_fresh_session(context, session)
+        .map_err(|_| DeleteUserError::SessionExpired)?;
     perform_delete(adapter, context, request, user).await?;
     Ok(DeleteUserResult::Deleted)
 }

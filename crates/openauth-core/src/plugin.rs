@@ -15,7 +15,8 @@ mod schema;
 pub use db::{
     PluginDatabaseAfterHookHandler, PluginDatabaseAfterInput, PluginDatabaseBeforeAction,
     PluginDatabaseBeforeHookHandler, PluginDatabaseBeforeInput, PluginDatabaseHook,
-    PluginDatabaseHookContext, PluginDatabaseOperation, PluginMigration,
+    PluginDatabaseHookContext, PluginDatabaseOperation, PluginMigration, PluginMigrationBody,
+    PluginMigrationStep,
 };
 pub use endpoint::PluginEndpoint;
 pub use error::PluginErrorCode;

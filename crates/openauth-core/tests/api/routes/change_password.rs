@@ -1,7 +1,11 @@
 use super::*;
 
 use openauth_core::cookies::{set_cookie_cache, CookieCachePayload};
-use openauth_core::options::{CookieCacheOptions, SessionOptions};
+use openauth_core::db::DbFieldType;
+use openauth_core::options::{
+    CookieCacheOptions, SessionOptions, UserAdditionalField, UserOptions,
+};
+use std::collections::BTreeMap;
 
 #[tokio::test]
 async fn change_password_route_updates_credentials() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,6 +49,42 @@ async fn change_password_route_updates_credentials() -> Result<(), Box<dyn std::
         hash,
         "new-secret123"
     )?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn change_password_route_returns_additional_user_fields(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(RouteAdapter::default());
+    let now = OffsetDateTime::now_utc();
+    let mut record = user_record(user(now));
+    record.insert("role".to_owned(), DbValue::String("admin".to_owned()));
+    adapter.create(create_query("user", record)).await?;
+    adapter
+        .insert_account(credential_account_record(
+            "user_1",
+            &hash_password("secret123")?,
+            now,
+        ))
+        .await?;
+    adapter
+        .insert_session(session(now, now + Duration::hours(1)))
+        .await;
+    let router = router_with_options(adapter, change_password_user_field_options())?;
+    let cookie = signed_session_cookie("token_1")?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/change-password",
+            r#"{"currentPassword":"secret123","newPassword":"new-secret123"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["user"]["role"], "admin");
     Ok(())
 }
 
@@ -109,6 +149,19 @@ async fn change_password_route_ignores_cookie_cache_for_sensitive_session(
     let body: Value = serde_json::from_slice(response.body())?;
     assert_eq!(body["code"], "UNAUTHORIZED");
     Ok(())
+}
+
+fn change_password_user_field_options() -> OpenAuthOptions {
+    OpenAuthOptions {
+        user: UserOptions {
+            additional_fields: BTreeMap::from([(
+                "role".to_owned(),
+                UserAdditionalField::new(DbFieldType::String),
+            )]),
+            ..UserOptions::default()
+        },
+        ..OpenAuthOptions::default()
+    }
 }
 
 #[tokio::test]

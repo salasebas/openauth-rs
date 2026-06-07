@@ -85,6 +85,7 @@ fn auth_environment_debug_redacts_secret_material() {
     let environment = AuthEnvironment {
         openauth_secret: Some("openauth-secret-should-not-appear".to_owned()),
         openauth_secrets: Some("1:rotating-env-secret-should-not-appear".to_owned()),
+        openauth_trusted_origins: Some("https://trusted.example.com".to_owned()),
     };
 
     let output = format!("{environment:?}");
@@ -96,7 +97,11 @@ fn auth_environment_debug_redacts_secret_material() {
 #[test]
 fn auth_environment_from_process_is_empty_when_secret_env_is_unset() {
     let _guard = lock_env();
-    let _restore = EnvRestore::unset(&["OPENAUTH_SECRET", "OPENAUTH_SECRETS"]);
+    let _restore = EnvRestore::unset(&[
+        "OPENAUTH_SECRET",
+        "OPENAUTH_SECRETS",
+        "OPENAUTH_TRUSTED_ORIGINS",
+    ]);
 
     assert_eq!(AuthEnvironment::from_process(), AuthEnvironment::default());
 }
@@ -104,15 +109,21 @@ fn auth_environment_from_process_is_empty_when_secret_env_is_unset() {
 #[test]
 fn auth_environment_from_process_reads_mocked_secret_env() {
     let _guard = lock_env();
-    let _restore = EnvRestore::unset(&["OPENAUTH_SECRET", "OPENAUTH_SECRETS"]);
+    let _restore = EnvRestore::unset(&[
+        "OPENAUTH_SECRET",
+        "OPENAUTH_SECRETS",
+        "OPENAUTH_TRUSTED_ORIGINS",
+    ]);
     std::env::set_var("OPENAUTH_SECRET", "openauth-secret");
     std::env::set_var("OPENAUTH_SECRETS", "2:next,1:prev");
+    std::env::set_var("OPENAUTH_TRUSTED_ORIGINS", "https://trusted.example.com");
 
     assert_eq!(
         AuthEnvironment::from_process(),
         AuthEnvironment {
             openauth_secret: Some("openauth-secret".to_owned()),
             openauth_secrets: Some("2:next,1:prev".to_owned()),
+            openauth_trusted_origins: Some("https://trusted.example.com".to_owned()),
         }
     );
 }

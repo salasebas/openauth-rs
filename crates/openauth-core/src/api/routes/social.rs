@@ -11,6 +11,7 @@ use crate::api::{
     OpenApiOperation,
 };
 use crate::auth::oauth::{generate_oauth_state, OAuthStateInput, OAuthStateLink};
+use crate::cookies::Cookie;
 use crate::db::DbAdapter;
 use openauth_oauth::oauth2::SocialAuthorizationUrlRequest;
 
@@ -84,7 +85,11 @@ fn sign_in_oauth_endpoint(
                     scopes: body.scopes,
                     login_hint: body.login_hint,
                 })?;
-                redirect_json_response(url.to_string(), !body.disable_redirect)
+                redirect_json_response(
+                    url.to_string(),
+                    !body.disable_redirect,
+                    vec![oauth_state_cookie(context, &state.data.oauth_state)],
+                )
             })
         },
     )
@@ -172,8 +177,20 @@ pub(super) fn link_social_endpoint(adapter: Arc<dyn DbAdapter>) -> AsyncAuthEndp
                     scopes: body.scopes,
                     login_hint: None,
                 })?;
-                redirect_json_response(url.to_string(), !body.disable_redirect)
+                redirect_json_response(
+                    url.to_string(),
+                    !body.disable_redirect,
+                    vec![oauth_state_cookie(context, &state.data.oauth_state)],
+                )
             })
         },
     )
+}
+
+fn oauth_state_cookie(context: &crate::context::AuthContext, oauth_state: &str) -> Cookie {
+    Cookie {
+        name: context.auth_cookies.oauth_state.name.clone(),
+        value: oauth_state.to_owned(),
+        attributes: context.auth_cookies.oauth_state.attributes.clone(),
+    }
 }

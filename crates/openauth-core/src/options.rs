@@ -16,12 +16,15 @@ mod storage;
 mod user;
 mod verification;
 
-pub use account::{AccountLinkingOptions, AccountOptions, OAuthStateStoreStrategy};
+pub use account::{
+    AccountLinkingOptions, AccountOptions, OAuthStateStoreStrategy, TrustedProvidersProvider,
+    TrustedProvidersRequestProvider,
+};
 pub use advanced::{
     AdvancedOptions, BackgroundTaskFuture, BackgroundTaskRunner, CookieAttributesOverride,
     IpAddressOptions,
 };
-pub use api_error::{OnApiErrorHandler, OnApiErrorOptions};
+pub use api_error::{DefaultErrorPage, OnApiErrorHandler, OnApiErrorOptions};
 pub use cookies::{CookieCacheOptions, CookieCacheStrategy, CookieConfig};
 pub use email_password::{EmailPasswordOptions, ExistingUserSignUpPayload, OnExistingUserSignUp};
 pub use email_verification::{
