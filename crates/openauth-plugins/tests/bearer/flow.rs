@@ -9,6 +9,29 @@ use super::common::{
 };
 
 #[tokio::test]
+async fn sign_in_email_response_exposes_auth_token_header() -> Result<(), Box<dyn std::error::Error>>
+{
+    let adapter = Arc::new(TestAdapter::default());
+    let router = router(adapter, openauth_plugins::bearer::bearer())?;
+    sign_up_and_tokens(&router).await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-in/email",
+            r#"{"email":"ada@example.com","password":"secret123"}"#,
+            None,
+            HeaderMap::new(),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(auth_token_header(&response).is_some_and(|token| token.contains('.')));
+    assert_exposes_header(&response, "set-auth-token")?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn sign_up_response_exposes_auth_token_header() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(TestAdapter::default());
     let router = router(adapter, openauth_plugins::bearer::bearer())?;
