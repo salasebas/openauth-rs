@@ -8,6 +8,27 @@ use time::{Duration, OffsetDateTime};
 use super::{nonce, options, options_rejecting_signature, response_json, router, verify, WALLET};
 
 #[tokio::test]
+async fn verify_endpoint_rejects_invalid_wallet_address() -> Result<(), Box<dyn std::error::Error>>
+{
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router(adapter, options())?;
+
+    let response = verify(
+        &router,
+        "not-a-wallet",
+        Some(1),
+        "valid_message",
+        "valid_signature",
+        None,
+    )
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response_json(&response)?["code"], "INVALID_WALLET_ADDRESS");
+    Ok(())
+}
+
+#[tokio::test]
 async fn verify_endpoint_rejects_missing_nonce() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(MemoryAdapter::new());
     let router = router(adapter, options())?;
