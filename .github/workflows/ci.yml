@@ -77,6 +77,8 @@ jobs:
           - package: openauth-sso
             services: ""
             doc_tests: true
+          - package: openauth-saml
+            services: ""
           - package: openauth-telemetry
             services: ""
           - package: openauth-axum
