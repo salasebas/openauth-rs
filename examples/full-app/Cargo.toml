@@ -8,6 +8,7 @@ publish = false
 axum.workspace = true
 http.workspace = true
 openauth = { path = "../../crates/openauth", features = ["sqlx"] }
+openauth-core = { workspace = true, features = ["test-utils"] }
 openauth-axum = { path = "../../crates/openauth-axum" }
 openauth-fred = { path = "../../crates/openauth-fred" }
 openauth-redis = { path = "../../crates/openauth-redis" }

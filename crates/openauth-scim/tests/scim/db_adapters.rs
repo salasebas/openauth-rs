@@ -423,7 +423,7 @@ fn test_rate_limit_options() -> RateLimitOptions {
 }
 
 fn scim_options() -> OpenAuthOptions {
-    OpenAuthOptions {
+    openauth_core::test_utils::with_integration_test_defaults(OpenAuthOptions {
         base_url: Some("https://app.example.com".to_owned()),
         secret: Some(SECRET.to_owned()),
         plugins: vec![
@@ -437,11 +437,11 @@ fn scim_options() -> OpenAuthOptions {
         },
         rate_limit: test_rate_limit_options(),
         ..OpenAuthOptions::default()
-    }
+    })
 }
 
 fn scim_only_options() -> OpenAuthOptions {
-    OpenAuthOptions {
+    openauth_core::test_utils::with_integration_test_defaults(OpenAuthOptions {
         base_url: Some("https://app.example.com".to_owned()),
         secret: Some(SECRET.to_owned()),
         plugins: vec![scim(crate::scim_options_for_manual_provider_tokens())],
@@ -452,11 +452,11 @@ fn scim_only_options() -> OpenAuthOptions {
         },
         rate_limit: test_rate_limit_options(),
         ..OpenAuthOptions::default()
-    }
+    })
 }
 
 fn base_options() -> OpenAuthOptions {
-    OpenAuthOptions {
+    openauth_core::test_utils::with_integration_test_defaults(OpenAuthOptions {
         base_url: Some("https://app.example.com".to_owned()),
         secret: Some(SECRET.to_owned()),
         advanced: AdvancedOptions {
@@ -466,7 +466,7 @@ fn base_options() -> OpenAuthOptions {
         },
         rate_limit: test_rate_limit_options(),
         ..OpenAuthOptions::default()
-    }
+    })
 }
 
 async fn sqlite_table_exists(pool: &sqlx::SqlitePool, table: &str) -> Result<bool, sqlx::Error> {

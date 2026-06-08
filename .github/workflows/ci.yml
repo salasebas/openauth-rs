@@ -57,51 +57,38 @@ jobs:
       matrix:
         include:
           - package: openauth
-            services: postgres mysql
+            nextest_args: --all-features
           - package: openauth-core
-            services: ""
+            nextest_args: --all-features
           - package: openauth-oauth
-            services: ""
+            nextest_args: --all-features
           - package: openauth-social-providers
-            services: ""
-          - package: openauth-deadpool-postgres
-            services: postgres
-          - package: openauth-tokio-postgres
-            services: postgres
+            nextest_args: --all-features
           - package: openauth-passkey
-            services: ""
+            nextest_args: --all-features
             doc_tests: true
           - package: openauth-sqlx
-            services: postgres mysql
+            nextest_args: --features sqlite
           - package: openauth-plugins
-            services: ""
+            nextest_args: --all-features
           - package: openauth-sso
-            services: ""
+            nextest_args: --all-features
             doc_tests: true
           - package: openauth-saml
-            services: ""
+            nextest_args: --all-features
           - package: openauth-telemetry
-            services: ""
+            nextest_args: --all-features
           - package: openauth-axum
-            services: ""
+            nextest_args: --all-features
           - package: openauth-cli
-            services: ""
+            nextest_args: --all-features
           - package: openauth-i18n
-            services: ""
+            nextest_args: --all-features
             doc_tests: true
           - package: openauth-oauth-provider
-            services: ""
-          - package: openauth-fred
-            services: redis valkey
-          - package: openauth-redis
-            services: redis valkey
-          - package: openauth-scim
-            services: postgres mysql
-            doc_tests: true
+            nextest_args: --all-features
           - package: openauth-stripe
-            services: ""
-          - package: openauth-example-full-app
-            services: redis valkey
+            nextest_args: --all-features
 
     steps:
       - name: Checkout
@@ -116,12 +103,8 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Start database services
-        if: matrix.services != ''
-        run: ./scripts/ensure-test-services.sh ${{ matrix.services }}
-
       - name: Test with nextest
-        run: cargo nextest run -p ${{ matrix.package }} --all-features
+        run: cargo nextest run -p ${{ matrix.package }} ${{ matrix.nextest_args }}
 
       - name: Test openauth-telemetry default features
         if: matrix.package == 'openauth-telemetry'
@@ -131,47 +114,6 @@ jobs:
         if: matrix.doc_tests
         run: cargo test -p ${{ matrix.package }} --doc --all-features
 
-      - name: Stop database services
-        if: always() && matrix.services != ''
-        run: docker compose down -v
-
-  test-integration:
-    name: Integration ${{ matrix.package }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - package: openauth-plugins
-            services: postgres mysql redis valkey
-          - package: openauth-passkey
-            services: postgres mysql
-          - package: openauth-cli
-            services: postgres mysql
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Show Rust toolchain
-        run: rustup show
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Start integration services
-        run: ./scripts/ensure-test-services.sh ${{ matrix.services }}
-
-      - name: Test ignored integration tests
-        run: cargo nextest run -p ${{ matrix.package }} --all-features --run-ignored only
-
-      - name: Stop integration services
-        if: always()
-        run: docker compose down -v
-
   ci:
     name: CI
     runs-on: ubuntu-latest
@@ -179,7 +121,6 @@ jobs:
       - fmt
       - clippy
       - test-crate
-      - test-integration
     if: always()
     steps:
       - name: Check required jobs

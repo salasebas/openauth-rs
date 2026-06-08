@@ -11,8 +11,8 @@ use openauth_core::context::{create_auth_context, create_auth_context_with_adapt
 use openauth_core::db::MemoryAdapter;
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
-    AdvancedOptions, EmailPasswordOptions, IpAddressOptions, OpenAuthOptions, RateLimitOptions,
-    RateLimitPathRule, RateLimitRule,
+    AdvancedOptions, IpAddressOptions, OpenAuthOptions, RateLimitOptions, RateLimitPathRule,
+    RateLimitRule,
 };
 use openauth_core::test_utils::fast_hash_password;
 use openauth_core::user::{CreateCredentialAccountInput, CreateUserInput, DbUserStore};
@@ -429,18 +429,18 @@ fn router_with_advanced(
     path: &str,
     advanced: AdvancedOptions,
 ) -> Result<AuthRouter, OpenAuthError> {
-    let context = create_auth_context(OpenAuthOptions {
-        plugins: vec![plugin],
-        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
-        advanced: AdvancedOptions {
-            disable_csrf_check: true,
-            disable_origin_check: true,
-            ..advanced
+    let context = create_auth_context(openauth_core::test_utils::with_integration_test_defaults(
+        OpenAuthOptions {
+            plugins: vec![plugin],
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            advanced: AdvancedOptions {
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..advanced
+            },
+            ..OpenAuthOptions::default()
         },
-        email_password: EmailPasswordOptions::new().enabled(true),
-        development: true,
-        ..OpenAuthOptions::default()
-    })?;
+    ))?;
     let endpoint = create_auth_endpoint(
         path,
         Method::POST,
@@ -455,24 +455,26 @@ fn router_with_rate_limit(
     plugin: openauth_core::plugin::AuthPlugin,
     path: &str,
 ) -> Result<AuthRouter, OpenAuthError> {
-    let context = create_auth_context(OpenAuthOptions {
-        plugins: vec![plugin],
-        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
-        rate_limit: RateLimitOptions {
-            enabled: Some(true),
-            custom_rules: vec![RateLimitPathRule {
-                path: path.to_owned(),
-                rule: Some(RateLimitRule { window: 60, max: 1 }),
-            }],
-            ..RateLimitOptions::default()
+    let context = create_auth_context(openauth_core::test_utils::with_integration_test_defaults(
+        OpenAuthOptions {
+            plugins: vec![plugin],
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            rate_limit: RateLimitOptions {
+                enabled: Some(true),
+                custom_rules: vec![RateLimitPathRule {
+                    path: path.to_owned(),
+                    rule: Some(RateLimitRule { window: 60, max: 1 }),
+                }],
+                ..RateLimitOptions::default()
+            },
+            advanced: AdvancedOptions {
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            ..OpenAuthOptions::default()
         },
-        advanced: AdvancedOptions {
-            disable_csrf_check: true,
-            disable_origin_check: true,
-            ..AdvancedOptions::default()
-        },
-        ..OpenAuthOptions::default()
-    })?;
+    ))?;
     let endpoint = create_auth_endpoint(
         path,
         Method::POST,

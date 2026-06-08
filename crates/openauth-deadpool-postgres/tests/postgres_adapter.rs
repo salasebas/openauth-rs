@@ -5,7 +5,6 @@ use http::{header, Method, Request, StatusCode};
 use indexmap::IndexMap;
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context;
-use openauth_core::crypto::password::verify_password;
 use openauth_core::db::{
     auth_schema, AuthSchemaOptions, Count, Create, DbAdapter, DbField, DbFieldType, DbRecord,
     DbSchema, DbTable, DbValue, DeleteMany, FindMany, FindOne, ForeignKey, IdGeneration, IdPolicy,
@@ -13,9 +12,10 @@ use openauth_core::db::{
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
-    AdvancedOptions, EmailPasswordOptions, OpenAuthOptions, RateLimitConsumeInput, RateLimitRule,
-    RateLimitStore, UserAdditionalField, UserOptions,
+    AdvancedOptions, OpenAuthOptions, RateLimitConsumeInput, RateLimitRule, RateLimitStore,
+    UserAdditionalField, UserOptions,
 };
+use openauth_core::test_utils::fast_verify_password;
 use openauth_deadpool_postgres::migration::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_deadpool_postgres::{DeadpoolPostgresAdapter, DeadpoolPostgresRateLimitStore};
 use serde_json::Value;
@@ -1466,36 +1466,34 @@ async fn deadpool_postgres_adapter_supports_password_reset_verifications(
         .await?
         .ok_or("missing credential account")?;
     let password_hash = string_field(&account, "password")?;
-    assert!(verify_password(password_hash, "new-secret123")?);
+    assert!(fast_verify_password(password_hash, "new-secret123")?);
     assert_eq!(adapter.count(Count::new("verification")).await?, 0);
     Ok(())
 }
 
 fn router(adapter: Arc<DeadpoolPostgresAdapter>) -> Result<AuthRouter, OpenAuthError> {
-    let context = create_auth_context(OpenAuthOptions {
-        secret: Some(secret().to_owned()),
-        advanced: AdvancedOptions {
-            disable_csrf_check: true,
-            disable_origin_check: true,
-            ..AdvancedOptions::default()
+    let context = create_auth_context(openauth_core::test_utils::with_integration_test_defaults(
+        OpenAuthOptions {
+            secret: Some(secret().to_owned()),
+            advanced: AdvancedOptions {
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            ..OpenAuthOptions::default()
         },
-        email_password: EmailPasswordOptions::new().enabled(true),
-        development: true,
-        ..OpenAuthOptions::default()
-    })?;
+    ))?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
 }
 
 fn options_with_additional_user_fields() -> OpenAuthOptions {
-    OpenAuthOptions {
+    openauth_core::test_utils::with_integration_test_defaults(OpenAuthOptions {
         secret: Some(secret().to_owned()),
         advanced: AdvancedOptions {
             disable_csrf_check: true,
             disable_origin_check: true,
             ..AdvancedOptions::default()
         },
-        email_password: EmailPasswordOptions::new().enabled(true),
-        development: true,
         user: UserOptions {
             additional_fields: BTreeMap::from([
                 (
@@ -1515,7 +1513,7 @@ fn options_with_additional_user_fields() -> OpenAuthOptions {
             ..UserOptions::default()
         },
         ..OpenAuthOptions::default()
-    }
+    })
 }
 
 fn json_request(

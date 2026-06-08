@@ -3047,6 +3047,7 @@ dependencies = [
  "http",
  "openauth",
  "openauth-axum",
+ "openauth-core",
  "openauth-fred",
  "openauth-redis",
  "openauth-sqlx",

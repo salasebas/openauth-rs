@@ -1,7 +1,7 @@
 use super::*;
 
 fn test_openauth_options(plugins: Vec<openauth_core::plugin::AuthPlugin>) -> OpenAuthOptions {
-    OpenAuthOptions {
+    openauth_core::test_utils::with_integration_test_defaults(OpenAuthOptions {
         base_url: Some("https://app.example.com".to_owned()),
         secret: Some(SECRET.to_owned()),
         plugins,
@@ -15,7 +15,7 @@ fn test_openauth_options(plugins: Vec<openauth_core::plugin::AuthPlugin>) -> Ope
             ..RateLimitOptions::default()
         },
         ..OpenAuthOptions::default()
-    }
+    })
 }
 
 pub(super) fn router() -> Result<AuthRouter, openauth_core::error::OpenAuthError> {

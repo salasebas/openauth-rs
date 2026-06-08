@@ -1,5 +1,5 @@
 use http::{Method, StatusCode};
-use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
 use openauth_passkey::{PasskeyOptions, PasskeyRegistrationOptions, PasskeyRegistrationUser};
 use serde_json::Value;
 
@@ -11,7 +11,7 @@ const RP_ID_REQUIRED: &str =
     "passkey requires an explicit rp_id or a host derivable from base_url or origin";
 
 fn test_auth_options(base_url: Option<&str>) -> OpenAuthOptions {
-    OpenAuthOptions {
+    openauth_core::test_utils::with_integration_test_defaults(OpenAuthOptions {
         base_url: base_url.map(str::to_owned),
         secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
         advanced: AdvancedOptions {
@@ -19,10 +19,8 @@ fn test_auth_options(base_url: Option<&str>) -> OpenAuthOptions {
             disable_origin_check: true,
             ..AdvancedOptions::default()
         },
-        email_password: EmailPasswordOptions::new().enabled(true),
-        development: true,
         ..OpenAuthOptions::default()
-    }
+    })
 }
 
 fn preauth_passkey_options() -> PasskeyOptions {

@@ -28,6 +28,7 @@ time.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+openauth-core = { workspace = true, features = ["test-utils"] }
 openauth-deadpool-postgres.workspace = true
 openauth-plugins.workspace = true
 openauth-sqlx = { workspace = true, features = ["mysql", "postgres", "sqlite"] }

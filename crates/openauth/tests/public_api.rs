@@ -5,9 +5,9 @@ use openauth::{
     open_auth_with_endpoints, AdvancedOptions, ApiErrorResponse, ApiRequest, ApiResponse,
     AsyncAuthEndpoint, AuthEndpoint, AuthEndpointOptions, AuthPlugin, BodyField, BodySchema,
     ChangeEmailOptions, CookieCacheOptions, CookieCacheStrategy, DeleteUserOptions,
-    EmailPasswordOptions, EmailVerificationOptions, EndpointKind, HookedAdapter, JsonSchemaType,
-    MemoryAdapter, OpenApiOperation, OpenAuth, OpenAuthBuilder, OpenAuthError, OpenAuthOptions,
-    PathParams, PluginAfterHookAction, PluginBeforeHookAction, PluginDatabaseAfterInput,
+    EmailVerificationOptions, EndpointKind, HookedAdapter, JsonSchemaType, MemoryAdapter,
+    OpenApiOperation, OpenAuth, OpenAuthBuilder, OpenAuthError, OpenAuthOptions, PathParams,
+    PluginAfterHookAction, PluginBeforeHookAction, PluginDatabaseAfterInput,
     PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook,
     PluginDatabaseHookContext, PluginDatabaseOperation, PluginEndpoint, PluginEndpointHooks,
     PluginErrorCode, PluginHookMatcher, PluginInitOutput, PluginMigration, PluginRateLimitRule,
@@ -1007,6 +1007,7 @@ async fn openauth_run_migrations_applies_sqlite_plugin_schema_and_http_flows(
 }
 
 #[tokio::test]
+#[ignore = "requires `docker compose up -d postgres`"]
 async fn openauth_run_migrations_applies_postgres_plugin_schema_and_http_flows(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let database_url = postgres_url_from_env(std::env::var("OPENAUTH_TEST_POSTGRES_URL").ok());
@@ -1082,6 +1083,7 @@ async fn openauth_run_migrations_applies_postgres_plugin_schema_and_http_flows(
 }
 
 #[tokio::test]
+#[ignore = "requires `docker compose up -d mysql`"]
 async fn openauth_run_migrations_applies_mysql_plugin_schema_and_http_flows(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let database_url = mysql_url_from_env(std::env::var("OPENAUTH_TEST_MYSQL_URL").ok());
@@ -1369,15 +1371,13 @@ fn openauth_with_adapter_rejects_core_endpoint_conflicts() -> Result<(), Box<dyn
 }
 
 fn test_options() -> OpenAuthOptions {
-    openauth_core::test_utils::apply_fast_password_defaults(OpenAuthOptions {
+    openauth_core::test_utils::with_integration_test_defaults(OpenAuthOptions {
         secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
         advanced: AdvancedOptions {
             disable_csrf_check: true,
             disable_origin_check: true,
             ..AdvancedOptions::default()
         },
-        email_password: EmailPasswordOptions::new().enabled(true),
-        development: true,
         ..OpenAuthOptions::default()
     })
 }

@@ -690,6 +690,8 @@ where
         }
         _ => options,
     };
+    #[cfg(debug_assertions)]
+    let options = openauth_core::test_utils::apply_fast_password_defaults(options);
 
     OpenAuth::builder()
         .options(options)
