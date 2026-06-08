@@ -103,6 +103,21 @@ async fn device_code_route_uses_async_custom_generators() -> Result<(), Box<dyn 
 }
 
 #[tokio::test]
+async fn device_code_returns_sixty_second_expires_in_for_one_minute_config(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(TestAdapter::default());
+    let router = router(
+        adapter,
+        DeviceAuthorizationOptions::new().expires_in(Duration::minutes(1)),
+    )?;
+
+    let response = create_device_code(&router, "test-client", None).await?;
+
+    assert_eq!(response["expires_in"], 60);
+    Ok(())
+}
+
+#[tokio::test]
 async fn device_code_route_accepts_valid_client() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(TestAdapter::default());
     let router = router(
