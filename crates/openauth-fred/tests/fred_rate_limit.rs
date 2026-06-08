@@ -3,13 +3,14 @@ use std::sync::Mutex;
 
 use http::{header, Method, Request, StatusCode};
 use openauth::{
-    AdvancedOptions, EmailPasswordOptions, MemoryAdapter, OpenAuth, OpenAuthError, OpenAuthOptions,
-    PasswordOptions, SessionOptions,
+    AdvancedOptions, MemoryAdapter, OpenAuth, OpenAuthError, OpenAuthOptions, PasswordOptions,
+    SessionOptions,
 };
 use openauth_core::options::{
     PasswordResetEmail, RateLimitConsumeInput, RateLimitRule, RateLimitStore, SecondaryStorage,
 };
 use openauth_core::storage_contract::assert_secondary_storage_contract;
+use openauth_core::test_utils::with_integration_test_defaults;
 use openauth_fred::{
     FredOpenAuthStores, FredRateLimitOptions, FredRateLimitStore, FredSecondaryStorage,
     FredSecondaryStorageOptions,
@@ -316,20 +317,17 @@ async fn openauth_email_signup_uses_fred_secondary_storage_for_sessions(
         )
         .await?;
         storage.clear().await?;
-        let options = OpenAuthOptions {
-            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
-            secondary_storage: Some(Arc::new(storage.clone())),
-            advanced: AdvancedOptions {
-                disable_csrf_check: true,
-                disable_origin_check: true,
-                ..AdvancedOptions::default()
-            },
-            email_password: EmailPasswordOptions::new().enabled(true),
-            development: true,
-            ..OpenAuthOptions::default()
-        };
         let auth = OpenAuth::builder()
-            .options(options)
+            .options(auth_options(OpenAuthOptions {
+                secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+                secondary_storage: Some(Arc::new(storage.clone())),
+                advanced: AdvancedOptions {
+                    disable_csrf_check: true,
+                    disable_origin_check: true,
+                    ..AdvancedOptions::default()
+                },
+                ..OpenAuthOptions::default()
+            }))
             .adapter(MemoryAdapter::new())
             .build()?;
 
@@ -404,23 +402,20 @@ async fn openauth_email_signup_with_database_sessions_still_writes_fred_secondar
         )
         .await?;
         storage.clear().await?;
-        let options = OpenAuthOptions {
-            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
-            secondary_storage: Some(Arc::new(storage.clone())),
-            session: SessionOptions::new()
-                .store_session_in_database(true)
-                .preserve_session_in_database(true),
-            advanced: AdvancedOptions {
-                disable_csrf_check: true,
-                disable_origin_check: true,
-                ..AdvancedOptions::default()
-            },
-            email_password: EmailPasswordOptions::new().enabled(true),
-            development: true,
-            ..OpenAuthOptions::default()
-        };
         let auth = OpenAuth::builder()
-            .options(options)
+            .options(auth_options(OpenAuthOptions {
+                secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+                secondary_storage: Some(Arc::new(storage.clone())),
+                session: SessionOptions::new()
+                    .store_session_in_database(true)
+                    .preserve_session_in_database(true),
+                advanced: AdvancedOptions {
+                    disable_csrf_check: true,
+                    disable_origin_check: true,
+                    ..AdvancedOptions::default()
+                },
+                ..OpenAuthOptions::default()
+            }))
             .adapter(MemoryAdapter::new())
             .build()?;
 
@@ -484,29 +479,28 @@ async fn openauth_password_reset_uses_fred_secondary_storage_for_verification(
         storage.clear().await?;
         let sent = Arc::new(Mutex::new(Vec::<String>::new()));
         let sent_for_hook = Arc::clone(&sent);
-        let options = OpenAuthOptions {
-            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
-            secondary_storage: Some(Arc::new(storage.clone())),
-            password: PasswordOptions::new().send_reset_password(
-                move |email: PasswordResetEmail, _request: Option<&Request<Vec<u8>>>| {
-                    sent_for_hook
-                        .lock()
-                        .map_err(|_| OpenAuthError::Api("password reset sink poisoned".to_owned()))?
-                        .push(email.token);
-                    Ok(())
-                },
-            ),
-            advanced: AdvancedOptions {
-                disable_csrf_check: true,
-                disable_origin_check: true,
-                ..AdvancedOptions::default()
-            },
-            email_password: EmailPasswordOptions::new().enabled(true),
-            development: true,
-            ..OpenAuthOptions::default()
-        };
         let auth = OpenAuth::builder()
-            .options(options)
+            .options(auth_options(OpenAuthOptions {
+                secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+                secondary_storage: Some(Arc::new(storage.clone())),
+                password: PasswordOptions::new().send_reset_password(
+                    move |email: PasswordResetEmail, _request: Option<&Request<Vec<u8>>>| {
+                        sent_for_hook
+                            .lock()
+                            .map_err(|_| {
+                                OpenAuthError::Api("password reset sink poisoned".to_owned())
+                            })?
+                            .push(email.token);
+                        Ok(())
+                    },
+                ),
+                advanced: AdvancedOptions {
+                    disable_csrf_check: true,
+                    disable_origin_check: true,
+                    ..AdvancedOptions::default()
+                },
+                ..OpenAuthOptions::default()
+            }))
             .adapter(MemoryAdapter::new())
             .build()?;
 
@@ -989,6 +983,10 @@ fn unique_ip(offset: u8) -> String {
     let third = ((seed >> 8) & 0xff) as u8;
     let fourth = ((seed & 0xfe) as u8).saturating_add(offset).max(1);
     format!("10.{second}.{third}.{fourth}")
+}
+
+fn auth_options(options: OpenAuthOptions) -> OpenAuthOptions {
+    with_integration_test_defaults(options)
 }
 
 fn json_request(
