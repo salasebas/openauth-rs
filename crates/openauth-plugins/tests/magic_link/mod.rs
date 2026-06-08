@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use http::{header, StatusCode};
+use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::db::{DbAdapter, DbRecord, DbValue, FindOne, MemoryAdapter, Where};
@@ -201,6 +201,49 @@ async fn signs_up_new_users_and_can_disable_sign_up() -> Result<(), Box<dyn std:
     )
     .await?;
     assert_redirect_error(&response, "new_user_signup_disabled")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn verified_unverified_user_session_persists_through_get_session(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sent = sent_messages();
+    let (router, adapter) = build_router(sent.clone(), options(sent.clone()))?;
+    seed_user(&adapter, "user_1", "Ada", "ada@example.com", false).await?;
+
+    post_json(
+        &router,
+        "/api/auth/sign-in/magic-link",
+        r#"{"email":"ada@example.com"}"#,
+    )
+    .await?;
+    let token = token_from_last_message(&sent)?;
+    let verify = get(
+        &router,
+        &format!("/api/auth/magic-link/verify?token={token}"),
+    )
+    .await?;
+    assert_eq!(verify.status(), StatusCode::OK);
+    let cookies = set_cookie_values(&verify);
+    let cookie = cookies
+        .iter()
+        .find_map(|value| value.split(';').next())
+        .ok_or("missing session cookie")?;
+
+    let session = router
+        .handle_async(
+            Request::builder()
+                .method(Method::GET)
+                .uri("http://localhost:3000/api/auth/get-session")
+                .header(header::COOKIE, cookie)
+                .body(Vec::new())?,
+        )
+        .await?;
+    let body = json_body(&session)?;
+
+    assert_eq!(session.status(), StatusCode::OK);
+    assert_eq!(body["user"]["email_verified"], true);
+    assert_eq!(body["user"]["email"], "ada@example.com");
     Ok(())
 }
 
