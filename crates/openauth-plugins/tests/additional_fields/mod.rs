@@ -6,10 +6,9 @@ use openauth_core::context::create_auth_context;
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::db::{DbFieldType, DbValue, MemoryAdapter};
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{EmailPasswordOptions, OpenAuthOptions, SessionOptions};
+use openauth_core::options::{OpenAuthOptions, SessionOptions};
 use openauth_core::plugin::AuthPlugin;
 use openauth_core::test_utils::MemorySecondaryStorage as TestSecondaryStorage;
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use openauth_plugins::additional_fields::{
     additional_fields, AdditionalField, AdditionalFieldsOptions,
 };
@@ -37,16 +36,7 @@ fn router_with_options(
     options.secret = Some(secret().to_owned());
     options.advanced.disable_csrf_check = true;
     options.advanced.disable_origin_check = true;
-    if !options.email_password.enabled {
-        options.email_password = EmailPasswordOptions::new().enabled(true);
-    }
-    options.password = options
-        .password
-        .hash_password(fast_hash_password)
-        .verify_password(fast_verify_password);
-    if !options.production {
-        options.development = true;
-    }
+    let options = openauth_core::test_utils::with_integration_test_defaults(options);
     let context = create_auth_context_with_adapter(options, adapter.clone())?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
 }

@@ -7,11 +7,9 @@ use openauth_core::context::{create_auth_context, create_auth_context_with_adapt
 use openauth_core::db::DbAdapter;
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
-    AdvancedOptions, EmailPasswordOptions, OpenAuthOptions, RateLimitConsumeInput, RateLimitRule,
-    RateLimitStore,
+    AdvancedOptions, OpenAuthOptions, RateLimitConsumeInput, RateLimitRule, RateLimitStore,
 };
 use openauth_core::plugin::AuthPlugin;
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use openauth_plugins::admin::{admin, AdminOptions};
 use openauth_plugins::api_key::api_key;
 use openauth_plugins::jwt::jwt;
@@ -210,22 +208,19 @@ async fn plugin_smoke(adapter: Arc<dyn DbAdapter>) -> Result<(), Box<dyn std::er
 }
 
 fn matrix_options() -> Result<OpenAuthOptions, OpenAuthError> {
-    Ok(OpenAuthOptions {
-        base_url: Some(TEST_BASE_URL.to_owned()),
-        secret: Some(TEST_SECRET.to_owned()),
-        advanced: AdvancedOptions {
-            disable_csrf_check: true,
-            disable_origin_check: true,
-            ..AdvancedOptions::default()
+    Ok(openauth_core::test_utils::with_integration_test_defaults(
+        OpenAuthOptions {
+            base_url: Some(TEST_BASE_URL.to_owned()),
+            secret: Some(TEST_SECRET.to_owned()),
+            advanced: AdvancedOptions {
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            plugins: matrix_plugins()?,
+            ..OpenAuthOptions::default()
         },
-        plugins: matrix_plugins()?,
-        email_password: EmailPasswordOptions::new().enabled(true),
-        password: openauth_core::options::PasswordOptions::new()
-            .hash_password(fast_hash_password)
-            .verify_password(fast_verify_password),
-        development: true,
-        ..OpenAuthOptions::default()
-    })
+    ))
 }
 
 fn matrix_plugins() -> Result<Vec<AuthPlugin>, OpenAuthError> {

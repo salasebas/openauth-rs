@@ -13,7 +13,7 @@ use openauth_core::options::{
     UserAdditionalField, UserOptions,
 };
 use openauth_core::session::{CreateSessionInput, DbSessionStore};
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
+use openauth_core::test_utils::fast_hash_password;
 use openauth_core::user::{CreateCredentialAccountInput, CreateUserInput, DbUserStore};
 use openauth_core::verification::{CreateVerificationInput, DbVerificationStore};
 use openauth_plugins::phone_number::{
@@ -612,10 +612,8 @@ fn router_with_options_and_openauth(
     initial_options.secret = Some(secret().to_owned());
     initial_options.plugins = vec![plugin.clone()];
     initial_options.advanced = advanced_options();
-    initial_options.password = initial_options
-        .password
-        .hash_password(fast_hash_password)
-        .verify_password(fast_verify_password);
+    let initial_options =
+        openauth_core::test_utils::with_integration_test_defaults(initial_options);
     let initial_context =
         create_auth_context_with_adapter(initial_options, Arc::clone(&base_adapter))?;
     let hooked: Arc<dyn DbAdapter> = Arc::new(HookedAdapter::new(
@@ -628,10 +626,7 @@ fn router_with_options_and_openauth(
     final_options.secret = Some(secret().to_owned());
     final_options.plugins = vec![phone_number(Arc::clone(&adapter), options)];
     final_options.advanced = advanced_options();
-    final_options.password = final_options
-        .password
-        .hash_password(fast_hash_password)
-        .verify_password(fast_verify_password);
+    let final_options = openauth_core::test_utils::with_integration_test_defaults(final_options);
     let context = create_auth_context_with_adapter(final_options, Arc::clone(&adapter))?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
 }

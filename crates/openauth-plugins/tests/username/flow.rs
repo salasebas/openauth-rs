@@ -11,7 +11,7 @@ use openauth_core::options::{
     AdvancedOptions, EmailPasswordOptions, EmailVerificationOptions, OpenAuthOptions,
     VerificationEmail,
 };
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
+use openauth_core::test_utils::fast_hash_password;
 use openauth_plugins::username::{UsernameOptions, ValidationOrder, ValidationPhase};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
@@ -501,12 +501,9 @@ fn router(adapter: Arc<MemoryAdapter>) -> Result<AuthRouter, OpenAuthError> {
 
 fn router_with_options(
     adapter: Arc<MemoryAdapter>,
-    mut options: OpenAuthOptions,
+    options: OpenAuthOptions,
 ) -> Result<AuthRouter, OpenAuthError> {
-    options.password = options
-        .password
-        .hash_password(fast_hash_password)
-        .verify_password(fast_verify_password);
+    let options = openauth_core::test_utils::with_integration_test_defaults(options);
     let context = create_auth_context(options.clone())?;
     let hooked_adapter: Arc<dyn DbAdapter> = Arc::new(HookedAdapter::new(
         adapter,
@@ -522,17 +519,12 @@ fn router_with_options(
 }
 
 fn options() -> OpenAuthOptions {
-    OpenAuthOptions {
+    openauth_core::test_utils::with_integration_test_defaults(OpenAuthOptions {
         plugins: vec![openauth_plugins::username::username()],
         secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
         advanced: test_advanced_options(),
-        email_password: EmailPasswordOptions::new().enabled(true),
-        password: openauth_core::options::PasswordOptions::new()
-            .hash_password(fast_hash_password)
-            .verify_password(fast_verify_password),
-        development: true,
         ..OpenAuthOptions::default()
-    }
+    })
 }
 
 fn router_with_username_options(
@@ -547,11 +539,6 @@ fn router_with_username_options(
             )],
             secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
             advanced: test_advanced_options(),
-            email_password: EmailPasswordOptions::new().enabled(true),
-            password: openauth_core::options::PasswordOptions::new()
-                .hash_password(fast_hash_password)
-                .verify_password(fast_verify_password),
-            development: true,
             ..OpenAuthOptions::default()
         },
     )

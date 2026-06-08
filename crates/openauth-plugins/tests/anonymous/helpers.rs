@@ -6,9 +6,9 @@ use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::cookies::{set_session_cookie, Cookie, SessionCookieOptions};
 use openauth_core::db::{Create, DbAdapter, DbRecord, DbValue, MemoryAdapter, Session};
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
 use openauth_core::plugin::AuthPlugin;
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
+use openauth_core::test_utils::with_integration_test_defaults;
 use openauth_plugins::anonymous::AnonymousUser;
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
@@ -40,8 +40,6 @@ pub(crate) fn router_with_plugins(
                 disable_origin_check: true,
                 ..AdvancedOptions::default()
             },
-            email_password: EmailPasswordOptions::new().enabled(true),
-            development: true,
             ..OpenAuthOptions::default()
         },
     )
@@ -49,12 +47,9 @@ pub(crate) fn router_with_plugins(
 
 pub(crate) fn router_with_options(
     adapter: Arc<TestAdapter>,
-    mut options: OpenAuthOptions,
+    options: OpenAuthOptions,
 ) -> Result<AuthRouter, OpenAuthError> {
-    options.password = options
-        .password
-        .hash_password(fast_hash_password)
-        .verify_password(fast_verify_password);
+    let options = with_integration_test_defaults(options);
     let context = create_auth_context_with_adapter(options, adapter.clone())?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
 }

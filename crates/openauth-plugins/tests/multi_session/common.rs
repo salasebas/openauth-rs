@@ -7,10 +7,10 @@ use openauth_core::cookies::sign_cookie_value;
 use openauth_core::db::{Create, DbAdapter, DbRecord, DbValue, MemoryAdapter, User};
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
-    AdvancedOptions, CookieCacheOptions, EmailPasswordOptions, OpenAuthOptions, SessionOptions,
+    AdvancedOptions, CookieCacheOptions, OpenAuthOptions, SessionOptions,
 };
 use openauth_core::session::{CreateSessionInput, DbSessionStore};
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
+use openauth_core::test_utils::{fast_hash_password, with_integration_test_defaults};
 use openauth_plugins::multi_session::{multi_session_with_config, MultiSessionConfig};
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
@@ -51,19 +51,8 @@ impl Fixture {
         let adapter = Arc::new(MemoryAdapter::new());
         seed_user(&adapter, "user_1", "Ada", "ada@example.com").await?;
         seed_user(&adapter, "user_2", "Grace", "grace@example.com").await?;
-        let mut options = options;
-        if !options.email_password.enabled {
-            options.email_password = EmailPasswordOptions::new().enabled(true);
-        }
-        options.password = options
-            .password
-            .hash_password(fast_hash_password)
-            .verify_password(fast_verify_password);
-        if !options.production {
-            options.development = true;
-        }
         let context = create_auth_context_with_adapter(
-            OpenAuthOptions {
+            with_integration_test_defaults(OpenAuthOptions {
                 secret: Some(secret().to_owned()),
                 plugins: vec![multi_session_with_config(config)],
                 advanced: AdvancedOptions {
@@ -72,7 +61,7 @@ impl Fixture {
                     ..AdvancedOptions::default()
                 },
                 ..options
-            },
+            }),
             adapter.clone(),
         )?;
         let router = AuthRouter::with_async_endpoints(

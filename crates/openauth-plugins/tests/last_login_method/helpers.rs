@@ -4,8 +4,8 @@ use http::{header, HeaderValue, Method, Request, Response};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::{create_auth_context, create_auth_context_with_adapter};
 use openauth_core::db::{DbAdapter, DbRecord, DbValue, FindOne, MemoryAdapter, Where};
-use openauth_core::options::{EmailPasswordOptions, OpenAuthOptions};
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
+use openauth_core::options::OpenAuthOptions;
+use openauth_core::test_utils::with_integration_test_defaults;
 use openauth_oauth::oauth2::{
     OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions, SocialAuthorizationCodeRequest,
     SocialAuthorizationUrlRequest, SocialIdTokenRequest, SocialOAuthProvider, SocialProviderFuture,
@@ -58,16 +58,7 @@ pub fn router_with_plugin_options(
     openauth_options.secret = Some(secret().to_owned());
     openauth_options.advanced.disable_csrf_check = true;
     openauth_options.advanced.disable_origin_check = true;
-    if !openauth_options.email_password.enabled {
-        openauth_options.email_password = EmailPasswordOptions::new().enabled(true);
-    }
-    openauth_options.password = openauth_options
-        .password
-        .hash_password(fast_hash_password)
-        .verify_password(fast_verify_password);
-    if !openauth_options.production {
-        openauth_options.development = true;
-    }
+    let openauth_options = with_integration_test_defaults(openauth_options);
     let context = create_auth_context_with_adapter(openauth_options, Arc::clone(&base_adapter))?;
     Ok(AuthRouter::with_async_endpoints(
         context,

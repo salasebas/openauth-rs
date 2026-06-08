@@ -5,9 +5,9 @@ use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::db::{Create, DbAdapter, DbRecord, DbValue, MemoryAdapter, Session, User};
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
 use openauth_core::plugin::AuthPlugin;
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
+use openauth_core::test_utils::with_integration_test_defaults;
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 
@@ -25,7 +25,7 @@ pub(super) fn router_with_plugins(
     plugins: Vec<AuthPlugin>,
 ) -> Result<AuthRouter, OpenAuthError> {
     let context = create_auth_context_with_adapter(
-        OpenAuthOptions {
+        with_integration_test_defaults(OpenAuthOptions {
             secret: Some(secret().to_owned()),
             plugins,
             advanced: AdvancedOptions {
@@ -33,13 +33,8 @@ pub(super) fn router_with_plugins(
                 disable_origin_check: true,
                 ..AdvancedOptions::default()
             },
-            email_password: EmailPasswordOptions::new().enabled(true),
-            password: openauth_core::options::PasswordOptions::new()
-                .hash_password(fast_hash_password)
-                .verify_password(fast_verify_password),
-            development: true,
             ..OpenAuthOptions::default()
-        },
+        }),
         adapter.clone(),
     )?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))

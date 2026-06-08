@@ -12,20 +12,13 @@ use openauth_core::db::{
     MemoryAdapter, SchemaCreation, Update, UpdateMany,
 };
 use openauth_core::options::{
-    BackgroundTaskFuture, BackgroundTaskRunner, EmailPasswordOptions, OpenAuthOptions,
-    SecondaryStorage,
+    BackgroundTaskFuture, BackgroundTaskRunner, OpenAuthOptions, SecondaryStorage,
 };
-use openauth_core::test_utils::{apply_fast_password_defaults, MemorySecondaryStorage};
+use openauth_core::test_utils::{with_integration_test_defaults, MemorySecondaryStorage};
 use serde_json::{json, Value};
 
-pub fn with_test_defaults(mut options: OpenAuthOptions) -> OpenAuthOptions {
-    if !options.production {
-        options.development = true;
-    }
-    if !options.email_password.enabled {
-        options.email_password = EmailPasswordOptions::new().enabled(true);
-    }
-    apply_fast_password_defaults(options)
+pub fn with_test_defaults(options: OpenAuthOptions) -> OpenAuthOptions {
+    with_integration_test_defaults(options)
 }
 
 pub struct TestResponse {

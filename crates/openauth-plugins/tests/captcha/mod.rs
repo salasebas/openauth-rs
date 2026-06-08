@@ -14,7 +14,7 @@ use openauth_core::options::{
     AdvancedOptions, EmailPasswordOptions, IpAddressOptions, OpenAuthOptions, RateLimitOptions,
     RateLimitPathRule, RateLimitRule,
 };
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
+use openauth_core::test_utils::fast_hash_password;
 use openauth_core::user::{CreateCredentialAccountInput, CreateUserInput, DbUserStore};
 use openauth_plugins::captcha::{captcha, CaptchaConfigError, CaptchaOptions, CaptchaProvider};
 
@@ -165,21 +165,16 @@ async fn captcha_allows_real_sign_in_when_provider_accepts(
         CaptchaOptions::cloudflare_turnstile("secret").site_verify_url_override(server.url()),
     )?;
     let context = create_auth_context_with_adapter(
-        OpenAuthOptions {
+        openauth_core::test_utils::with_integration_test_defaults(OpenAuthOptions {
             plugins: vec![plugin],
             secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
-            email_password: EmailPasswordOptions::new().enabled(true),
-            password: openauth_core::options::PasswordOptions::new()
-                .hash_password(fast_hash_password)
-                .verify_password(fast_verify_password),
             advanced: AdvancedOptions {
                 disable_csrf_check: true,
                 disable_origin_check: true,
                 ..AdvancedOptions::default()
             },
-            development: true,
             ..OpenAuthOptions::default()
-        },
+        }),
         adapter.clone(),
     )?;
     let router =

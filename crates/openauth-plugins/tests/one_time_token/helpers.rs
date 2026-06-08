@@ -8,8 +8,8 @@ use openauth_core::db::{
     Create, DbAdapter, DbRecord, DbValue, FindOne, MemoryAdapter, Session, User, Where,
 };
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
+use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
+use openauth_core::test_utils::{fast_hash_password, with_integration_test_defaults};
 use time::{Duration, OffsetDateTime};
 
 pub(super) type TestAdapter = MemoryAdapter;
@@ -25,17 +25,7 @@ pub(super) fn router_with_plugin_and_options(
     options: OpenAuthOptions,
 ) -> Result<(Arc<TestAdapter>, AuthRouter), OpenAuthError> {
     let adapter = Arc::new(TestAdapter::default());
-    let mut options = options;
-    if !options.email_password.enabled {
-        options.email_password = EmailPasswordOptions::new().enabled(true);
-    }
-    options.password = options
-        .password
-        .hash_password(fast_hash_password)
-        .verify_password(fast_verify_password);
-    if !options.production {
-        options.development = true;
-    }
+    let options = with_integration_test_defaults(options);
     let context = create_auth_context_with_adapter(
         OpenAuthOptions {
             secret: Some(secret().to_owned()),

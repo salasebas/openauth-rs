@@ -8,9 +8,9 @@ use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::cookies::{set_session_cookie, Cookie, SessionCookieOptions};
 use openauth_core::db::{DbAdapter, DbValue, FindOne, MemoryAdapter, User, Where};
-use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
 use openauth_core::session::{CreateSessionInput, DbSessionStore};
-use openauth_core::test_utils::MemorySecondaryStorage;
+use openauth_core::test_utils::{with_integration_test_defaults, MemorySecondaryStorage};
 use openauth_core::user::{CreateCredentialAccountInput, CreateUserInput, DbUserStore};
 use openauth_plugins::email_otp::{email_otp, EmailOtpOptions, EmailOtpPayload};
 pub use serde_json::Value;
@@ -66,7 +66,7 @@ pub fn router(
 ) -> Result<AuthRouter, openauth_core::error::OpenAuthError> {
     options.sender = Some(Arc::new(sender));
     let context = create_auth_context_with_adapter(
-        OpenAuthOptions {
+        with_integration_test_defaults(OpenAuthOptions {
             secret: Some(SECRET.to_owned()),
             advanced: AdvancedOptions {
                 disable_csrf_check: true,
@@ -74,13 +74,8 @@ pub fn router(
                 ..AdvancedOptions::default()
             },
             plugins: vec![email_otp(adapter.clone(), options)],
-            email_password: EmailPasswordOptions::new().enabled(true),
-            password: openauth_core::options::PasswordOptions::new()
-                .hash_password(fast_hash_password)
-                .verify_password(fast_verify_password),
-            development: true,
             ..OpenAuthOptions::default()
-        },
+        }),
         adapter.clone(),
     )?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
@@ -93,19 +88,8 @@ pub fn router_with_auth_options(
     auth_options: OpenAuthOptions,
 ) -> Result<AuthRouter, openauth_core::error::OpenAuthError> {
     options.sender = Some(Arc::new(sender));
-    let mut auth_options = auth_options;
-    if !auth_options.email_password.enabled {
-        auth_options.email_password = EmailPasswordOptions::new().enabled(true);
-    }
-    if !auth_options.production {
-        auth_options.development = true;
-    }
-    auth_options.password = auth_options
-        .password
-        .hash_password(fast_hash_password)
-        .verify_password(fast_verify_password);
     let context = create_auth_context_with_adapter(
-        OpenAuthOptions {
+        with_integration_test_defaults(OpenAuthOptions {
             secret: Some(SECRET.to_owned()),
             advanced: AdvancedOptions {
                 disable_csrf_check: true,
@@ -114,7 +98,7 @@ pub fn router_with_auth_options(
             },
             plugins: vec![email_otp(adapter.clone(), options)],
             ..auth_options
-        },
+        }),
         adapter.clone(),
     )?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))

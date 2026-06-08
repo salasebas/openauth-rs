@@ -6,9 +6,9 @@ use openauth_core::api::{core_auth_async_endpoints, ApiErrorResponse, AuthRouter
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::db::MemoryAdapter;
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
 use openauth_core::plugin::PluginPasswordValidationInput;
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
+use openauth_core::test_utils::with_integration_test_defaults;
 use openauth_plugins::haveibeenpwned::{
     have_i_been_pwned_with_checker, have_i_been_pwned_with_options, HaveIBeenPwnedCheckError,
     HaveIBeenPwnedChecker, HaveIBeenPwnedOptions, UPSTREAM_PLUGIN_ID,
@@ -382,7 +382,7 @@ fn router_with_adapter(
     plugin: openauth_core::plugin::AuthPlugin,
 ) -> Result<AuthRouter, OpenAuthError> {
     let context = create_auth_context_with_adapter(
-        OpenAuthOptions {
+        with_integration_test_defaults(OpenAuthOptions {
             secret: Some("test-secret-123456789012345678901234".to_owned()),
             plugins: vec![plugin],
             advanced: AdvancedOptions {
@@ -390,13 +390,8 @@ fn router_with_adapter(
                 disable_origin_check: true,
                 ..AdvancedOptions::default()
             },
-            email_password: EmailPasswordOptions::new().enabled(true),
-            password: openauth_core::options::PasswordOptions::new()
-                .hash_password(fast_hash_password)
-                .verify_password(fast_verify_password),
-            development: true,
             ..OpenAuthOptions::default()
-        },
+        }),
         adapter.clone(),
     )?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))

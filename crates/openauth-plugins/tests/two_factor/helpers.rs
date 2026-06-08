@@ -11,8 +11,8 @@ use openauth_core::db::{
     Create, DbAdapter, DbRecord, DbValue, Delete, FindOne, MemoryAdapter, Where,
 };
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
-use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
+use openauth_core::options::{AdvancedOptions, OpenAuthOptions};
+use openauth_core::test_utils::fast_hash_password;
 use openauth_plugins::two_factor::{totp_code, two_factor, TwoFactorOptions};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -84,7 +84,7 @@ pub(super) fn options() -> OpenAuthOptions {
 }
 
 pub(super) fn options_with_two_factor(two_factor_options: TwoFactorOptions) -> OpenAuthOptions {
-    OpenAuthOptions {
+    openauth_core::test_utils::with_integration_test_defaults(OpenAuthOptions {
         secret: Some(secret().to_owned()),
         advanced: AdvancedOptions {
             disable_csrf_check: true,
@@ -92,13 +92,8 @@ pub(super) fn options_with_two_factor(two_factor_options: TwoFactorOptions) -> O
             ..AdvancedOptions::default()
         },
         plugins: vec![two_factor(two_factor_options)],
-        email_password: EmailPasswordOptions::new().enabled(true),
-        password: openauth_core::options::PasswordOptions::new()
-            .hash_password(fast_hash_password)
-            .verify_password(fast_verify_password),
-        development: true,
         ..OpenAuthOptions::default()
-    }
+    })
 }
 
 pub(super) async fn sign_in_cookie(
