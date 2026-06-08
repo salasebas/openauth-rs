@@ -13,8 +13,8 @@ use indexmap::IndexMap;
 use openauth_core::api::{create_auth_endpoint, AuthEndpointOptions, AuthRouter};
 use openauth_core::auth::email_password::AuthFlowErrorCode;
 use openauth_core::context::{create_auth_context, request_state::set_current_session_user};
-use openauth_core::crypto::password::hash_password;
 use openauth_core::options::OpenAuthOptions;
+use openauth_core::test_utils::fast_hash_password;
 use openauth_i18n::{
     i18n, translation_dictionary, AsyncLocaleResolver, I18nConfigError, I18nOptions,
     LocaleDetectionStrategy, LocaleResolver,
@@ -130,7 +130,7 @@ async fn translates_invalid_sign_in_for_accept_language_fr(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -176,7 +176,7 @@ async fn translates_for_accept_language_de() -> Result<(), Box<dyn std::error::E
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -217,7 +217,7 @@ async fn falls_back_to_default_when_locale_not_in_catalog() -> Result<(), Box<dy
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -257,7 +257,7 @@ async fn accept_language_quality_prefers_first_available() -> Result<(), Box<dyn
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -296,7 +296,7 @@ async fn accept_language_region_maps_to_base_locale() -> Result<(), Box<dyn std:
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -336,7 +336,7 @@ async fn accept_language_prefers_exact_region_before_base_locale(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -393,7 +393,7 @@ async fn accept_language_matches_locale_case_insensitively(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -434,7 +434,7 @@ async fn cookie_beats_header_when_ordered_first() -> Result<(), Box<dyn std::err
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -478,7 +478,7 @@ async fn cookie_values_containing_equals_are_supported() -> Result<(), Box<dyn s
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -528,7 +528,7 @@ async fn cookie_strategy_falls_through_when_cookie_missing_or_unsupported(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -573,7 +573,7 @@ async fn cookie_strategy_falls_through_when_cookie_is_missing(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -619,7 +619,7 @@ async fn callback_custom_header_locale() -> Result<(), Box<dyn std::error::Error
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -669,7 +669,7 @@ async fn session_resolver_locale_is_used_when_session_detection_is_enabled(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -905,7 +905,7 @@ async fn session_resolver_falls_through_when_absent_or_unsupported(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -950,7 +950,7 @@ async fn session_resolver_falls_through_when_it_returns_none(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -995,7 +995,7 @@ async fn session_detection_falls_through_when_no_session_user_is_in_request_stat
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -1038,7 +1038,7 @@ async fn callback_constant_locale_without_headers() -> Result<(), Box<dyn std::e
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -1079,7 +1079,7 @@ async fn async_callback_constant_locale_without_headers() -> Result<(), Box<dyn 
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -1123,7 +1123,7 @@ async fn async_callback_custom_header_locale() -> Result<(), Box<dyn std::error:
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -1173,7 +1173,7 @@ async fn callback_falls_through_when_none_or_unsupported() -> Result<(), Box<dyn
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -1217,7 +1217,7 @@ async fn callback_falls_through_when_it_returns_none() -> Result<(), Box<dyn std
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -1263,7 +1263,7 @@ async fn default_locale_first_inserted_when_no_en() -> Result<(), Box<dyn std::e
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -1313,7 +1313,7 @@ async fn explicit_default_locale_de() -> Result<(), Box<dyn std::error::Error>> 
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -1365,7 +1365,7 @@ async fn implicit_default_en_when_present() -> Result<(), Box<dyn std::error::Er
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -1421,7 +1421,7 @@ async fn successful_sign_in_body_not_modified() -> Result<(), Box<dyn std::error
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;

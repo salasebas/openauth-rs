@@ -14,6 +14,7 @@ use openauth_core::db::{
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::test_utils::apply_fast_password_defaults;
 
 fn with_test_defaults(mut options: OpenAuthOptions) -> OpenAuthOptions {
     if !options.production {
@@ -22,7 +23,7 @@ fn with_test_defaults(mut options: OpenAuthOptions) -> OpenAuthOptions {
     if !options.email_password.enabled {
         options.email_password = EmailPasswordOptions::new().enabled(true);
     }
-    options
+    apply_fast_password_defaults(options)
 }
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
