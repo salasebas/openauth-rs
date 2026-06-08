@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
@@ -6,13 +7,16 @@ use openauth_core::context::create_auth_context;
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::db::{DbFieldType, DbValue, MemoryAdapter};
 use openauth_core::error::OpenAuthError;
-use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::options::{
+    EmailPasswordOptions, OpenAuthOptions, SecondaryStorage, SecondaryStorageFuture, SessionOptions,
+};
 use openauth_core::plugin::AuthPlugin;
 use openauth_plugins::additional_fields::{
     additional_fields, AdditionalField, AdditionalFieldsOptions,
 };
 use openauth_plugins::anonymous::{anonymous, AnonymousOptions};
 use serde_json::Value;
+use time::OffsetDateTime;
 
 fn secret() -> &'static str {
     "test-secret-123456789012345678901234"
@@ -22,30 +26,57 @@ fn router(
     adapter: Arc<MemoryAdapter>,
     plugins: Vec<AuthPlugin>,
 ) -> Result<AuthRouter, OpenAuthError> {
-    let context = create_auth_context_with_adapter(
-        OpenAuthOptions {
-            plugins,
-            secret: Some(secret().to_owned()),
-            advanced: AdvancedOptions {
-                disable_csrf_check: true,
-                disable_origin_check: true,
-                ..AdvancedOptions::default()
-            },
-            email_password: EmailPasswordOptions::new().enabled(true),
-            development: true,
-            ..OpenAuthOptions::default()
-        },
-        adapter.clone(),
-    )?;
+    router_with_options(adapter, plugins, OpenAuthOptions::default())
+}
+
+fn router_with_options(
+    adapter: Arc<MemoryAdapter>,
+    plugins: Vec<AuthPlugin>,
+    mut options: OpenAuthOptions,
+) -> Result<AuthRouter, OpenAuthError> {
+    options.plugins = plugins;
+    options.secret = Some(secret().to_owned());
+    options.advanced.disable_csrf_check = true;
+    options.advanced.disable_origin_check = true;
+    if !options.email_password.enabled {
+        options.email_password = EmailPasswordOptions::new().enabled(true);
+    }
+    if !options.production {
+        options.development = true;
+    }
+    let context = create_auth_context_with_adapter(options, adapter.clone())?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
 }
 
+fn session_defaults_plugin() -> AuthPlugin {
+    additional_fields(
+        AdditionalFieldsOptions::new().session_field(
+            "new_field",
+            AdditionalField::new(DbFieldType::String)
+                .default_value(DbValue::String("default-value".to_owned()))
+                .generated(),
+        ),
+    )
+}
+
 fn json_request(method: Method, path: &str, body: Value) -> Result<Request<Vec<u8>>, http::Error> {
-    Request::builder()
+    json_request_with_cookie(method, path, body, None)
+}
+
+fn json_request_with_cookie(
+    method: Method,
+    path: &str,
+    body: Value,
+    cookie: Option<&str>,
+) -> Result<Request<Vec<u8>>, http::Error> {
+    let mut builder = Request::builder()
         .method(method)
         .uri(format!("http://localhost:3000{path}"))
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(serde_json::to_vec(&body).unwrap_or_default())
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(cookie) = cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    builder.body(serde_json::to_vec(&body).unwrap_or_default())
 }
 
 fn request(method: Method, path: &str, cookie: &str) -> Result<Request<Vec<u8>>, http::Error> {
@@ -241,4 +272,252 @@ async fn additional_fields_work_with_other_plugins() -> Result<(), Box<dyn std::
         Some(&DbValue::String("guest".to_owned()))
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn sign_in_applies_session_additional_field_default_values(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::default());
+    let router = router(adapter.clone(), vec![session_defaults_plugin()])?;
+
+    let sign_up = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            serde_json::json!({
+                "name": "Ada",
+                "email": "ada@example.test",
+                "password": "password123"
+            }),
+        )?)
+        .await?;
+    assert_eq!(sign_up.status(), StatusCode::OK);
+
+    let sign_in = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-in/email",
+            serde_json::json!({
+                "email": "ada@example.test",
+                "password": "password123"
+            }),
+        )?)
+        .await?;
+    let cookie = response_cookie_header(&sign_in);
+
+    let session_response = router
+        .handle_async(request(Method::GET, "/api/auth/get-session", &cookie)?)
+        .await?;
+    let session_body: Value = serde_json::from_slice(session_response.body())?;
+
+    assert_eq!(sign_in.status(), StatusCode::OK);
+    assert_eq!(session_body["session"]["new_field"], "default-value");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sign_in_applies_session_defaults_with_secondary_storage(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = Arc::new(TestSecondaryStorage::default());
+    let adapter = Arc::new(MemoryAdapter::default());
+    let router = router_with_options(
+        adapter.clone(),
+        vec![session_defaults_plugin()],
+        OpenAuthOptions {
+            secondary_storage: Some(storage.clone()),
+            session: SessionOptions::default().store_session_in_database(true),
+            ..OpenAuthOptions::default()
+        },
+    )?;
+
+    let sign_up = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            serde_json::json!({
+                "name": "Ada",
+                "email": "ada@example.test",
+                "password": "password123"
+            }),
+        )?)
+        .await?;
+    assert_eq!(sign_up.status(), StatusCode::OK);
+    let sign_up_body: Value = serde_json::from_slice(sign_up.body())?;
+    let token = sign_up_body["token"]
+        .as_str()
+        .ok_or("missing sign-up token")?;
+    assert!(storage.value(&format!("session:{token}"))?.is_some());
+    assert_eq!(adapter.len("session").await, 1);
+
+    let cookie = response_cookie_header(&sign_up);
+    let session_response = router
+        .handle_async(request(Method::GET, "/api/auth/get-session", &cookie)?)
+        .await?;
+    let session_body: Value = serde_json::from_slice(session_response.body())?;
+
+    assert_eq!(session_response.status(), StatusCode::OK);
+    assert_eq!(session_body["session"]["new_field"], "default-value");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sign_up_applies_runtime_computed_default_value_at_sign_up(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let marker = format!("runtime-{}", OffsetDateTime::now_utc().unix_timestamp());
+    let adapter = Arc::new(MemoryAdapter::default());
+    let router = router(
+        adapter.clone(),
+        vec![additional_fields(
+            AdditionalFieldsOptions::new().user_field(
+                "new_field",
+                AdditionalField::new(DbFieldType::String)
+                    .optional()
+                    .default_value(DbValue::String(marker.clone()))
+                    .generated(),
+            ),
+        )],
+    )?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            serde_json::json!({
+                "name": "Ada",
+                "email": "ada@example.test",
+                "password": "password123"
+            }),
+        )?)
+        .await?;
+    let cookie = response_cookie_header(&response);
+    let users = adapter.records("user").await;
+
+    let session_response = router
+        .handle_async(request(Method::GET, "/api/auth/get-session", &cookie)?)
+        .await?;
+    let session_body: Value = serde_json::from_slice(session_response.body())?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        users[0].get("new_field"),
+        Some(&DbValue::String(marker.clone()))
+    );
+    assert_eq!(session_body["user"]["new_field"], marker);
+    Ok(())
+}
+
+#[derive(Default)]
+struct TestSecondaryStorage {
+    values: Mutex<HashMap<String, String>>,
+}
+
+impl TestSecondaryStorage {
+    fn value(&self, key: &str) -> Result<Option<String>, OpenAuthError> {
+        Ok(self
+            .values
+            .lock()
+            .map_err(|_| OpenAuthError::Api("secondary storage lock poisoned".to_owned()))?
+            .get(key)
+            .cloned())
+    }
+}
+
+impl SecondaryStorage for TestSecondaryStorage {
+    fn get<'a>(&'a self, key: &'a str) -> SecondaryStorageFuture<'a, Option<String>> {
+        Box::pin(async move { self.value(key) })
+    }
+
+    fn set<'a>(
+        &'a self,
+        key: &'a str,
+        value: String,
+        _ttl_seconds: Option<u64>,
+    ) -> SecondaryStorageFuture<'a, ()> {
+        Box::pin(async move {
+            self.values
+                .lock()
+                .map_err(|_| OpenAuthError::Api("secondary storage lock poisoned".to_owned()))?
+                .insert(key.to_owned(), value);
+            Ok(())
+        })
+    }
+
+    fn set_if_not_exists<'a>(
+        &'a self,
+        key: &'a str,
+        value: String,
+        _ttl_seconds: Option<u64>,
+    ) -> SecondaryStorageFuture<'a, bool> {
+        Box::pin(async move {
+            let mut values = self
+                .values
+                .lock()
+                .map_err(|_| OpenAuthError::Api("secondary storage lock poisoned".to_owned()))?;
+            if values.contains_key(key) {
+                return Ok(false);
+            }
+            values.insert(key.to_owned(), value);
+            Ok(true)
+        })
+    }
+
+    fn delete<'a>(&'a self, key: &'a str) -> SecondaryStorageFuture<'a, ()> {
+        Box::pin(async move {
+            self.values
+                .lock()
+                .map_err(|_| OpenAuthError::Api("secondary storage lock poisoned".to_owned()))?
+                .remove(key);
+            Ok(())
+        })
+    }
+
+    fn take<'a>(&'a self, key: &'a str) -> SecondaryStorageFuture<'a, Option<String>> {
+        Box::pin(async move {
+            Ok(self
+                .values
+                .lock()
+                .map_err(|_| OpenAuthError::Api("secondary storage lock poisoned".to_owned()))?
+                .remove(key))
+        })
+    }
+
+    fn compare_and_set<'a>(
+        &'a self,
+        key: &'a str,
+        expected: Option<String>,
+        value: String,
+        _ttl_seconds: Option<u64>,
+    ) -> SecondaryStorageFuture<'a, bool> {
+        Box::pin(async move {
+            let mut values = self
+                .values
+                .lock()
+                .map_err(|_| OpenAuthError::Api("secondary storage lock poisoned".to_owned()))?;
+            let current = values.get(key).cloned();
+            if current != expected {
+                return Ok(false);
+            }
+            values.insert(key.to_owned(), value);
+            Ok(true)
+        })
+    }
+
+    fn delete_if_value<'a>(
+        &'a self,
+        key: &'a str,
+        expected: Option<String>,
+    ) -> SecondaryStorageFuture<'a, bool> {
+        Box::pin(async move {
+            let mut values = self
+                .values
+                .lock()
+                .map_err(|_| OpenAuthError::Api("secondary storage lock poisoned".to_owned()))?;
+            let current = values.get(key).cloned();
+            if current != expected {
+                return Ok(false);
+            }
+            values.remove(key);
+            Ok(true)
+        })
+    }
 }
