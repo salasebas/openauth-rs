@@ -7,9 +7,11 @@ use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::db::{DbFieldType, DbValue, MemoryAdapter};
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::plugin::AuthPlugin;
 use openauth_plugins::additional_fields::{
     additional_fields, AdditionalField, AdditionalFieldsOptions,
 };
+use openauth_plugins::anonymous::{anonymous, AnonymousOptions};
 use serde_json::Value;
 
 fn secret() -> &'static str {
@@ -18,11 +20,11 @@ fn secret() -> &'static str {
 
 fn router(
     adapter: Arc<MemoryAdapter>,
-    plugin: openauth_core::plugin::AuthPlugin,
+    plugins: Vec<AuthPlugin>,
 ) -> Result<AuthRouter, OpenAuthError> {
     let context = create_auth_context_with_adapter(
         OpenAuthOptions {
-            plugins: vec![plugin],
+            plugins,
             secret: Some(secret().to_owned()),
             advanced: AdvancedOptions {
                 disable_csrf_check: true,
@@ -118,16 +120,18 @@ fn additional_fields_plugin_registers_user_and_session_schema(
 async fn session_additional_field_db_name_is_used_for_defaults_and_returned_output(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(MemoryAdapter::default());
-    let plugin = additional_fields(
-        AdditionalFieldsOptions::new().session_field(
-            "theme",
-            AdditionalField::new(DbFieldType::String)
-                .default_value(DbValue::String("dark".to_owned()))
-                .generated()
-                .db_name("session_theme"),
-        ),
-    );
-    let router = router(adapter.clone(), plugin)?;
+    let router = router(
+        adapter.clone(),
+        vec![additional_fields(
+            AdditionalFieldsOptions::new().session_field(
+                "theme",
+                AdditionalField::new(DbFieldType::String)
+                    .default_value(DbValue::String("dark".to_owned()))
+                    .generated()
+                    .db_name("session_theme"),
+            ),
+        )],
+    )?;
 
     let response = router
         .handle_async(json_request(
@@ -155,5 +159,86 @@ async fn session_additional_field_db_name_is_used_for_defaults_and_returned_outp
         .await?;
     let session_body: Value = serde_json::from_slice(session_response.body())?;
     assert_eq!(session_body["session"]["theme"], "dark");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sign_up_applies_user_additional_field_default_values(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::default());
+    let router = router(
+        adapter.clone(),
+        vec![additional_fields(
+            AdditionalFieldsOptions::new().user_field(
+                "plan",
+                AdditionalField::new(DbFieldType::String)
+                    .default_value(DbValue::String("free".to_owned()))
+                    .generated(),
+            ),
+        )],
+    )?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            serde_json::json!({
+                "name": "Ada",
+                "email": "ada@example.test",
+                "password": "password123"
+            }),
+        )?)
+        .await?;
+    let cookie = response_cookie_header(&response);
+    let users = adapter.records("user").await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        users[0].get("plan"),
+        Some(&DbValue::String("free".to_owned()))
+    );
+
+    let session_response = router
+        .handle_async(request(Method::GET, "/api/auth/get-session", &cookie)?)
+        .await?;
+    let session_body: Value = serde_json::from_slice(session_response.body())?;
+    assert_eq!(session_body["user"]["plan"], "free");
+    Ok(())
+}
+
+#[tokio::test]
+async fn additional_fields_work_with_other_plugins() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::default());
+    let router = router(
+        adapter.clone(),
+        vec![
+            anonymous(AnonymousOptions::default()),
+            additional_fields(
+                AdditionalFieldsOptions::new().user_field(
+                    "tier",
+                    AdditionalField::new(DbFieldType::String)
+                        .default_value(DbValue::String("guest".to_owned()))
+                        .generated(),
+                ),
+            ),
+        ],
+    )?;
+
+    let response = router
+        .handle_async(
+            Request::builder()
+                .method(Method::POST)
+                .uri("http://localhost:3000/api/auth/sign-in/anonymous")
+                .body(Vec::new())?,
+        )
+        .await?;
+    let users = adapter.records("user").await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(users.len(), 1);
+    assert_eq!(
+        users[0].get("tier"),
+        Some(&DbValue::String("guest".to_owned()))
+    );
     Ok(())
 }
