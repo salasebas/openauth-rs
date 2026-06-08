@@ -12,7 +12,7 @@ async fn list_accounts_route_returns_current_user_accounts(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;

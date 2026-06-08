@@ -1,6 +1,7 @@
 use super::*;
 
 use openauth_core::cookies::{set_cookie_cache, CookieCachePayload};
+use openauth_core::crypto::password::{hash_password, verify_password};
 use openauth_core::db::DbFieldType;
 use openauth_core::options::{
     CookieCacheOptions, SessionOptions, UserAdditionalField, UserOptions,
@@ -22,7 +23,7 @@ async fn change_password_route_updates_credentials() -> Result<(), Box<dyn std::
     adapter
         .insert_session(session(now, now + Duration::hours(1)))
         .await;
-    let router = router(adapter.clone())?;
+    let router = router_with_real_password(adapter.clone())?;
     let cookie = signed_session_cookie("token_1")?;
 
     let response = router
@@ -41,14 +42,8 @@ async fn change_password_route_updates_credentials() -> Result<(), Box<dyn std::
         .await?
         .ok_or("missing account")?;
     let hash = string_field(&account, "password")?;
-    assert!(!openauth_core::crypto::password::verify_password(
-        hash,
-        "secret123"
-    )?);
-    assert!(openauth_core::crypto::password::verify_password(
-        hash,
-        "new-secret123"
-    )?);
+    assert!(!verify_password(hash, "secret123")?);
+    assert!(verify_password(hash, "new-secret123")?);
     Ok(())
 }
 
@@ -63,7 +58,7 @@ async fn change_password_route_returns_additional_user_fields(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;
@@ -98,7 +93,7 @@ async fn change_password_route_ignores_cookie_cache_for_sensitive_session(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;
@@ -173,7 +168,7 @@ async fn change_password_revoke_preserves_non_remembered_session(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;

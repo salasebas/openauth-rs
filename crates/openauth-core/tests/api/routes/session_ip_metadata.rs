@@ -54,7 +54,7 @@ async fn seed_credential_user(adapter: &RouteAdapter) -> Result<(), Box<dyn std:
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;

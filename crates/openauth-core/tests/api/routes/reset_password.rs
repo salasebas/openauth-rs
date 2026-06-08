@@ -1,6 +1,7 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use openauth_core::crypto::password::hash_password;
 use openauth_core::options::{OnPasswordReset, PasswordOptions, PasswordResetPayload};
 
 struct CountReset(Arc<AtomicUsize>);
@@ -29,7 +30,7 @@ async fn reset_password_route_updates_password_and_consumes_token(
             now,
         ))
         .await?;
-    let router = router(adapter.clone())?;
+    let router = router_with_real_password(adapter.clone())?;
 
     let request_response = router
         .handle_async(json_request(
@@ -92,7 +93,7 @@ async fn reset_password_route_invokes_callback_and_revokes_sessions(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;

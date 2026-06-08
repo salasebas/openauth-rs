@@ -12,7 +12,7 @@ async fn unlink_account_route_deletes_matching_account_when_multiple_linked(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;
@@ -57,7 +57,7 @@ async fn unlink_account_route_rejects_last_account() -> Result<(), Box<dyn std::
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;

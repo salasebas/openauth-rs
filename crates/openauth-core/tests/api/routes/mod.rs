@@ -6,7 +6,6 @@ use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, ApiErrorResponse, AuthRouter};
 use openauth_core::context::{create_auth_context, create_auth_context_with_adapter};
 use openauth_core::cookies::Cookie;
-use openauth_core::crypto::password::hash_password;
 use openauth_core::db::{
     AdapterFuture, Create, DbAdapter, DbRecord, DbValue, FindOne, MemoryAdapter, Session, User,
     Where,
@@ -79,10 +78,20 @@ mod update_session;
 mod update_user;
 mod verify_password;
 
-use crate::common::with_test_defaults;
+use crate::common::{fast_hash_password, real_password_options, with_test_defaults};
 
 fn router(adapter: Arc<RouteAdapter>) -> Result<AuthRouter, OpenAuthError> {
     router_with_options(adapter, OpenAuthOptions::default())
+}
+
+fn router_with_real_password(adapter: Arc<RouteAdapter>) -> Result<AuthRouter, OpenAuthError> {
+    router_with_options(
+        adapter,
+        OpenAuthOptions {
+            password: real_password_options(),
+            ..OpenAuthOptions::default()
+        },
+    )
 }
 
 fn router_with_options(

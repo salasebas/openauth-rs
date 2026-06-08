@@ -12,7 +12,7 @@ async fn sign_in_email_route_rejects_invalid_credentials() -> Result<(), Box<dyn
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("other-password")?,
+            &fast_hash_password("other-password")?,
             now,
         ))
         .await?;
@@ -43,7 +43,7 @@ async fn sign_in_email_route_returns_token_user_and_sets_cookie(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;
@@ -83,7 +83,7 @@ async fn sign_in_email_route_returns_redirect_url_when_callback_url_is_provided(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;
@@ -178,7 +178,7 @@ async fn sign_in_email_route_requires_verified_email_after_password_is_valid(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;

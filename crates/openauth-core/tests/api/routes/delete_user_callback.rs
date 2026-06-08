@@ -12,7 +12,7 @@ async fn delete_user_callback_route_deletes_user_for_valid_token(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;
@@ -73,7 +73,7 @@ async fn delete_user_callback_route_redirects_to_trusted_callback_url(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;
@@ -152,7 +152,7 @@ async fn delete_user_callback_route_rejects_untrusted_callback_urls(
         adapter
             .insert_account(credential_account_record(
                 "user_1",
-                &hash_password("secret123")?,
+                &fast_hash_password("secret123")?,
                 now,
             ))
             .await?;
@@ -234,7 +234,7 @@ async fn delete_user_callback_route_rejects_expired_token() -> Result<(), Box<dy
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;

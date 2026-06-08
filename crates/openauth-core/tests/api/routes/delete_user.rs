@@ -11,7 +11,7 @@ async fn delete_user_route_deletes_user_accounts_and_sessions_with_password(
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;
@@ -68,7 +68,7 @@ async fn delete_user_route_rejects_wrong_password() -> Result<(), Box<dyn std::e
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;
@@ -211,7 +211,7 @@ async fn delete_user_route_rejects_expired_token() -> Result<(), Box<dyn std::er
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;

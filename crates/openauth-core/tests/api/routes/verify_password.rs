@@ -8,7 +8,7 @@ async fn verify_password_route_rejects_wrong_password() -> Result<(), Box<dyn st
     adapter
         .insert_account(credential_account_record(
             "user_1",
-            &hash_password("secret123")?,
+            &fast_hash_password("secret123")?,
             now,
         ))
         .await?;

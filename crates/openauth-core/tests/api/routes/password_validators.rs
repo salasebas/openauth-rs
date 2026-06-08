@@ -73,7 +73,7 @@ async fn password_validator_rejects_change_password_before_credential_update(
     let adapter = Arc::new(RouteAdapter::default());
     let now = OffsetDateTime::now_utc();
     adapter.insert_user(user(now)).await;
-    let original_hash = hash_password("secret123")?;
+    let original_hash = fast_hash_password("secret123")?;
     adapter
         .insert_account(credential_account_record("user_1", &original_hash, now))
         .await?;
@@ -112,7 +112,7 @@ async fn password_validator_rejects_reset_password_before_token_consumption(
     let adapter = Arc::new(RouteAdapter::default());
     let now = OffsetDateTime::now_utc();
     adapter.insert_user(user(now)).await;
-    let original_hash = hash_password("secret123")?;
+    let original_hash = fast_hash_password("secret123")?;
     adapter
         .insert_account(credential_account_record("user_1", &original_hash, now))
         .await?;

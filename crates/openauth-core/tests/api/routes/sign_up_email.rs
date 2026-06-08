@@ -93,6 +93,8 @@ async fn sign_up_email_route_rejects_when_email_password_is_disabled(
 #[tokio::test]
 async fn sign_up_email_route_allows_sign_in_when_enabled_but_sign_up_disabled(
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use openauth_core::crypto::password::hash_password;
+
     let adapter = Arc::new(RouteAdapter::default());
     let now = OffsetDateTime::now_utc();
     adapter.insert_user(user(now)).await;
