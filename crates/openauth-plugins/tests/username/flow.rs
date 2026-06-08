@@ -79,6 +79,76 @@ async fn username_availability_and_sign_in_use_normalized_username(
 }
 
 #[tokio::test]
+async fn custom_username_validator_rejects_sign_up_and_sign_in(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router_with_username_options(
+        adapter,
+        UsernameOptions {
+            username_validator: Arc::new(|username| username.starts_with("crew_")),
+            ..UsernameOptions::default()
+        },
+    )?;
+
+    let sign_up = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"ada@example.com","password":"secret123","username":"bad_user"}"#,
+        )?)
+        .await?;
+    let sign_up_body: Value = serde_json::from_slice(sign_up.body())?;
+    assert_eq!(sign_up.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(sign_up_body["code"], "INVALID_USERNAME");
+
+    router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"ada@example.com","password":"secret123","username":"crew_ada"}"#,
+        )?)
+        .await?;
+
+    let sign_in = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-in/username",
+            r#"{"username":"bad_user","password":"secret123"}"#,
+        )?)
+        .await?;
+    let sign_in_body: Value = serde_json::from_slice(sign_in.body())?;
+    assert_eq!(sign_in.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(sign_in_body["code"], "INVALID_USERNAME");
+    Ok(())
+}
+
+#[tokio::test]
+async fn is_username_available_rejects_too_long_username() -> Result<(), Box<dyn std::error::Error>>
+{
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router_with_username_options(
+        adapter,
+        UsernameOptions {
+            max_username_length: 12,
+            ..UsernameOptions::default()
+        },
+    )?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/is-username-available",
+            r#"{"username":"abcdefghijklm"}"#,
+        )?)
+        .await?;
+    let body: Value = serde_json::from_slice(response.body())?;
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["code"], "USERNAME_TOO_LONG");
+    Ok(())
+}
+
+#[tokio::test]
 async fn username_availability_rejects_invalid_username_with_422(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(MemoryAdapter::new());
