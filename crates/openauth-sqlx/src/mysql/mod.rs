@@ -8,9 +8,10 @@ mod support;
 use std::sync::Arc;
 
 use openauth_core::db::{
-    auth_schema, rate_limit_consume_statements, AdapterCapabilities, AdapterFuture,
-    AuthSchemaOptions, Count, Create, DbAdapter, DbRecord, DbSchema, Delete, DeleteMany, FindMany,
-    FindOne, SchemaCreation, SqlDialect, TransactionCallback, Update, UpdateMany,
+    auth_schema, rate_limit_consume_statements, validate_rate_limit_rule, AdapterCapabilities,
+    AdapterFuture, AuthSchemaOptions, Count, Create, DbAdapter, DbRecord, DbSchema, Delete,
+    DeleteMany, FindMany, FindOne, SchemaCreation, SqlDialect, TransactionCallback, Update,
+    UpdateMany,
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
@@ -74,6 +75,7 @@ async fn consume_mysql_rate_limit(
     names: &RateLimitSqlNames,
     input: RateLimitConsumeInput,
 ) -> Result<RateLimitDecision, OpenAuthError> {
+    validate_rate_limit_rule(&input.rule)?;
     let plan = rate_limit_consume_statements(
         SqlDialect::MySql,
         &names.table,
@@ -94,7 +96,7 @@ async fn consume_mysql_rate_limit(
         .await
         .map_err(sql_error)?
         .ok_or_else(|| OpenAuthError::Adapter("missing rate limit row".to_owned()))?;
-    let (decision, record, update) = consume_record(input, Some(mysql_record(row)?));
+    let (decision, record, update) = consume_record(input, Some(mysql_record(row)?))?;
     if decision.permitted && update {
         sqlx::query(&plan.update.sql)
             .bind(count_to_i64(record.count)?)

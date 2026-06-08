@@ -2,9 +2,9 @@
 
 use openauth_core::db::{
     consume_sql_rate_limit_record, rate_limit_consume_statements, rate_limit_count_from_i64,
-    rate_limit_count_to_i64, AdapterFuture, Count, Create, DbField, DbRecord, DbSchema, DbValue,
-    Delete, DeleteMany, FindMany, FindOne, SqlAdapterRunner, SqlDialect, SqlExecutor,
-    SqlRateLimitPlan, SqlRowReader, SqlStatement, Update, UpdateMany,
+    rate_limit_count_to_i64, validate_rate_limit_rule, AdapterFuture, Count, Create, DbField,
+    DbRecord, DbSchema, DbValue, Delete, DeleteMany, FindMany, FindOne, SqlAdapterRunner,
+    SqlDialect, SqlExecutor, SqlRateLimitPlan, SqlRowReader, SqlStatement, Update, UpdateMany,
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{RateLimitConsumeInput, RateLimitDecision, RateLimitRecord};
@@ -146,6 +146,7 @@ pub async fn consume_postgres_rate_limit_in_tx(
     plan: &SqlRateLimitPlan,
     input: RateLimitConsumeInput,
 ) -> Result<RateLimitDecision, OpenAuthError> {
+    validate_rate_limit_rule(&input.rule)?;
     client
         .execute(&plan.insert_ignore.sql, &[&input.key, &input.now_ms])
         .await
@@ -156,7 +157,7 @@ pub async fn consume_postgres_rate_limit_in_tx(
         .map_err(postgres_error)?
         .ok_or_else(|| OpenAuthError::Adapter("missing rate limit row".to_owned()))?;
     let (decision, record, update) =
-        consume_sql_rate_limit_record(input, Some(postgres_rate_limit_record(row)?));
+        consume_sql_rate_limit_record(input, Some(postgres_rate_limit_record(row)?))?;
     if decision.permitted && update {
         let count = rate_limit_count_to_i64(record.count)?;
         client

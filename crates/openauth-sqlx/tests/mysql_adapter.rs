@@ -2,6 +2,8 @@
 
 mod common;
 
+#[path = "../../../tests/support/sql_rate_limit_rule_validation.rs"]
+mod sql_rate_limit_rule_validation;
 #[path = "../../../tests/support/sqlx_migration_atomicity_mysql.rs"]
 mod sqlx_migration_atomicity;
 
@@ -393,6 +395,14 @@ async fn mysql_adapter_returns_database_generated_serial_ids() -> Result<(), Ope
 
     assert_eq!(created.get("id"), Some(&DbValue::Number(1)));
     Ok(())
+}
+
+#[tokio::test]
+async fn mysql_rate_limit_store_rejects_invalid_rules_before_database_access(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = MySqlPoolOptions::new().connect_lazy(&database_url())?;
+    let store = MySqlRateLimitStore::new(pool);
+    sql_rate_limit_rule_validation::assert_sql_rate_limit_store_rejects_invalid_rules(&store).await
 }
 
 #[tokio::test]

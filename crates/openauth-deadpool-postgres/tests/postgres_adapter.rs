@@ -27,6 +27,8 @@ mod postgres_adapter_conformance;
 
 #[path = "../../../tests/support/postgres_migration_atomicity.rs"]
 mod postgres_migration_atomicity;
+#[path = "../../../tests/support/sql_rate_limit_rule_validation.rs"]
+mod sql_rate_limit_rule_validation;
 
 use postgres_adapter_conformance as conformance;
 use postgres_adapter_conformance::seed_user;
@@ -1119,6 +1121,16 @@ async fn deadpool_postgres_transaction_multi_join_uses_fallback() -> Result<(), 
     adapter.create_schema(&schema, None).await?;
 
     conformance::assert_transaction_multi_join_uses_fallback(&adapter, schema).await
+}
+
+#[tokio::test]
+async fn deadpool_postgres_rate_limit_store_rejects_invalid_rules_before_database_access(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = Config::new();
+    config.url = Some(database_url());
+    let pool = config.create_pool(None, NoTls)?;
+    let store = DeadpoolPostgresRateLimitStore::new(pool);
+    sql_rate_limit_rule_validation::assert_sql_rate_limit_store_rejects_invalid_rules(&store).await
 }
 
 #[tokio::test]

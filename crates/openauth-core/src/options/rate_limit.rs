@@ -226,6 +226,29 @@ impl RateLimitRule {
     }
 }
 
+/// Rejects invalid rate-limit rules before any store consumes a record.
+pub fn validate_rate_limit_rule(rule: &RateLimitRule) -> Result<i64, OpenAuthError> {
+    if rule.window == 0 {
+        return Err(OpenAuthError::InvalidConfig(
+            "rate limit window must be greater than zero".to_owned(),
+        ));
+    }
+    if rule.max == 0 {
+        return Err(OpenAuthError::InvalidConfig(
+            "rate limit max must be greater than zero".to_owned(),
+        ));
+    }
+    let milliseconds = rule
+        .window
+        .checked_mul(1000)
+        .ok_or_else(|| OpenAuthError::InvalidConfig("rate limit window is too large".to_owned()))?;
+    let window_ms = i64::try_from(milliseconds)
+        .map_err(|_| OpenAuthError::InvalidConfig("rate limit window is too large".to_owned()))?;
+    i64::try_from(rule.max)
+        .map_err(|_| OpenAuthError::InvalidConfig("rate limit max must fit in i64".to_owned()))?;
+    Ok(window_ms)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HybridRateLimitOptions {
     pub enabled: bool,

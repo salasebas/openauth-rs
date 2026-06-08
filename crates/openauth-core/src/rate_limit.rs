@@ -4,8 +4,9 @@ use crate::context::AuthContext;
 use crate::env::allows_development_defaults;
 use crate::error::OpenAuthError;
 use crate::options::{
-    MissingIpPolicy, RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitRecord,
-    RateLimitRule, RateLimitStorage, RateLimitStorageOption, RateLimitStore,
+    validate_rate_limit_rule, MissingIpPolicy, RateLimitConsumeInput, RateLimitDecision,
+    RateLimitFuture, RateLimitRecord, RateLimitRule, RateLimitStorage, RateLimitStorageOption,
+    RateLimitStore,
 };
 use crate::utils::ip::{
     create_rate_limit_key, create_rate_limit_key_with_suffix, is_valid_ip,
@@ -92,9 +93,8 @@ impl GovernorMemoryRateLimitStore {
 impl RateLimitStore for GovernorMemoryRateLimitStore {
     fn consume<'a>(&'a self, input: RateLimitConsumeInput) -> RateLimitFuture<'a> {
         Box::pin(async move {
-            validate_rule(&input.rule)?;
+            let window_ms = validate_rate_limit_rule(&input.rule)?;
             self.cleanup_if_due(input.now_ms)?;
-            let window_ms = rule_window_ms(&input.rule)?;
             let mut records = self
                 .records
                 .lock()
@@ -144,8 +144,7 @@ impl LegacyRateLimitStorageAdapter {
 impl RateLimitStore for LegacyRateLimitStorageAdapter {
     fn consume<'a>(&'a self, input: RateLimitConsumeInput) -> RateLimitFuture<'a> {
         Box::pin(async move {
-            validate_rule(&input.rule)?;
-            let window_ms = rule_window_ms(&input.rule)?;
+            let window_ms = validate_rate_limit_rule(&input.rule)?;
             let existing = self.storage.get(&input.key)?;
             let decision = match existing {
                 Some(record)
@@ -566,29 +565,6 @@ fn denied_decision(input: &RateLimitConsumeInput, last_request: i64) -> RateLimi
         remaining: 0,
         reset_after: ceil_millis_to_seconds(retry_after),
     }
-}
-
-fn validate_rule(rule: &RateLimitRule) -> Result<(), OpenAuthError> {
-    if rule.window == 0 {
-        return Err(OpenAuthError::InvalidConfig(
-            "rate limit window must be greater than zero".to_owned(),
-        ));
-    }
-    if rule.max == 0 {
-        return Err(OpenAuthError::InvalidConfig(
-            "rate limit max must be greater than zero".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn rule_window_ms(rule: &RateLimitRule) -> Result<i64, OpenAuthError> {
-    let milliseconds = rule
-        .window
-        .checked_mul(1000)
-        .ok_or_else(|| OpenAuthError::InvalidConfig("rate limit window is too large".to_owned()))?;
-    i64::try_from(milliseconds)
-        .map_err(|_| OpenAuthError::InvalidConfig("rate limit window is too large".to_owned()))
 }
 
 fn ceil_millis_to_seconds(milliseconds: i64) -> u64 {

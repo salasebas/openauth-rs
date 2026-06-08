@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use deadpool_postgres::Pool;
-use openauth_core::db::SqlRateLimitNames;
+use openauth_core::db::{validate_rate_limit_rule, SqlRateLimitNames};
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitStore,
@@ -64,6 +64,7 @@ async fn consume_deadpool_rate_limit(
     store: &DeadpoolPostgresRateLimitStore,
     input: RateLimitConsumeInput,
 ) -> Result<RateLimitDecision, OpenAuthError> {
+    validate_rate_limit_rule(&input.rule)?;
     let plan = postgres_rate_limit_plan(
         &store.names.table,
         &store.names.key,
