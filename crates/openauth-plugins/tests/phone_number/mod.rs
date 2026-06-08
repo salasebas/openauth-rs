@@ -4,7 +4,6 @@ use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::cookies::{set_session_cookie, Cookie, SessionCookieOptions};
-use openauth_core::crypto::password::hash_password;
 use openauth_core::db::{
     DbAdapter, DbRecord, DbValue, FindOne, HookedAdapter, JoinAdapter, MemoryAdapter, Update, Where,
 };
@@ -14,6 +13,7 @@ use openauth_core::options::{
     UserAdditionalField, UserOptions,
 };
 use openauth_core::session::{CreateSessionInput, DbSessionStore};
+use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use openauth_core::user::{CreateCredentialAccountInput, CreateUserInput, DbUserStore};
 use openauth_core::verification::{CreateVerificationInput, DbVerificationStore};
 use openauth_plugins::phone_number::{
@@ -313,7 +313,7 @@ async fn sign_in_with_phone_and_password_creates_session() -> Result<(), Box<dyn
     DbUserStore::new(adapter.as_ref())
         .create_credential_account(CreateCredentialAccountInput::new(
             "user_1",
-            hash_password("secret123")?,
+            fast_hash_password("secret123")?,
         ))
         .await?;
     let router = router_with_options(PhoneNumberOptions::default(), adapter.clone())?;
@@ -612,6 +612,10 @@ fn router_with_options_and_openauth(
     initial_options.secret = Some(secret().to_owned());
     initial_options.plugins = vec![plugin.clone()];
     initial_options.advanced = advanced_options();
+    initial_options.password = initial_options
+        .password
+        .hash_password(fast_hash_password)
+        .verify_password(fast_verify_password);
     let initial_context =
         create_auth_context_with_adapter(initial_options, Arc::clone(&base_adapter))?;
     let hooked: Arc<dyn DbAdapter> = Arc::new(HookedAdapter::new(
@@ -624,6 +628,10 @@ fn router_with_options_and_openauth(
     final_options.secret = Some(secret().to_owned());
     final_options.plugins = vec![phone_number(Arc::clone(&adapter), options)];
     final_options.advanced = advanced_options();
+    final_options.password = final_options
+        .password
+        .hash_password(fast_hash_password)
+        .verify_password(fast_verify_password);
     let context = create_auth_context_with_adapter(final_options, Arc::clone(&adapter))?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
 }

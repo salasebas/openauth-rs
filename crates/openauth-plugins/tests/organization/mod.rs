@@ -8,6 +8,7 @@ use openauth_core::db::{
     Where,
 };
 use openauth_core::options::{EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use openauth_plugins::organization::{
     has_permission, organization, organization_with_options, provision_organization_member,
     MemberHookData, OrganizationHooks, OrganizationOptions, OrganizationPermission,
@@ -679,6 +680,9 @@ fn test_router(
             base_url: Some("http://localhost:3000".to_owned()),
             secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
             email_password: EmailPasswordOptions::new().enabled(true),
+            password: openauth_core::options::PasswordOptions::new()
+                .hash_password(fast_hash_password)
+                .verify_password(fast_verify_password),
             development: true,
             ..OpenAuthOptions::default()
         },

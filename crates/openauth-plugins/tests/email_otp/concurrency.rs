@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use openauth_core::crypto::password::verify_password;
 use openauth_core::db::MemoryAdapter;
 use openauth_core::user::DbUserStore;
 use openauth_plugins::email_otp::{ChangeEmailOptions, EmailOtpOptions};
@@ -119,7 +118,7 @@ async fn reset_password_email_otp_allows_only_one_concurrent_redeem() {
         .await
         .unwrap()
         .unwrap();
-    assert!(verify_password(account.password.as_deref().unwrap(), "new-password").unwrap());
+    assert!(fast_verify_password(account.password.as_deref().unwrap(), "new-password").unwrap());
 }
 
 #[tokio::test]

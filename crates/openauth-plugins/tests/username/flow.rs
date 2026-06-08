@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::{create_auth_context, create_auth_context_with_adapter};
-use openauth_core::crypto::password::hash_password;
 use openauth_core::db::{
     Create, DbAdapter, DbValue, FindOne, HookedAdapter, JoinAdapter, MemoryAdapter, Where,
 };
@@ -12,6 +11,7 @@ use openauth_core::options::{
     AdvancedOptions, EmailPasswordOptions, EmailVerificationOptions, OpenAuthOptions,
     VerificationEmail,
 };
+use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use openauth_plugins::username::{UsernameOptions, ValidationOrder, ValidationPhase};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
@@ -501,8 +501,12 @@ fn router(adapter: Arc<MemoryAdapter>) -> Result<AuthRouter, OpenAuthError> {
 
 fn router_with_options(
     adapter: Arc<MemoryAdapter>,
-    options: OpenAuthOptions,
+    mut options: OpenAuthOptions,
 ) -> Result<AuthRouter, OpenAuthError> {
+    options.password = options
+        .password
+        .hash_password(fast_hash_password)
+        .verify_password(fast_verify_password);
     let context = create_auth_context(options.clone())?;
     let hooked_adapter: Arc<dyn DbAdapter> = Arc::new(HookedAdapter::new(
         adapter,
@@ -523,6 +527,9 @@ fn options() -> OpenAuthOptions {
         secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
         advanced: test_advanced_options(),
         email_password: EmailPasswordOptions::new().enabled(true),
+        password: openauth_core::options::PasswordOptions::new()
+            .hash_password(fast_hash_password)
+            .verify_password(fast_verify_password),
         development: true,
         ..OpenAuthOptions::default()
     }
@@ -541,6 +548,9 @@ fn router_with_username_options(
             secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
             advanced: test_advanced_options(),
             email_password: EmailPasswordOptions::new().enabled(true),
+            password: openauth_core::options::PasswordOptions::new()
+                .hash_password(fast_hash_password)
+                .verify_password(fast_verify_password),
             development: true,
             ..OpenAuthOptions::default()
         },
@@ -643,7 +653,10 @@ async fn seed_unverified_username(adapter: &MemoryAdapter) -> Result<(), OpenAut
                 .data("access_token_expires_at", DbValue::Null)
                 .data("refresh_token_expires_at", DbValue::Null)
                 .data("scope", DbValue::Null)
-                .data("password", DbValue::String(hash_password("secret123")?))
+                .data(
+                    "password",
+                    DbValue::String(fast_hash_password("secret123")?),
+                )
                 .data("created_at", DbValue::Timestamp(now))
                 .data("updated_at", DbValue::Timestamp(now))
                 .force_allow_id(),

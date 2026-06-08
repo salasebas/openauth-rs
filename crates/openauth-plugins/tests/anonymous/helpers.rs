@@ -8,6 +8,7 @@ use openauth_core::db::{Create, DbAdapter, DbRecord, DbValue, MemoryAdapter, Ses
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
 use openauth_core::plugin::AuthPlugin;
+use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use openauth_plugins::anonymous::AnonymousUser;
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
@@ -48,8 +49,12 @@ pub(crate) fn router_with_plugins(
 
 pub(crate) fn router_with_options(
     adapter: Arc<TestAdapter>,
-    options: OpenAuthOptions,
+    mut options: OpenAuthOptions,
 ) -> Result<AuthRouter, OpenAuthError> {
+    options.password = options
+        .password
+        .hash_password(fast_hash_password)
+        .verify_password(fast_verify_password);
     let context = create_auth_context_with_adapter(options, adapter.clone())?;
     AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))
 }

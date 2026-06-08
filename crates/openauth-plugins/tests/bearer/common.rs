@@ -7,6 +7,7 @@ use openauth_core::db::{Create, DbAdapter, DbRecord, DbValue, MemoryAdapter, Ses
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
 use openauth_core::plugin::AuthPlugin;
+use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 
@@ -33,6 +34,9 @@ pub(super) fn router_with_plugins(
                 ..AdvancedOptions::default()
             },
             email_password: EmailPasswordOptions::new().enabled(true),
+            password: openauth_core::options::PasswordOptions::new()
+                .hash_password(fast_hash_password)
+                .verify_password(fast_verify_password),
             development: true,
             ..OpenAuthOptions::default()
         },

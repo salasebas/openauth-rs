@@ -8,6 +8,7 @@ use openauth_core::db::MemoryAdapter;
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
 use openauth_core::plugin::PluginPasswordValidationInput;
+use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use openauth_plugins::haveibeenpwned::{
     have_i_been_pwned_with_checker, have_i_been_pwned_with_options, HaveIBeenPwnedCheckError,
     HaveIBeenPwnedChecker, HaveIBeenPwnedOptions, UPSTREAM_PLUGIN_ID,
@@ -390,6 +391,9 @@ fn router_with_adapter(
                 ..AdvancedOptions::default()
             },
             email_password: EmailPasswordOptions::new().enabled(true),
+            password: openauth_core::options::PasswordOptions::new()
+                .hash_password(fast_hash_password)
+                .verify_password(fast_verify_password),
             development: true,
             ..OpenAuthOptions::default()
         },

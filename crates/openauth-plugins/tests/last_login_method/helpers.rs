@@ -5,6 +5,7 @@ use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::{create_auth_context, create_auth_context_with_adapter};
 use openauth_core::db::{DbAdapter, DbRecord, DbValue, FindOne, MemoryAdapter, Where};
 use openauth_core::options::{EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use openauth_oauth::oauth2::{
     OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions, SocialAuthorizationCodeRequest,
     SocialAuthorizationUrlRequest, SocialIdTokenRequest, SocialOAuthProvider, SocialProviderFuture,
@@ -60,6 +61,10 @@ pub fn router_with_plugin_options(
     if !openauth_options.email_password.enabled {
         openauth_options.email_password = EmailPasswordOptions::new().enabled(true);
     }
+    openauth_options.password = openauth_options
+        .password
+        .hash_password(fast_hash_password)
+        .verify_password(fast_verify_password);
     if !openauth_options.production {
         openauth_options.development = true;
     }

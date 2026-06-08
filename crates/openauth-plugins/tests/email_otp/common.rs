@@ -7,7 +7,6 @@ use http::{header, Method, Request};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::cookies::{set_session_cookie, Cookie, SessionCookieOptions};
-use openauth_core::crypto::password::hash_password;
 use openauth_core::db::{DbAdapter, DbValue, FindOne, MemoryAdapter, User, Where};
 use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
 use openauth_core::session::{CreateSessionInput, DbSessionStore};
@@ -76,6 +75,9 @@ pub fn router(
             },
             plugins: vec![email_otp(adapter.clone(), options)],
             email_password: EmailPasswordOptions::new().enabled(true),
+            password: openauth_core::options::PasswordOptions::new()
+                .hash_password(fast_hash_password)
+                .verify_password(fast_verify_password),
             development: true,
             ..OpenAuthOptions::default()
         },
@@ -98,6 +100,10 @@ pub fn router_with_auth_options(
     if !auth_options.production {
         auth_options.development = true;
     }
+    auth_options.password = auth_options
+        .password
+        .hash_password(fast_hash_password)
+        .verify_password(fast_verify_password);
     let context = create_auth_context_with_adapter(
         OpenAuthOptions {
             secret: Some(SECRET.to_owned()),
@@ -165,7 +171,7 @@ pub async fn create_user(adapter: &MemoryAdapter, email: &str, verified: bool) -
 }
 
 pub async fn create_credential(adapter: &MemoryAdapter, user_id: &str, password: &str) {
-    let hash = hash_password(password).expect("hash password");
+    let hash = fast_hash_password(password).expect("hash password");
     DbUserStore::new(adapter)
         .create_credential_account(CreateCredentialAccountInput::new(user_id, hash))
         .await
@@ -210,6 +216,8 @@ pub async fn verification_value(adapter: &MemoryAdapter, identifier: &str) -> Op
 }
 
 pub type TestSecondaryStorage = MemorySecondaryStorage;
+
+pub use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 
 fn cookie_header(cookies: &[Cookie]) -> String {
     cookies

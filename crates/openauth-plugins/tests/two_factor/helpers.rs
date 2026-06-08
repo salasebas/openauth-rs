@@ -6,13 +6,13 @@ use openauth_core::context::{create_auth_context, create_auth_context_with_adapt
 use openauth_core::cookies::{
     parse_set_cookie_header, set_session_cookie, verify_cookie_value, SessionCookieOptions,
 };
-use openauth_core::crypto::password::hash_password;
 use openauth_core::crypto::symmetric_decrypt;
 use openauth_core::db::{
     Create, DbAdapter, DbRecord, DbValue, Delete, FindOne, MemoryAdapter, Where,
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use openauth_plugins::two_factor::{totp_code, two_factor, TwoFactorOptions};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -93,6 +93,9 @@ pub(super) fn options_with_two_factor(two_factor_options: TwoFactorOptions) -> O
         },
         plugins: vec![two_factor(two_factor_options)],
         email_password: EmailPasswordOptions::new().enabled(true),
+        password: openauth_core::options::PasswordOptions::new()
+            .hash_password(fast_hash_password)
+            .verify_password(fast_verify_password),
         development: true,
         ..OpenAuthOptions::default()
     }
@@ -312,7 +315,10 @@ async fn seed_user(adapter: &MemoryAdapter) -> Result<(), OpenAuthError> {
                 .data("access_token_expires_at", DbValue::Null)
                 .data("refresh_token_expires_at", DbValue::Null)
                 .data("scope", DbValue::Null)
-                .data("password", DbValue::String(hash_password("password123")?))
+                .data(
+                    "password",
+                    DbValue::String(fast_hash_password("password123")?),
+                )
                 .data("created_at", DbValue::Timestamp(now))
                 .data("updated_at", DbValue::Timestamp(now))
                 .force_allow_id(),

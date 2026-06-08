@@ -4,12 +4,12 @@ use http::{header, Method, Request};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::cookies::{set_session_cookie, Cookie, SessionCookieOptions};
-use openauth_core::crypto::password::hash_password;
 use openauth_core::db::{
     Create, DbAdapter, DbRecord, DbValue, FindOne, MemoryAdapter, Session, User, Where,
 };
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{AdvancedOptions, EmailPasswordOptions, OpenAuthOptions};
+use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use time::{Duration, OffsetDateTime};
 
 pub(super) type TestAdapter = MemoryAdapter;
@@ -29,6 +29,10 @@ pub(super) fn router_with_plugin_and_options(
     if !options.email_password.enabled {
         options.email_password = EmailPasswordOptions::new().enabled(true);
     }
+    options.password = options
+        .password
+        .hash_password(fast_hash_password)
+        .verify_password(fast_verify_password);
     if !options.production {
         options.development = true;
     }
@@ -136,7 +140,7 @@ pub(super) async fn seed_user_and_credential_account(
     adapter
         .create(create_query(
             "account",
-            credential_account_record("user_1", &hash_password("secret123")?, now),
+            credential_account_record("user_1", &fast_hash_password("secret123")?, now),
         ))
         .await?;
     Ok(())

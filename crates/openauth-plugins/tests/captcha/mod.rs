@@ -8,13 +8,13 @@ use openauth_core::api::{
     core_auth_async_endpoints, create_auth_endpoint, response, AuthEndpointOptions, AuthRouter,
 };
 use openauth_core::context::{create_auth_context, create_auth_context_with_adapter};
-use openauth_core::crypto::password::hash_password;
 use openauth_core::db::MemoryAdapter;
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     AdvancedOptions, EmailPasswordOptions, IpAddressOptions, OpenAuthOptions, RateLimitOptions,
     RateLimitPathRule, RateLimitRule,
 };
+use openauth_core::test_utils::{fast_hash_password, fast_verify_password};
 use openauth_core::user::{CreateCredentialAccountInput, CreateUserInput, DbUserStore};
 use openauth_plugins::captcha::{captcha, CaptchaConfigError, CaptchaOptions, CaptchaProvider};
 
@@ -158,7 +158,7 @@ async fn captcha_allows_real_sign_in_when_provider_accepts(
     DbUserStore::new(adapter.as_ref())
         .create_credential_account(CreateCredentialAccountInput::new(
             &user.id,
-            hash_password("secret123")?,
+            fast_hash_password("secret123")?,
         ))
         .await?;
     let plugin = captcha(
@@ -169,6 +169,9 @@ async fn captcha_allows_real_sign_in_when_provider_accepts(
             plugins: vec![plugin],
             secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
             email_password: EmailPasswordOptions::new().enabled(true),
+            password: openauth_core::options::PasswordOptions::new()
+                .hash_password(fast_hash_password)
+                .verify_password(fast_verify_password),
             advanced: AdvancedOptions {
                 disable_csrf_check: true,
                 disable_origin_check: true,

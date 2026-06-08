@@ -11,7 +11,6 @@ mod storage;
 use std::sync::Arc;
 
 use common::*;
-use openauth_core::crypto::password::verify_password;
 use openauth_core::db::MemoryAdapter;
 use openauth_core::options::{EmailVerificationOptions, OpenAuthOptions};
 use openauth_core::user::DbUserStore;
@@ -431,7 +430,7 @@ async fn reset_password_updates_credentials_and_verifies_email() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(verify_password(account.password.as_deref().unwrap(), "new-password").unwrap());
+    assert!(fast_verify_password(account.password.as_deref().unwrap(), "new-password").unwrap());
     assert!(updated.email_verified);
 }
 

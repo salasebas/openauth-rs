@@ -245,7 +245,7 @@ async fn require_verification_blocks_sign_in_and_sends_otp(
     DbUserStore::new(adapter.as_ref())
         .create_credential_account(CreateCredentialAccountInput::new(
             "user_1",
-            hash_password("secret123")?,
+            fast_hash_password("secret123")?,
         ))
         .await?;
     let options = PhoneNumberOptions::default()

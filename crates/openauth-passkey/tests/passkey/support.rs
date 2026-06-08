@@ -5,7 +5,6 @@ use http::{header, Method, Request, StatusCode};
 use openauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::cookies::{parse_set_cookie_header, sign_cookie_value};
-use openauth_core::crypto::password::hash_password;
 use openauth_core::db::{
     AdapterCapabilities, AdapterFuture, Count, Create, DbAdapter, DbRecord, DbSchema, DbValue,
     Delete, DeleteMany, FindMany, FindOne, MemoryAdapter, SchemaCreation, TransactionCallback,
@@ -15,17 +14,9 @@ use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     AdvancedOptions, EmailPasswordOptions, OpenAuthOptions, SessionOptions,
 };
-use openauth_core::test_utils::MemorySecondaryStorage;
-
-fn with_test_defaults(mut options: OpenAuthOptions) -> OpenAuthOptions {
-    if !options.production {
-        options.development = true;
-    }
-    if !options.email_password.enabled {
-        options.email_password = EmailPasswordOptions::new().enabled(true);
-    }
-    options
-}
+use openauth_core::test_utils::{
+    apply_fast_password_defaults, fast_hash_password, MemorySecondaryStorage,
+};
 use openauth_core::verification::{CreateVerificationInput, DbVerificationStore};
 use openauth_passkey::{
     passkey, PasskeyAuthenticationStart, PasskeyOptions, PasskeyRegistrationStart,
@@ -34,6 +25,16 @@ use openauth_passkey::{
 };
 use serde_json::{json, Value};
 use time::OffsetDateTime;
+
+fn with_test_defaults(mut options: OpenAuthOptions) -> OpenAuthOptions {
+    if !options.production {
+        options.development = true;
+    }
+    if !options.email_password.enabled {
+        options.email_password = EmailPasswordOptions::new().enabled(true);
+    }
+    apply_fast_password_defaults(options)
+}
 
 pub fn allow_credentials_contains_id(allowed: &[Value], credential_id: &str) -> bool {
     allowed.iter().any(|entry| {
@@ -679,7 +680,10 @@ pub async fn seed_user(adapter: &MemoryAdapter) -> Result<(), Box<dyn std::error
                 .data("access_token_expires_at", DbValue::Null)
                 .data("refresh_token_expires_at", DbValue::Null)
                 .data("scope", DbValue::Null)
-                .data("password", DbValue::String(hash_password("password123")?))
+                .data(
+                    "password",
+                    DbValue::String(fast_hash_password("password123")?),
+                )
                 .data("created_at", DbValue::Timestamp(now))
                 .data("updated_at", DbValue::Timestamp(now))
                 .force_allow_id(),

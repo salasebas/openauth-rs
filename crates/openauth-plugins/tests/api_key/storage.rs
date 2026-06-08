@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use http::{Method, StatusCode};
 use openauth_core::db::{DbAdapter, DbValue, Delete, MemoryAdapter, Update, Where};
@@ -11,6 +12,8 @@ use openauth_plugins::api_key::{
 use openauth_redis::{RedisSecondaryStorage, RedisSecondaryStorageOptions};
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
+use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 use super::helpers::{
     request_json, server_request_json, sign_up, test_router, test_router_with_adapter,
@@ -755,6 +758,13 @@ async fn live_atomic_secondary_storage_concurrent_creates_keep_both_ids_in_ref_i
     let mut storages: Vec<(&str, Arc<dyn SecondaryStorage>)> = Vec::new();
 
     for target in live_secondary_storage_targets("OPENAUTH_REDIS_URL", "OPENAUTH_VALKEY_URL") {
+        if !target.should_attempt_default_connect().await {
+            eprintln!(
+                "skipping default {} Redis target `{}` because its TCP endpoint is unavailable",
+                target.name, target.url
+            );
+            continue;
+        }
         match RedisSecondaryStorage::connect_with_options(
             &target.url,
             RedisSecondaryStorageOptions {
@@ -784,6 +794,13 @@ async fn live_atomic_secondary_storage_concurrent_creates_keep_both_ids_in_ref_i
     for target in
         live_secondary_storage_targets("OPENAUTH_FRED_REDIS_URL", "OPENAUTH_FRED_VALKEY_URL")
     {
+        if !target.should_attempt_default_connect().await {
+            eprintln!(
+                "skipping default {} Fred target `{}` because its TCP endpoint is unavailable",
+                target.name, target.url
+            );
+            continue;
+        }
         match FredSecondaryStorage::connect_with_options(
             &target.url,
             FredSecondaryStorageOptions {
@@ -906,6 +923,16 @@ struct LiveSecondaryStorageTarget {
     explicit: bool,
 }
 
+impl LiveSecondaryStorageTarget {
+    async fn should_attempt_default_connect(&self) -> bool {
+        if self.explicit {
+            return true;
+        }
+
+        default_target_is_reachable(&self.url).await
+    }
+}
+
 fn live_secondary_storage_targets(
     redis_env: &str,
     valkey_env: &str,
@@ -945,4 +972,23 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or(0)
+}
+
+async fn default_target_is_reachable(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let Some(port) = parsed.port_or_known_default() else {
+        return false;
+    };
+
+    timeout(
+        StdDuration::from_millis(250),
+        TcpStream::connect((host, port)),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok())
 }
