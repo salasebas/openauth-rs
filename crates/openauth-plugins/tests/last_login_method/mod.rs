@@ -559,3 +559,114 @@ async fn sign_in_sets_last_method_cookie_with_cross_subdomain_attributes(
     assert!(!last_method.contains("custom-auth.last_used_login_method"));
     Ok(())
 }
+
+#[tokio::test]
+async fn sign_in_sets_last_method_cookie_with_cross_origin_attributes(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router_with_plugin_options(
+        adapter,
+        LastLoginMethodOptions::default(),
+        OpenAuthOptions {
+            base_url: Some("https://api.example.com".to_owned()),
+            advanced: AdvancedOptions {
+                use_secure_cookies: Some(true),
+                default_cookie_attributes: openauth_core::options::CookieAttributesOverride {
+                    same_site: Some("None".to_owned()),
+                    secure: Some(true),
+                    ..openauth_core::options::CookieAttributesOverride::default()
+                },
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            ..OpenAuthOptions::default()
+        },
+    )?;
+
+    let sign_up = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"ada@example.com","password":"secret123"}"#,
+            None,
+        )?)
+        .await?;
+    assert_eq!(sign_up.status(), StatusCode::OK);
+
+    let sign_in = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-in/email",
+            r#"{"email":"ada@example.com","password":"secret123"}"#,
+            None,
+        )?)
+        .await?;
+    let last_method = set_cookie_values(&sign_in)
+        .into_iter()
+        .find(|cookie| cookie.starts_with(DEFAULT_COOKIE_NAME))
+        .ok_or("missing last login method cookie")?;
+
+    assert_eq!(sign_in.status(), StatusCode::OK);
+    assert!(last_method.contains("SameSite=None"));
+    assert!(last_method.contains("Secure"));
+    assert!(!last_method.contains("Domain="));
+    assert!(last_method.starts_with("better-auth.last_used_login_method=email"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn sign_in_sets_last_method_cookie_on_localhost_cross_origin_development(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let router = router_with_plugin_options(
+        adapter,
+        LastLoginMethodOptions::default(),
+        OpenAuthOptions {
+            base_url: Some("http://localhost:3000".to_owned()),
+            development: true,
+            advanced: AdvancedOptions {
+                use_secure_cookies: Some(false),
+                default_cookie_attributes: openauth_core::options::CookieAttributesOverride {
+                    same_site: Some("None".to_owned()),
+                    secure: Some(false),
+                    ..openauth_core::options::CookieAttributesOverride::default()
+                },
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            ..OpenAuthOptions::default()
+        },
+    )?;
+
+    let sign_up = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-up/email",
+            r#"{"name":"Ada","email":"ada@example.com","password":"secret123"}"#,
+            None,
+        )?)
+        .await?;
+    assert_eq!(sign_up.status(), StatusCode::OK);
+
+    let sign_in = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-in/email",
+            r#"{"email":"ada@example.com","password":"secret123"}"#,
+            None,
+        )?)
+        .await?;
+    let last_method = set_cookie_values(&sign_in)
+        .into_iter()
+        .find(|cookie| cookie.starts_with(DEFAULT_COOKIE_NAME))
+        .ok_or("missing last login method cookie")?;
+
+    assert_eq!(sign_in.status(), StatusCode::OK);
+    assert!(last_method.contains("SameSite=None"));
+    assert!(!last_method.contains("Secure"));
+    assert!(!last_method.contains("Domain="));
+    assert!(last_method.starts_with("better-auth.last_used_login_method=email"));
+    Ok(())
+}
