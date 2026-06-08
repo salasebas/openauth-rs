@@ -3,14 +3,19 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use http::{Method, Request, StatusCode};
-use openauth_core::api::{create_auth_endpoint, response, AuthEndpointOptions, AuthRouter};
-use openauth_core::context::create_auth_context;
+use http::{header, Method, Request, StatusCode};
+use openauth_core::api::{
+    core_auth_async_endpoints, create_auth_endpoint, response, AuthEndpointOptions, AuthRouter,
+};
+use openauth_core::context::{create_auth_context, create_auth_context_with_adapter};
+use openauth_core::crypto::password::hash_password;
+use openauth_core::db::MemoryAdapter;
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     AdvancedOptions, EmailPasswordOptions, IpAddressOptions, OpenAuthOptions, RateLimitOptions,
     RateLimitPathRule, RateLimitRule,
 };
+use openauth_core::user::{CreateCredentialAccountInput, CreateUserInput, DbUserStore};
 use openauth_plugins::captcha::{captcha, CaptchaConfigError, CaptchaOptions, CaptchaProvider};
 
 #[test]
@@ -139,6 +144,60 @@ async fn captcha_rejection_consumes_route_rate_limit() -> Result<(), Box<dyn std
     // A second attempt from the same IP/path is throttled instead of bypassing limits.
     let second = router.handle_async(request("/sign-in/email", &[])?).await?;
     assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    Ok(())
+}
+
+#[tokio::test]
+async fn captcha_allows_real_sign_in_when_provider_accepts(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let server = JsonServer::spawn(200, r#"{"success":true}"#)?;
+    let adapter = Arc::new(MemoryAdapter::new());
+    let user = DbUserStore::new(adapter.as_ref())
+        .create_user(CreateUserInput::new("Ada", "ada@example.com"))
+        .await?;
+    DbUserStore::new(adapter.as_ref())
+        .create_credential_account(CreateCredentialAccountInput::new(
+            &user.id,
+            hash_password("secret123")?,
+        ))
+        .await?;
+    let plugin = captcha(
+        CaptchaOptions::cloudflare_turnstile("secret").site_verify_url_override(server.url()),
+    )?;
+    let context = create_auth_context_with_adapter(
+        OpenAuthOptions {
+            plugins: vec![plugin],
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            email_password: EmailPasswordOptions::new().enabled(true),
+            advanced: AdvancedOptions {
+                disable_csrf_check: true,
+                disable_origin_check: true,
+                ..AdvancedOptions::default()
+            },
+            development: true,
+            ..OpenAuthOptions::default()
+        },
+        adapter.clone(),
+    )?;
+    let router =
+        AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints(adapter))?;
+
+    let response = router
+        .handle_async(
+            Request::builder()
+                .method(Method::POST)
+                .uri("http://localhost:3000/api/auth/sign-in/email")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-captcha-response", "token")
+                .body(br#"{"email":"ada@example.com","password":"secret123"}"#.to_vec())?,
+        )
+        .await?;
+    let body: serde_json::Value = serde_json::from_slice(response.body())?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(body["token"]
+        .as_str()
+        .is_some_and(|token| !token.is_empty()));
     Ok(())
 }
 
