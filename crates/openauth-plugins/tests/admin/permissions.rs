@@ -52,6 +52,21 @@ async fn has_permission_handles_edge_cases_and_legacy_alias(
         .await?;
     assert_eq!(json_body(role_priority)?["success"], true);
 
+    let user_role_wins_over_non_admin_user_id = router
+        .handle_async(request(
+            Method::POST,
+            "/admin/has-permission",
+            Some(
+                json!({ "userId": user.id, "role": "user", "permissions": { "user": ["create"] } }),
+            ),
+            None,
+        )?)
+        .await?;
+    assert_eq!(
+        json_body(user_role_wins_over_non_admin_user_id)?["success"],
+        false
+    );
+
     let alias = router
         .handle_async(request(
             Method::POST,

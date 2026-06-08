@@ -108,6 +108,58 @@ async fn create_user_rejects_reserved_custom_data_fields() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
+async fn list_users_supports_offset_and_limit() -> Result<(), Box<dyn std::error::Error>> {
+    let Fixture { context, router } = super::fixture()?;
+    let admin = create_user(&context, "admin-offset@example.com", "admin").await?;
+    for index in 0..5 {
+        create_user(
+            &context,
+            &format!("offset-user-{index}@example.com"),
+            "user",
+        )
+        .await?;
+    }
+    let cookie = session_cookie(&context, &admin.id).await?;
+
+    let page = router
+        .handle_async(request(
+            Method::GET,
+            "/admin/list-users?limit=2&offset=1",
+            None,
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(page.status(), StatusCode::OK);
+    let body = json_body(page)?;
+    let users = body["users"].as_array().ok_or("users")?;
+    assert_eq!(users.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_users_applies_filter_when_filter_value_is_defined(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Fixture { context, router } = super::fixture()?;
+    let admin = create_user(&context, "admin-filter@example.com", "admin").await?;
+    create_user(&context, "filtered-user@example.com", "user").await?;
+    let cookie = session_cookie(&context, &admin.id).await?;
+
+    let filtered = router
+        .handle_async(request(
+            Method::GET,
+            "/admin/list-users?filterField=role&filterOperator=eq&filterValue=user",
+            None,
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(filtered.status(), StatusCode::OK);
+    let body = json_body(filtered)?;
+    let users = body["users"].as_array().ok_or("users")?;
+    assert!(users.iter().all(|user| user["role"] == "user"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_users_supports_typed_filters_search_sort_and_pagination(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Fixture { context, router } = super::fixture()?;
