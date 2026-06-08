@@ -2,7 +2,7 @@ mod helpers;
 
 use helpers::*;
 use http::{header, Method, StatusCode};
-use openauth_core::db::{DbFieldType, DbValue};
+use openauth_core::db::{DbAdapter, DbFieldType, DbValue, Update, Where};
 use openauth_core::options::{
     CookieCacheOptions, OpenAuthOptions, SessionAdditionalField, SessionOptions,
     UserAdditionalField, UserOptions,
@@ -173,6 +173,66 @@ async fn generated_token_verifies_once_and_sets_session_cookie(
     assert_eq!(second.status(), StatusCode::BAD_REQUEST);
     let second_body: Value = serde_json::from_slice(second.body())?;
     assert_eq!(second_body["message"], "Invalid token");
+    Ok(())
+}
+
+#[tokio::test]
+async fn generated_token_expires_after_configured_ttl() -> Result<(), Box<dyn std::error::Error>> {
+    let options = OneTimeTokenOptions::default()
+        .expires_in_minutes(5)
+        .generate_token(|_, _| Ok("ttl-token".to_owned()));
+    let (adapter, router) = router_with_plugin(one_time_token_with_options(options))?;
+    let cookie = seed_authenticated_session(&adapter, default_session_expires_at()).await?;
+
+    let generate = router
+        .handle_async(request(
+            Method::GET,
+            "/api/auth/one-time-token/generate",
+            "",
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(generate.status(), StatusCode::OK);
+    let generated: Value = serde_json::from_slice(generate.body())?;
+    assert_eq!(generated["token"].as_str(), Some("ttl-token"));
+
+    let record = verification_record(&adapter, "one-time-token:ttl-token")
+        .await?
+        .ok_or("missing generated verification record")?;
+    let expires_at = match record.get("expires_at") {
+        Some(DbValue::Timestamp(value)) => *value,
+        _ => return Err("verification expires_at should be a timestamp".into()),
+    };
+    let now = OffsetDateTime::now_utc();
+    assert!(expires_at >= now + Duration::minutes(4));
+    assert!(expires_at <= now + Duration::minutes(6));
+
+    adapter
+        .update(
+            Update::new("verification")
+                .where_clause(Where::new(
+                    "identifier",
+                    DbValue::String("one-time-token:ttl-token".to_owned()),
+                ))
+                .data(
+                    "expires_at",
+                    DbValue::Timestamp(OffsetDateTime::now_utc() - Duration::minutes(1)),
+                ),
+        )
+        .await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/one-time-token/verify",
+            r#"{"token":"ttl-token"}"#,
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["message"], "Token expired");
     Ok(())
 }
 
