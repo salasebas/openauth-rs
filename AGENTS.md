@@ -35,6 +35,16 @@ down observable behavior, validation, serialization, error handling, and
 integration contracts. When porting from Better Auth, inspect the matching
 upstream tests and adapt the relevant scenarios to Rust.
 
+### Test placement
+
+- Put **unit tests** next to the code they exercise (`#[cfg(test)]` modules in
+  `src/`, or `mod tests` in the same file for small surfaces).
+- Reserve each crate's `tests/` directory for **integration**, **contract**, or
+  **end-to-end** coverage that needs a separate test binary (HTTP routes,
+  adapters against services, cross-module wiring).
+- Share integration helpers through `openauth_core::test_utils` (behind the
+  `test-utils` feature) instead of copying fixture helpers across crates.
+
 Before running integration tests that depend on external services, start the
 required Docker Compose services with the repo helper. For SQLx/Postgres/MySQL
 or distributed storage coverage, prefer:
