@@ -45,7 +45,7 @@ upstream tests and adapt the relevant scenarios to Rust.
 - **Fast vs slow is not the split between `src/` and `tests/`.** Most OpenAuth
   `tests/` targets are integration-fast (memory adapter, HTTP fixtures). Slow
   Docker or e2e tests stay in `tests/` too (`#[ignore]` or the Integration
-  workflow). See `docs/ci/test-placement-audit.md`.
+  workflow in `.github/workflows/integration.yml`).
 - Share integration helpers through `openauth_core::test_utils` (behind the
   `test-utils` feature) instead of copying fixture helpers across crates.
 
