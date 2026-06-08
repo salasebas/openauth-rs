@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 
 mod additional_fields;
 mod dynamic_access_control;
+mod edge_cases;
 mod hooks;
 mod limits;
 mod openapi;

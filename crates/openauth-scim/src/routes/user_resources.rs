@@ -575,6 +575,79 @@ pub(super) fn reserved_scim_user_attribute_error(attribute: &str) -> ScimError {
     .with_scim_type("mutability")
 }
 
+pub(super) async fn touch_scim_user_profile_version(
+    adapter: &dyn DbAdapter,
+    provider_id: &str,
+    user_id: &str,
+) -> Result<(), OpenAuthError> {
+    let now = OffsetDateTime::now_utc();
+    adapter
+        .update(
+            Update::new("scimUserProfile")
+                .where_clause(Where::new(
+                    "providerId",
+                    DbValue::String(provider_id.to_owned()),
+                ))
+                .where_clause(Where::new("userId", DbValue::String(user_id.to_owned())))
+                .data("version", DbValue::String(resource_version(now)))
+                .data("updatedAt", DbValue::Timestamp(now)),
+        )
+        .await?;
+    Ok(())
+}
+
+pub(super) async fn touch_scim_user_profile_versions_for_organization_group_membership(
+    adapter: &dyn DbAdapter,
+    organization_id: &str,
+    user_ids: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Result<(), OpenAuthError> {
+    let user_ids = user_ids
+        .into_iter()
+        .map(|user_id| user_id.as_ref().to_owned())
+        .collect::<Vec<_>>();
+    if user_ids.is_empty() {
+        return Ok(());
+    }
+    let org_provider_ids = ScimProviderStore::new(adapter)
+        .list()
+        .await?
+        .into_iter()
+        .filter(|provider| provider.organization_id.as_deref() == Some(organization_id))
+        .map(|provider| provider.provider_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    if org_provider_ids.is_empty() {
+        return Ok(());
+    }
+    let profiles = match adapter
+        .find_many(
+            FindMany::new("scimUserProfile")
+                .where_clause(
+                    Where::new("userId", DbValue::StringArray(user_ids))
+                        .operator(WhereOperator::In),
+                )
+                .select(["providerId", "userId"]),
+        )
+        .await
+    {
+        Ok(profiles) => profiles,
+        Err(OpenAuthError::TableNotFound { table }) if table == "scimUserProfile" => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for profile in profiles {
+        let Some(provider_id) = optional_string(&profile, "providerId")? else {
+            continue;
+        };
+        let Some(user_id) = optional_string(&profile, "userId")? else {
+            continue;
+        };
+        if !org_provider_ids.contains(&provider_id) {
+            continue;
+        }
+        touch_scim_user_profile_version(adapter, &provider_id, &user_id).await?;
+    }
+    Ok(())
+}
+
 pub(super) async fn upsert_scim_user_profile(
     adapter: &dyn DbAdapter,
     provider_id: &str,
