@@ -56,7 +56,7 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | Server module inventory | 26 | 25 | Upstream count is exported server plugins after excluding `test-utils` and replaced `oidc-provider`, plus `@better-auth/api-key`; Rust adds `additional_fields` as a server helper. |
 | Server route literals | 139 | 132 | No upstream server-route candidates were missing after excluding replaced/non-server paths; Rust includes additional hardening/support endpoints. |
 | API key | 64 | 176 | Rust covers lifecycle, verify, expiry, refill windows, metadata, sessions, org refs, org RBAC, schema, storage, configurations, and pure/fallback secondary-storage behavior with atomic reference-index CAS. |
-| Organization | 52 | 180 | Rust covers core routes, dynamic AC, comma-separated role merge, teams including custom default teams, session, limits, hook mutation/order, shared provisioning helper semantics, server-only `userId` contracts, and additional fields; parity risk remains due the large upstream surface but the known G2 gaps are closed. |
+| Organization | 70 | 180 | Rust covers all 35 upstream server routes via the plugin-on-core router (`/api/auth/organization/*`), dynamic AC, comma-separated/multi-role merge, teams, session, limits, hook mutation/order, invitation edge cases (expired reject, re-invite cancel, rejected filtering), owner-role guards, shared provisioning helper semantics, server-only `userId` contracts, and additional fields; parity risk remains on the large upstream matrix, not missing routes. |
 | Email OTP | 37 | 73 | Rust covers send/verify, expired OTPs, hooks, storage, server behavior, password reset and legacy alias, change-email current-email verification, resend, rate limits, race protection, and additional fields. |
 | Two-factor | 25 | 55 | Rust covers TOTP, OTP, backup codes, cookies, storage, passwordless option, trust-device validation, session rotation, and enforcement scope. |
 | Username | 17 | 33 | Rust covers flow, availability validation, duplicate checks, display username behavior, normalization, and schema. |
@@ -80,7 +80,7 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | ID | Gap | Severity | Notes |
 | --- | --- | --- | --- |
 | G1 | Test count is below upstream | Low | 677 Rust tests vs 931 mapped upstream declarations because Rust ports observable server scenarios rather than the full TypeScript/client matrix; API-key org/config/lifecycle/verify and Organization query/invitation/owner/team/provisioning edges were re-audited against Better Auth 1.6.9 and covered with focused parity tests. |
-| G2 | Organization behavior is broad and complex | Med | Known access-control, multi-role, hook, creator-role, default-team, provisioning, and leave-contract gaps are covered; continue adding focused parity tests as new upstream scenarios are mapped. |
+| G2 | Organization behavior is broad and complex | Med | Routes and core plugin surface exist in `openauth-plugins` (mounted through `openauth-core`); residual risk is edge-case parity (hooks, roles, teams, dynamic policy), not a missing organization plugin. Continue adding focused tests in `tests/organization/` as upstream scenarios are mapped. |
 | G3 | API-key pure secondary-storage listing consistency | Low | Closed for backends that implement atomic `SecondaryStorage` CAS; default best-effort implementations are still suitable only for single-process/local storage. |
 
 ## Hardening Notes
