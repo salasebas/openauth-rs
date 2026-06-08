@@ -52,6 +52,7 @@ telemetry = ["dep:openauth-telemetry", "openauth-telemetry/oauth"]
 tokio-postgres = ["dep:openauth-tokio-postgres"]
 
 [dev-dependencies]
+openauth-core = { workspace = true, features = ["test-utils"] }
 openauth-sqlx = { workspace = true, features = ["mysql", "postgres", "sqlite"] }
 sqlx.workspace = true
 

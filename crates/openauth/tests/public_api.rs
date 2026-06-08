@@ -1369,7 +1369,7 @@ fn openauth_with_adapter_rejects_core_endpoint_conflicts() -> Result<(), Box<dyn
 }
 
 fn test_options() -> OpenAuthOptions {
-    OpenAuthOptions {
+    openauth_core::test_utils::apply_fast_password_defaults(OpenAuthOptions {
         secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
         advanced: AdvancedOptions {
             disable_csrf_check: true,
@@ -1379,7 +1379,7 @@ fn test_options() -> OpenAuthOptions {
         email_password: EmailPasswordOptions::new().enabled(true),
         development: true,
         ..OpenAuthOptions::default()
-    }
+    })
 }
 
 fn unique_sql_prefix() -> String {
