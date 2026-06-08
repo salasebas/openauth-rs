@@ -2,6 +2,8 @@
 
 mod common;
 
+#[path = "../../../tests/support/sql_rate_limit_rule_validation.rs"]
+mod sql_rate_limit_rule_validation;
 #[path = "../../../tests/support/sqlx_migration_atomicity_postgres.rs"]
 mod sqlx_migration_atomicity;
 
@@ -393,6 +395,14 @@ async fn postgres_adapter_returns_database_generated_uuid_ids() -> Result<(), Op
     uuid::Uuid::parse_str(id)
         .map_err(|error| OpenAuthError::Adapter(format!("invalid generated UUID: {error}")))?;
     Ok(())
+}
+
+#[tokio::test]
+async fn postgres_rate_limit_store_rejects_invalid_rules_before_database_access(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = PgPoolOptions::new().connect_lazy(&database_url())?;
+    let store = PostgresRateLimitStore::new(pool);
+    sql_rate_limit_rule_validation::assert_sql_rate_limit_store_rejects_invalid_rules(&store).await
 }
 
 #[tokio::test]

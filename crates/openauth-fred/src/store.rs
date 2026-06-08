@@ -4,7 +4,8 @@ use fred::prelude::{Builder, Config};
 use fred::types::scripts::Script;
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
-    RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitStore,
+    validate_rate_limit_rule, RateLimitConsumeInput, RateLimitDecision, RateLimitFuture,
+    RateLimitStore,
 };
 
 use crate::error::fred_error;
@@ -65,7 +66,7 @@ fn validate_rate_limit_key_prefix(prefix: &str) -> Result<(), OpenAuthError> {
 impl RateLimitStore for FredRateLimitStore {
     fn consume<'a>(&'a self, input: RateLimitConsumeInput) -> RateLimitFuture<'a> {
         Box::pin(async move {
-            let window_ms = validate_rule(&input)?;
+            let window_ms = validate_rate_limit_rule(&input.rule)?;
             let redis_key = self.key(&input.key)?;
             let result = self
                 .script
@@ -83,7 +84,7 @@ impl RateLimitStore for FredRateLimitStore {
             let result = parse_rate_limit_script_result(result)?;
             let retry_ms = result
                 .last_request
-                .saturating_add(window_ms as i64)
+                .saturating_add(window_ms)
                 .saturating_sub(input.now_ms)
                 .max(0);
             Ok(RateLimitDecision {
@@ -112,28 +113,6 @@ pub(crate) async fn connect_client(url: &str) -> Result<Client, OpenAuthError> {
         .await
         .map_err(|error| fred_error("connect", error))?;
     Ok(client)
-}
-
-fn validate_rule(input: &RateLimitConsumeInput) -> Result<u64, OpenAuthError> {
-    if input.rule.window == 0 {
-        return Err(OpenAuthError::InvalidConfig(
-            "rate limit window must be greater than zero".to_owned(),
-        ));
-    }
-    if input.rule.max == 0 {
-        return Err(OpenAuthError::InvalidConfig(
-            "rate limit max must be greater than zero".to_owned(),
-        ));
-    }
-    let window_ms = input.rule.window.checked_mul(1000).ok_or_else(|| {
-        OpenAuthError::InvalidConfig("rate limit window milliseconds overflowed".to_owned())
-    })?;
-    i64::try_from(window_ms).map_err(|_| {
-        OpenAuthError::InvalidConfig("rate limit window milliseconds must fit in i64".to_owned())
-    })?;
-    i64::try_from(input.rule.max)
-        .map_err(|_| OpenAuthError::InvalidConfig("rate limit max must fit in i64".to_owned()))?;
-    Ok(window_ms)
 }
 
 fn ceil_millis_to_seconds(milliseconds: i64) -> u64 {

@@ -45,9 +45,10 @@ pub use password::{
     OnPasswordReset, PasswordOptions, PasswordResetEmail, PasswordResetPayload, SendResetPassword,
 };
 pub use rate_limit::{
-    DynamicRateLimitPathRule, HybridRateLimitOptions, MissingIpPolicy, RateLimitConsumeInput,
-    RateLimitDecision, RateLimitFuture, RateLimitOptions, RateLimitPathRule, RateLimitRecord,
-    RateLimitRule, RateLimitRuleProvider, RateLimitStorage, RateLimitStorageOption, RateLimitStore,
+    validate_rate_limit_rule, DynamicRateLimitPathRule, HybridRateLimitOptions, MissingIpPolicy,
+    RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitOptions, RateLimitPathRule,
+    RateLimitRecord, RateLimitRule, RateLimitRuleProvider, RateLimitStorage,
+    RateLimitStorageOption, RateLimitStore,
 };
 pub use root::{ExperimentalOptions, OpenAuthOptions, TelemetryOptions};
 pub use session::{SessionAdditionalField, SessionOptions};

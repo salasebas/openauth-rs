@@ -1,6 +1,7 @@
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
-    RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitStore,
+    validate_rate_limit_rule, RateLimitConsumeInput, RateLimitDecision, RateLimitFuture,
+    RateLimitStore,
 };
 use redis::aio::ConnectionManager;
 use redis::Script;
@@ -87,7 +88,7 @@ impl RedisRateLimitStore {
 impl RateLimitStore for RedisRateLimitStore {
     fn consume<'a>(&'a self, input: RateLimitConsumeInput) -> RateLimitFuture<'a> {
         Box::pin(async move {
-            let window_ms = validate_rule(&input)?;
+            let window_ms = validate_rate_limit_rule(&input.rule)?;
             let redis_key = self.key(&input.key)?;
             let mut manager = self.manager.clone();
             let result: (i64, i64, i64) = Script::new(RATE_LIMIT_SCRIPT)
@@ -132,28 +133,6 @@ impl RateLimitStore for RedisRateLimitStore {
             })
         })
     }
-}
-
-fn validate_rule(input: &RateLimitConsumeInput) -> Result<i64, OpenAuthError> {
-    if input.rule.window == 0 {
-        return Err(OpenAuthError::InvalidConfig(
-            "rate limit window must be greater than zero".to_owned(),
-        ));
-    }
-    if input.rule.max == 0 {
-        return Err(OpenAuthError::InvalidConfig(
-            "rate limit max must be greater than zero".to_owned(),
-        ));
-    }
-    let window_ms = input.rule.window.checked_mul(1000).ok_or_else(|| {
-        OpenAuthError::InvalidConfig("rate limit window milliseconds overflowed".to_owned())
-    })?;
-    let window_ms = i64::try_from(window_ms).map_err(|_| {
-        OpenAuthError::InvalidConfig("rate limit window milliseconds must fit in i64".to_owned())
-    })?;
-    i64::try_from(input.rule.max)
-        .map_err(|_| OpenAuthError::InvalidConfig("rate limit max must fit in i64".to_owned()))?;
-    Ok(window_ms)
 }
 
 fn ceil_millis_to_seconds(milliseconds: i64) -> u64 {

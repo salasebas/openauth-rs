@@ -25,6 +25,8 @@ mod postgres_adapter_conformance;
 
 #[path = "../../../tests/support/postgres_migration_atomicity.rs"]
 mod postgres_migration_atomicity;
+#[path = "../../../tests/support/sql_rate_limit_rule_validation.rs"]
+mod sql_rate_limit_rule_validation;
 
 use postgres_adapter_conformance as conformance;
 
@@ -769,6 +771,20 @@ async fn tokio_postgres_adapter_selects_base_fields_with_join() -> Result<(), Op
         Some(DbValue::RecordArray(sessions)) if sessions.len() == 1
     ));
     Ok(())
+}
+
+#[tokio::test]
+async fn tokio_postgres_rate_limit_store_rejects_invalid_rules_before_database_access(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let connection = match TokioPostgresConnection::connect(&database_url()).await {
+        Ok(connection) => connection,
+        Err(error) => {
+            eprintln!("skipping tokio-postgres invalid-rule test: {error}");
+            return Ok(());
+        }
+    };
+    let store = TokioPostgresRateLimitStore::from_connection(&connection, "rate_limits");
+    sql_rate_limit_rule_validation::assert_sql_rate_limit_store_rejects_invalid_rules(&store).await
 }
 
 #[tokio::test]

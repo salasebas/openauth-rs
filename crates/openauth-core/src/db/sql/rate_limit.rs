@@ -1,4 +1,5 @@
 use super::*;
+use crate::options::validate_rate_limit_rule;
 
 /// Decodes a persisted rate-limit count, rejecting corrupt negative values
 /// instead of wrapping them into a huge `u64`.
@@ -70,9 +71,9 @@ pub fn rate_limit_consume_statements(
 pub fn consume_sql_rate_limit_record(
     input: RateLimitConsumeInput,
     existing: Option<RateLimitRecord>,
-) -> (RateLimitDecision, RateLimitRecord, bool) {
-    let window_ms = input.rule.window.saturating_mul(1000) as i64;
-    match existing {
+) -> Result<(RateLimitDecision, RateLimitRecord, bool), OpenAuthError> {
+    let window_ms = validate_rate_limit_rule(&input.rule)?;
+    Ok(match existing {
         Some(record)
             if input.now_ms.saturating_sub(record.last_request) <= window_ms
                 && record.count >= input.rule.max =>
@@ -145,7 +146,7 @@ pub fn consume_sql_rate_limit_record(
                 false,
             )
         }
-    }
+    })
 }
 
 fn ceil_millis_to_seconds(milliseconds: i64) -> u64 {

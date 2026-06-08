@@ -13,6 +13,7 @@ mod schema;
 pub mod sql;
 mod transform;
 
+pub use crate::options::validate_rate_limit_rule;
 pub use adapter::{
     run_transaction_without_native_support, AdapterCapabilities, AdapterFuture, AdapterResult,
     Connector, Count, Create, DbAdapter, DbRecord, DbValue, Delete, DeleteMany, FindMany, FindOne,

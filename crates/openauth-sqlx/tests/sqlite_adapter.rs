@@ -1,5 +1,7 @@
 #![cfg(feature = "sqlite")]
 
+#[path = "../../../tests/support/sql_rate_limit_rule_validation.rs"]
+mod sql_rate_limit_rule_validation;
 #[path = "../../../tests/support/sqlx_migration_atomicity_sqlite.rs"]
 mod sqlx_migration_atomicity;
 
@@ -489,6 +491,17 @@ async fn sqlite_connect_enables_foreign_keys_for_pooled_connections() -> Result<
         matches!(result, Err(OpenAuthError::Adapter(message)) if message.contains("FOREIGN KEY"))
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_rate_limit_store_rejects_invalid_rules_before_database_access(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = SqlitePoolOptions::new()
+        .connect("sqlite::memory:")
+        .await
+        .map_err(sql_error)?;
+    let store = SqliteRateLimitStore::new(pool);
+    sql_rate_limit_rule_validation::assert_sql_rate_limit_store_rejects_invalid_rules(&store).await
 }
 
 #[tokio::test]

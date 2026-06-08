@@ -7,6 +7,17 @@ Versioning while the API is still pre-1.0.
 
 ## Unreleased
 
+### Fixed
+
+- `openauth-core`, `openauth-sqlx`, `openauth-tokio-postgres`,
+  `openauth-deadpool-postgres`: SQL-backed standalone rate-limit stores now
+  reject invalid rules (`window = 0`, `max = 0`, and oversized window
+  conversions) with `OpenAuthError::InvalidConfig`, matching the in-memory,
+  Redis, and Fred stores.
+- `openauth-core`, `openauth-redis`, `openauth-fred`: rate-limit rule
+  validation now lives in `openauth_core::options::validate_rate_limit_rule`
+  so every store shares one implementation and error messages.
+
 ### Added
 
 - `openauth-oidc`: exported `REQUIRED_DISCOVERY_FIELDS` and upstream-matching

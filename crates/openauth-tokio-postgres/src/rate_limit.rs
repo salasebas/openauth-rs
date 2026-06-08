@@ -1,7 +1,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use openauth_core::db::SqlRateLimitNames;
+use openauth_core::db::{validate_rate_limit_rule, SqlRateLimitNames};
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitStore,
@@ -72,6 +72,7 @@ async fn consume_postgres_rate_limit(
     store: &TokioPostgresRateLimitStore,
     input: RateLimitConsumeInput,
 ) -> Result<RateLimitDecision, OpenAuthError> {
+    validate_rate_limit_rule(&input.rule)?;
     let plan = postgres_rate_limit_plan(
         &store.names.table,
         &store.names.key,

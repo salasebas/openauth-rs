@@ -6,6 +6,7 @@ use openauth_core::db::sql::{
     SqlAdapterRunner, SqlColumnSnapshot, SqlDialect, SqlExecutor, SqlRateLimitNames, SqlRowReader,
     SqlSchemaSnapshot, SqlStatement, SqlUpdateOnePlan,
 };
+use openauth_core::db::validate_rate_limit_rule;
 use openauth_core::db::{
     auth_schema, AdapterFuture, AuthSchemaOptions, Connector, Create, DbField, DbFieldType,
     DbRecord, DbValue, Delete, FindMany, ForeignKey, IdGeneration, IdPolicy, JoinOption,
@@ -713,7 +714,8 @@ fn sql_rate_limit_names_resolve_physical_schema_names() {
 }
 
 #[test]
-fn consume_sql_rate_limit_record_resets_or_denies_without_adapter_logic() {
+fn consume_sql_rate_limit_record_resets_or_denies_without_adapter_logic(
+) -> Result<(), OpenAuthError> {
     let input = RateLimitConsumeInput {
         key: "ip:/sign-in".to_owned(),
         rule: RateLimitRule { window: 10, max: 2 },
@@ -725,12 +727,67 @@ fn consume_sql_rate_limit_record_resets_or_denies_without_adapter_logic() {
         last_request: 10_000,
     };
 
-    let (decision, record, update) = consume_sql_rate_limit_record(input, Some(existing));
+    let (decision, record, update) = consume_sql_rate_limit_record(input, Some(existing))?;
 
     assert!(!decision.permitted);
     assert_eq!(decision.retry_after, 5);
     assert_eq!(record.count, 2);
     assert!(update);
+    Ok(())
+}
+
+#[test]
+fn validate_rate_limit_rule_rejects_zero_window_max_and_oversized_windows(
+) -> Result<(), OpenAuthError> {
+    assert!(matches!(
+        validate_rate_limit_rule(&RateLimitRule { window: 0, max: 1 }),
+        Err(OpenAuthError::InvalidConfig(message))
+            if message == "rate limit window must be greater than zero"
+    ));
+    assert!(matches!(
+        validate_rate_limit_rule(&RateLimitRule { window: 1, max: 0 }),
+        Err(OpenAuthError::InvalidConfig(message))
+            if message == "rate limit max must be greater than zero"
+    ));
+    assert!(matches!(
+        validate_rate_limit_rule(&RateLimitRule { window: u64::MAX, max: 1 }),
+        Err(OpenAuthError::InvalidConfig(message))
+            if message == "rate limit window is too large"
+    ));
+    assert!(matches!(
+        validate_rate_limit_rule(&RateLimitRule {
+            window: 9_223_372_036_854_776,
+            max: 1,
+        }),
+        Err(OpenAuthError::InvalidConfig(message))
+            if message == "rate limit window is too large"
+    ));
+    assert!(matches!(
+        validate_rate_limit_rule(&RateLimitRule {
+            window: 1,
+            max: i64::MAX as u64 + 1,
+        }),
+        Err(OpenAuthError::InvalidConfig(message))
+            if message == "rate limit max must fit in i64"
+    ));
+    Ok(())
+}
+
+#[test]
+fn consume_sql_rate_limit_record_rejects_zero_max_before_permitting_first_request(
+) -> Result<(), OpenAuthError> {
+    let input = RateLimitConsumeInput {
+        key: "ip:/sign-in".to_owned(),
+        rule: RateLimitRule { window: 60, max: 0 },
+        now_ms: 1_700_000_000_000,
+    };
+
+    assert!(matches!(
+        consume_sql_rate_limit_record(input, None),
+        Err(OpenAuthError::InvalidConfig(message))
+            if message == "rate limit max must be greater than zero"
+    ));
+    Ok(())
 }
 
 #[tokio::test]
