@@ -37,26 +37,34 @@ let auth = OpenAuth::builder()
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-The default feature set enables OIDC. Enable the `saml` feature only when you
-are testing SAML compatibility and understand the current SAML limitations.
+The default feature set enables OIDC. Enable the `saml` feature when you need
+SAML metadata, ACS, SLO, or logout routes (it pulls in `saml-signed` for
+XMLDSig verification and encrypted-assertion decryption via `opensaml`).
 
 ## Feature Flags
 
 - `oidc`: external OIDC IdP login support. Enabled by default.
-- `saml`: SAML metadata, ACS, SLO, and logout routes.
-- `saml-signed`: forwards the explicit signed-SAML feature surface.
+- `saml`: SAML metadata, ACS, SLO, and logout routes (enables `openauth-saml/saml-signed`).
+- `saml-signed`: alias for `saml`; explicit signed/encrypted SAML crypto surface.
 
-## SAML Status
+## OIDC vs SAML
 
-SAML support is experimental. Unsigned compatibility flows are covered, but
-signed responses, signed logout messages, outbound signing, and encrypted
-assertions are not a production-ready path yet. Prefer OIDC for new IdP
-integrations.
+| | OIDC (default) | SAML (`saml` feature) |
+| --- | --- | --- |
+| Setup | Discovery + `clientId` / `clientSecret` | `entryPoint`, IdP `cert`, SP metadata, optional signing/decryption keys |
+| Crypto | JWT / JWKS (built into OIDC) | Requires `saml-signed` (`opensaml`); unsigned IdP messages are rejected by default |
+| IdP fixtures | Mock OIDC server (Google, Azure, Okta) | Production-shaped fixtures under `tests/fixtures/saml/idp/` |
+| Plug-and-play | Yes — similar to social OAuth providers | No — each enterprise IdP needs explicit SAML config and mapping |
+
+Prefer OIDC when the identity provider supports it. Use SAML for legacy
+enterprise IdPs or tenants that require it.
 
 ## Status
 
-Experimental beta. OIDC is the recommended path. SAML remains WIP until XML
-signature/encryption support is backed by an auditable implementation.
+Experimental beta. OIDC is the recommended path for new integrations. SAML
+signed/encrypted flows are covered by `opensaml` and integration tests
+(Okta/Azure/Google-shaped fixtures); live IdP smoke remains manual — see
+[SMOKE-SAML.md](./SMOKE-SAML.md).
 
 ## Better Auth compatibility
 

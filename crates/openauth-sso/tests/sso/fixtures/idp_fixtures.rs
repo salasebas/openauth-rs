@@ -4,7 +4,9 @@
 //! keys under `tests/fixtures/saml/key/`. Provider registration JSON lives in
 //! `tests/fixtures/saml/idp/*-shaped.json`.
 
+use base64::Engine;
 use opensaml::constants::{signature_algorithm::RSA_SHA256, Binding};
+use opensaml::crypto::encrypt_assertion;
 use opensaml::entity::{EntitySetting, User};
 use opensaml::idp::{IdentityProvider, LoginResponseOptions};
 use opensaml::metadata::{Endpoint, IdpMetadataConfig, SpMetadataConfig};
@@ -16,6 +18,12 @@ use super::{
     idp_signing_cert_pem, login_attributes_for_user, sp_private_key_pem, sp_signing_cert_pem,
     SP_ENTITY_ID,
 };
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IdpFixtureRegistrationOptions {
+    pub decryption_key: bool,
+    pub authn_signed: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdpFixtureKind {
@@ -113,9 +121,23 @@ impl IdpFixtureKind {
 }
 
 pub fn register_idp_fixture_body(kind: IdpFixtureKind) -> String {
+    register_idp_fixture_body_with_options(kind, IdpFixtureRegistrationOptions::default())
+}
+
+pub fn register_idp_fixture_body_with_options(
+    kind: IdpFixtureKind,
+    options: IdpFixtureRegistrationOptions,
+) -> String {
     let mut body: Value = serde_json::from_str(kind.registration_template()).expect("fixture json");
     body["samlConfig"]["cert"] = json!(idp_signing_cert_pem());
     body["samlConfig"]["callbackUrl"] = json!(kind.acs_url());
+    if options.decryption_key {
+        body["samlConfig"]["decryptionPvk"] = json!(sp_private_key_pem());
+    }
+    if options.authn_signed {
+        body["samlConfig"]["authnRequestsSigned"] = json!(true);
+        body["samlConfig"]["privateKey"] = json!(sp_private_key_pem());
+    }
     body.to_string()
 }
 
@@ -199,4 +221,20 @@ pub fn signed_login_response_for_fixture(
         },
     )?;
     Ok(response.context)
+}
+
+pub fn encrypted_login_response_for_fixture(
+    kind: IdpFixtureKind,
+    in_response_to: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let signed = signed_login_response_for_fixture(kind, in_response_to)?;
+    let xml = String::from_utf8(base64::engine::general_purpose::STANDARD.decode(signed)?)?;
+    let encrypted = encrypt_assertion(
+        &xml,
+        sp_signing_cert_pem(),
+        "http://www.w3.org/2001/04/xmlenc#aes256-cbc",
+        "http://www.w3.org/2001/04/xmlenc#rsa-oaep-mgf1p",
+        "saml",
+    )?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(encrypted.as_bytes()))
 }
