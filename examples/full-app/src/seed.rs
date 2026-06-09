@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use openauth::db::{
-    Create, DbAdapter, DbField, DbFieldType, DbRecord, DbSchema, DbTable, DbValue, Delete, Where,
+    Create, DbAdapter, DbFieldType, DbRecord, DbSchema, DbTable, DbValue, Delete,
+    TransactionCallback, Where,
 };
 use openauth::OpenAuthError;
 use serde::Serialize;
@@ -39,7 +40,7 @@ const SEED_STRIPE_EVENT_ID: &str = "seed_stripe_event_demo";
 const SEED_SUBSCRIPTION_ID: &str = "seed_subscription_demo";
 const SEED_RATE_LIMIT_KEY: &str = "seed:/sign-in/email";
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct SeedContext {
     now: OffsetDateTime,
     expires: OffsetDateTime,
@@ -82,6 +83,32 @@ pub async fn seed_database(
     password_hash: &str,
 ) -> Result<SeedSummary, ExampleError> {
     let ctx = SeedContext::new(password_hash);
+    let schema = schema.clone();
+    let summary = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+    let summary_slot = std::sync::Arc::clone(&summary);
+    let callback: TransactionCallback<'_> = Box::new(move |tx| {
+        let schema = schema.clone();
+        let ctx = ctx.clone();
+        let summary_slot = std::sync::Arc::clone(&summary_slot);
+        Box::pin(async move {
+            let seeded = seed_database_tables(&tx, &schema, &ctx).await?;
+            *summary_slot.lock().await = Some(seeded);
+            Ok(())
+        })
+    });
+    adapter
+        .transaction(callback)
+        .await
+        .map_err(ExampleError::from)?;
+    let seeded = summary.lock().await.take();
+    seeded.ok_or_else(|| ExampleError::InvalidConfig("seed transaction did not run".to_owned()))
+}
+
+async fn seed_database_tables(
+    adapter: &dyn DbAdapter,
+    schema: &DbSchema,
+    ctx: &SeedContext,
+) -> Result<SeedSummary, OpenAuthError> {
     let mut tables = schema.tables().collect::<Vec<_>>();
     tables.sort_by_key(|(_, table)| table.order.unwrap_or(999));
 
@@ -93,7 +120,7 @@ pub async fn seed_database(
 
     for (logical_name, table) in tables {
         let logical_name = logical_name.to_owned();
-        let result = match seed_table(adapter, &logical_name, table, &ctx).await {
+        let result = match seed_table(adapter, &logical_name, table, ctx).await {
             Ok(inserted) => SeedTableResult {
                 table: logical_name.clone(),
                 inserted,
@@ -156,6 +183,9 @@ async fn seed_table(
         return Ok(false);
     };
 
+    let record = fill_missing_table_fields(record, logical_name, table, ctx);
+    let record = filter_record_for_table(record, table);
+
     prepare_seed_row(adapter, logical_name, &record).await?;
 
     let mut query = Create::new(logical_name);
@@ -178,7 +208,7 @@ async fn prepare_seed_row(
     record: &DbRecord,
 ) -> Result<(), OpenAuthError> {
     if let Some(DbValue::String(id)) = record.get("id") {
-        let _ = adapter
+        adapter
             .delete(
                 Delete::new(logical_name)
                     .where_clause(Where::new("id", DbValue::String(id.clone()))),
@@ -188,7 +218,7 @@ async fn prepare_seed_row(
     }
     if logical_name == "rate_limit" {
         if let Some(DbValue::String(key)) = record.get("key") {
-            let _ = adapter
+            adapter
                 .delete(
                     Delete::new(logical_name)
                         .where_clause(Where::new("key", DbValue::String(key.clone()))),
@@ -199,7 +229,7 @@ async fn prepare_seed_row(
     }
     if logical_name == "wallet_address" {
         if let Some(DbValue::String(user_id)) = record.get("user_id") {
-            let _ = adapter
+            adapter
                 .delete(
                     Delete::new(logical_name)
                         .where_clause(Where::new("user_id", DbValue::String(user_id.clone()))),
@@ -464,7 +494,7 @@ fn seed_api_key(ctx: &SeedContext) -> Option<DbRecord> {
     Some(record)
 }
 
-fn seed_two_factor(ctx: &SeedContext) -> Option<DbRecord> {
+fn seed_two_factor(_ctx: &SeedContext) -> Option<DbRecord> {
     let mut record = DbRecord::new();
     record.insert(
         "id".to_owned(),
@@ -515,7 +545,7 @@ fn seed_device_code(ctx: &SeedContext) -> Option<DbRecord> {
     Some(record)
 }
 
-fn seed_passkey(ctx: &SeedContext) -> Option<DbRecord> {
+fn seed_passkey(_ctx: &SeedContext) -> Option<DbRecord> {
     let mut record = DbRecord::new();
     record.insert("id".to_owned(), DbValue::String(SEED_PASSKEY_ID.to_owned()));
     record.insert(
@@ -689,7 +719,7 @@ fn seed_oauth_consent(ctx: &SeedContext) -> Option<DbRecord> {
     Some(record)
 }
 
-fn seed_sso_provider(ctx: &SeedContext) -> Option<DbRecord> {
+fn seed_sso_provider(_ctx: &SeedContext) -> Option<DbRecord> {
     let mut record = DbRecord::new();
     record.insert(
         "id".to_owned(),
@@ -715,11 +745,10 @@ fn seed_sso_provider(ctx: &SeedContext) -> Option<DbRecord> {
         "domain".to_owned(),
         DbValue::String("seed.example.com".to_owned()),
     );
-    record.insert("domain_verified".to_owned(), DbValue::Boolean(true));
     Some(record)
 }
 
-fn seed_scim_provider(ctx: &SeedContext) -> Option<DbRecord> {
+fn seed_scim_provider(_ctx: &SeedContext) -> Option<DbRecord> {
     let mut record = DbRecord::new();
     record.insert(
         "id".to_owned(),
@@ -854,8 +883,14 @@ fn seed_wallet_address(_ctx: &SeedContext) -> Option<DbRecord> {
     Some(record)
 }
 
-fn generic_seed_record(logical_name: &str, table: &DbTable, ctx: &SeedContext) -> Option<DbRecord> {
-    let mut record = DbRecord::new();
+fn filter_record_for_table(record: DbRecord, table: &DbTable) -> DbRecord {
+    record
+        .into_iter()
+        .filter(|(field, _)| table.fields.contains_key(field))
+        .collect()
+}
+
+fn seed_reference_ids() -> HashMap<String, String> {
     let mut references = HashMap::new();
     references.insert("user_id".to_owned(), SEED_USER_ID.to_owned());
     references.insert("organization_id".to_owned(), SEED_ORG_ID.to_owned());
@@ -865,31 +900,68 @@ fn generic_seed_record(logical_name: &str, table: &DbTable, ctx: &SeedContext) -
     references.insert("client_id".to_owned(), SEED_OAUTH_CLIENT_ID.to_owned());
     references.insert("provider_id".to_owned(), "seed-scim".to_owned());
     references.insert("reference_id".to_owned(), SEED_USER_ID.to_owned());
+    references
+}
+
+fn default_seed_value(
+    field_name: &str,
+    field: &openauth::db::DbField,
+    logical_name: &str,
+    ctx: &SeedContext,
+    references: &HashMap<String, String>,
+) -> DbValue {
+    match field.field_type {
+        DbFieldType::String => {
+            if field_name == "id" {
+                DbValue::String(ctx.id(logical_name))
+            } else if let Some(reference) = references.get(field_name) {
+                DbValue::String(reference.clone())
+            } else if field_name.ends_with("_id") {
+                DbValue::String(ctx.id(field_name))
+            } else {
+                DbValue::String(format!("seed-{logical_name}-{field_name}"))
+            }
+        }
+        DbFieldType::Number => DbValue::Number(1),
+        DbFieldType::Boolean => DbValue::Boolean(false),
+        DbFieldType::Timestamp => DbValue::Timestamp(ctx.now),
+        DbFieldType::Json => DbValue::Json(serde_json::json!({ "seed": logical_name })),
+        DbFieldType::StringArray => DbValue::StringArray(vec![format!("seed-{logical_name}")]),
+        DbFieldType::NumberArray => DbValue::NumberArray(vec![1]),
+    }
+}
+
+fn fill_missing_table_fields(
+    mut record: DbRecord,
+    logical_name: &str,
+    table: &DbTable,
+    ctx: &SeedContext,
+) -> DbRecord {
+    let references = seed_reference_ids();
+    for (field_name, field) in &table.fields {
+        if record.contains_key(field_name) || !field.required {
+            continue;
+        }
+        record.insert(
+            field_name.clone(),
+            default_seed_value(field_name, field, logical_name, ctx, &references),
+        );
+    }
+    record
+}
+
+fn generic_seed_record(logical_name: &str, table: &DbTable, ctx: &SeedContext) -> Option<DbRecord> {
+    let references = seed_reference_ids();
+    let mut record = DbRecord::new();
 
     for (field_name, field) in &table.fields {
         if !field.input {
             continue;
         }
-        let value = match field.field_type {
-            DbFieldType::String => {
-                if field_name == "id" {
-                    DbValue::String(ctx.id(logical_name))
-                } else if let Some(reference) = references.get(field_name.as_str()) {
-                    DbValue::String(reference.clone())
-                } else if field_name.ends_with("_id") {
-                    DbValue::String(ctx.id(field_name))
-                } else {
-                    DbValue::String(format!("seed-{logical_name}-{field_name}"))
-                }
-            }
-            DbFieldType::Number => DbValue::Number(1),
-            DbFieldType::Boolean => DbValue::Boolean(false),
-            DbFieldType::Timestamp => DbValue::Timestamp(ctx.now),
-            DbFieldType::Json => DbValue::Json(serde_json::json!({ "seed": logical_name })),
-            DbFieldType::StringArray => DbValue::StringArray(vec![format!("seed-{logical_name}")]),
-            DbFieldType::NumberArray => DbValue::NumberArray(vec![1]),
-        };
-        record.insert(field_name.clone(), value);
+        record.insert(
+            field_name.clone(),
+            default_seed_value(field_name, field, logical_name, ctx, &references),
+        );
     }
 
     if record.is_empty() {
@@ -902,8 +974,7 @@ fn generic_seed_record(logical_name: &str, table: &DbTable, ctx: &SeedContext) -
 pub fn seed_password_hash() -> Result<String, ExampleError> {
     #[cfg(debug_assertions)]
     {
-        return openauth_core::test_utils::fast_hash_password("password123456")
-            .map_err(ExampleError::from);
+        openauth_core::test_utils::fast_hash_password("password123456").map_err(ExampleError::from)
     }
     #[cfg(not(debug_assertions))]
     {

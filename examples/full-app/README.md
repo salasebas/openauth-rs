@@ -19,6 +19,12 @@ Open http://127.0.0.1:3000.
 The default SQLite database is created at `examples/full-app/data/openauth.sqlite`.
 The `data/` directory is local development state and should not be committed.
 
+The demo UI's profile preferences (`/api/example/preferences`) use Redis when it
+is reachable (`REDIS_URL`, default `redis://127.0.0.1:6379`). When Redis is not
+running, preferences fall back to the startup configuration and an in-process
+store for the current server instance, so the default SQLite flow works without a
+Redis sidecar.
+
 ## Run with Docker services
 
 From the repository root:
@@ -118,14 +124,19 @@ cargo run -p openauth-example-full-app
 | `VALKEY_URL` | `valkey://127.0.0.1:6380` |
 | `OPENAUTH_EXAMPLE_DEV_CONTROLS` | enabled only for loopback hosts |
 
-Supported `OPENAUTH_EXAMPLE_DB` values are `memory`, `sqlite`, `postgres`, and
-`mysql`. Supported `OPENAUTH_EXAMPLE_RATE_LIMIT` values are `memory`,
+Supported `OPENAUTH_EXAMPLE_DB` values are `memory`, `sqlite`,
+`postgres-sqlx` (SQLx driver; `postgres` is accepted as an alias),
+`postgres-deadpool` (`deadpool-postgres` pool over `tokio-postgres`,
+sharing the same Postgres database and `OPENAUTH_EXAMPLE_POSTGRES_DATABASE_URL`),
+and `mysql-sqlx` (`mysql` is accepted as an alias). Supported
+`OPENAUTH_EXAMPLE_RATE_LIMIT` values are `memory`,
 `database`, `redis`, `valkey`, `hybrid-redis`, `hybrid-valkey`, `fred-redis`,
 and `fred-valkey`. The `redis`/`valkey`/`hybrid-*` backends use the `redis-rs`
 client and the `fred-*` backends use the `fred` client; `hybrid-*` pairs an
 in-memory limiter with the secondary store. The `*-redis` variants read
 `REDIS_URL` and the `*-valkey` variants read `VALKEY_URL`, while `database`
-requires a SQL `OPENAUTH_EXAMPLE_DB` (`sqlite`, `postgres`, or `mysql`).
+requires a SQL `OPENAUTH_EXAMPLE_DB` (`sqlite`, `postgres-sqlx`,
+`postgres-deadpool`, or `mysql-sqlx`).
 
 Rate limiting is tuned with `OPENAUTH_EXAMPLE_RATE_LIMIT_ENABLED` (default
 `true`), `OPENAUTH_EXAMPLE_RATE_LIMIT_WINDOW` (window in seconds, default `60`),

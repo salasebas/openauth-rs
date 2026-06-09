@@ -6,7 +6,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -16,8 +16,8 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use openauth::db::{
-    auth_schema, AuthSchemaOptions, Count, DbAdapter, DbRecord, DbValue, DeleteMany, FindMany,
-    RateLimitStorage,
+    auth_schema, AuthSchemaOptions, Count, DbAdapter, DbRecord, DbSchema, DbValue, DeleteMany,
+    FindMany, RateLimitStorage,
 };
 use openauth::plugin::AuthPlugin;
 use openauth::rate_limit::GovernorMemoryRateLimitStore;
@@ -27,6 +27,7 @@ use openauth::{
 };
 use openauth_axum::OpenAuthAxumExt;
 use openauth_core::context::create_auth_context_with_adapter;
+use openauth_deadpool_postgres::{DeadpoolPostgresAdapter, DeadpoolPostgresRateLimitStore};
 use openauth_fred::FredOpenAuthStores;
 use openauth_redis::RedisRateLimitStore;
 use openauth_sqlx::{
@@ -51,8 +52,9 @@ const PREFERENCES_KEY: &str = "openauth:full-app:preferences";
 pub enum DbBackend {
     Memory,
     Sqlite,
-    Postgres,
-    Mysql,
+    PostgresSqlx,
+    PostgresDeadpool,
+    MysqlSqlx,
 }
 
 impl DbBackend {
@@ -60,8 +62,9 @@ impl DbBackend {
         match self {
             Self::Memory => "memory",
             Self::Sqlite => "sqlite",
-            Self::Postgres => "postgres",
-            Self::Mysql => "mysql",
+            Self::PostgresSqlx => "postgres-sqlx",
+            Self::PostgresDeadpool => "postgres-deadpool",
+            Self::MysqlSqlx => "mysql-sqlx",
         }
     }
 
@@ -69,8 +72,10 @@ impl DbBackend {
         match self {
             Self::Memory => String::new(),
             Self::Sqlite => "sqlite://examples/full-app/data/openauth.sqlite".to_owned(),
-            Self::Postgres => "postgres://user:password@127.0.0.1:5432/openauth".to_owned(),
-            Self::Mysql => "mysql://user:password@127.0.0.1:3306/openauth".to_owned(),
+            Self::PostgresSqlx | Self::PostgresDeadpool => {
+                "postgres://user:password@127.0.0.1:5432/openauth".to_owned()
+            }
+            Self::MysqlSqlx => "mysql://user:password@127.0.0.1:3306/openauth".to_owned(),
         }
     }
 
@@ -78,8 +83,23 @@ impl DbBackend {
         match self {
             Self::Memory => None,
             Self::Sqlite => Some("OPENAUTH_EXAMPLE_SQLITE_DATABASE_URL"),
-            Self::Postgres => Some("OPENAUTH_EXAMPLE_POSTGRES_DATABASE_URL"),
-            Self::Mysql => Some("OPENAUTH_EXAMPLE_MYSQL_DATABASE_URL"),
+            Self::PostgresSqlx | Self::PostgresDeadpool => {
+                Some("OPENAUTH_EXAMPLE_POSTGRES_DATABASE_URL")
+            }
+            Self::MysqlSqlx => Some("OPENAUTH_EXAMPLE_MYSQL_DATABASE_URL"),
+        }
+    }
+
+    /// Backends that point at the same physical database. Dropping the schema
+    /// through one of them must invalidate cached state for all of them.
+    fn shared_database_backends(self) -> &'static [DbBackend] {
+        match self {
+            Self::PostgresSqlx | Self::PostgresDeadpool => {
+                &[Self::PostgresSqlx, Self::PostgresDeadpool]
+            }
+            Self::Memory => &[Self::Memory],
+            Self::Sqlite => &[Self::Sqlite],
+            Self::MysqlSqlx => &[Self::MysqlSqlx],
         }
     }
 }
@@ -91,10 +111,11 @@ impl FromStr for DbBackend {
         match value {
             "memory" => Ok(Self::Memory),
             "sqlite" => Ok(Self::Sqlite),
-            "postgres" | "postgresql" => Ok(Self::Postgres),
-            "mysql" => Ok(Self::Mysql),
+            "postgres" | "postgresql" | "postgres-sqlx" => Ok(Self::PostgresSqlx),
+            "postgres-deadpool" | "deadpool-postgres" => Ok(Self::PostgresDeadpool),
+            "mysql" | "mysql-sqlx" => Ok(Self::MysqlSqlx),
             other => Err(ExampleError::InvalidConfig(format!(
-                "unsupported OPENAUTH_EXAMPLE_DB `{other}`; use memory, sqlite, postgres, or mysql"
+                "unsupported OPENAUTH_EXAMPLE_DB `{other}`; use memory, sqlite, postgres-sqlx, postgres-deadpool, or mysql-sqlx"
             ))),
         }
     }
@@ -375,6 +396,7 @@ impl ProfileCache {
 #[derive(Default)]
 struct ViewerAdapterCache {
     entries: tokio::sync::Mutex<HashMap<DbBackend, Arc<dyn DbAdapter>>>,
+    migrated: tokio::sync::Mutex<HashMap<DbBackend, ()>>,
     connect_count: AtomicU64,
 }
 
@@ -383,29 +405,53 @@ impl ViewerAdapterCache {
         &self,
         db: DbBackend,
         database_url: &str,
+        schema: &DbSchema,
     ) -> Result<Arc<dyn DbAdapter>, ExampleError> {
         let mut entries = self.entries.lock().await;
         if let Some(adapter) = entries.get(&db) {
             return Ok(Arc::clone(adapter));
         }
 
-        let adapter: Arc<dyn DbAdapter> = match db {
-            DbBackend::Memory => {
-                return Err(ExampleError::InvalidConfig(
-                    "memory adapters are not cached in the viewer adapter cache".to_owned(),
-                ));
-            }
-            DbBackend::Sqlite => Arc::new(SqliteAdapter::connect(database_url).await?),
-            DbBackend::Postgres => Arc::new(PostgresAdapter::connect(database_url).await?),
-            DbBackend::Mysql => Arc::new(MySqlAdapter::connect(database_url).await?),
-        };
+        let adapter = self.connect(db, database_url, schema).await?;
         self.connect_count.fetch_add(1, Ordering::SeqCst);
         entries.insert(db, Arc::clone(&adapter));
         Ok(adapter)
     }
 
+    /// Connects and ensures migrations ran once for this cached adapter.
+    async fn get_or_connect_migrated(
+        &self,
+        db: DbBackend,
+        database_url: &str,
+        schema: &DbSchema,
+    ) -> Result<Arc<dyn DbAdapter>, ExampleError> {
+        let adapter = self.get_or_connect(db, database_url, schema).await?;
+        let mut migrated = self.migrated.lock().await;
+        if migrated.contains_key(&db) {
+            return Ok(adapter);
+        }
+        adapter.run_migrations(schema).await?;
+        migrated.insert(db, ());
+        Ok(adapter)
+    }
+
+    async fn connect(
+        &self,
+        db: DbBackend,
+        database_url: &str,
+        _schema: &DbSchema,
+    ) -> Result<Arc<dyn DbAdapter>, ExampleError> {
+        if db == DbBackend::Memory {
+            return Err(ExampleError::InvalidConfig(
+                "memory adapters are not cached in the viewer adapter cache".to_owned(),
+            ));
+        }
+        connect_sql_adapter(db, database_url).await
+    }
+
     async fn invalidate_db(&self, db: DbBackend) {
         self.entries.lock().await.remove(&db);
+        self.migrated.lock().await.remove(&db);
     }
 
     #[cfg(test)]
@@ -425,6 +471,8 @@ struct AppState {
     memory_rate_limit_store: Arc<GovernorMemoryRateLimitStore>,
     profile_cache: Arc<ProfileCache>,
     viewer_adapter_cache: Arc<ViewerAdapterCache>,
+    /// In-process preferences when Redis is unreachable (demo fallback).
+    preferences_store: Arc<Mutex<Option<ExamplePreferences>>>,
     dev_controls: bool,
 }
 
@@ -542,6 +590,17 @@ pub fn app_hardened() -> Router {
     static_app(demo_runtime(), false)
 }
 
+/// Injects a loopback client IP for integration tests that invoke the router
+/// through `tower::ServiceExt::oneshot` without Axum `ConnectInfo`.
+#[doc(hidden)]
+pub fn smoke_request<B>(mut request: axum::http::Request<B>) -> axum::http::Request<B> {
+    use std::net::{IpAddr, Ipv4Addr};
+    request
+        .extensions_mut()
+        .insert(openauth::RequestClientIp(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+    request
+}
+
 fn demo_runtime() -> RuntimeInfo {
     RuntimeInfo {
         openauth_version: openauth::VERSION.to_owned(),
@@ -580,7 +639,7 @@ pub async fn build_app(config: ExampleConfig) -> Result<Router, ExampleError> {
             Ok(router_with_auth(auth, &config, memory_rate_limit_store).await?)
         }
         DbBackend::Sqlite => {
-            let adapter = SqliteAdapter::connect(&config.database_url).await?;
+            let adapter = open_sqlite_adapter(&config.database_url).await?;
             let rate_limit = match config.rate_limit {
                 RateLimitBackend::Database => Some(RateLimitOptions::database(
                     SqliteRateLimitStore::from(&adapter),
@@ -598,8 +657,8 @@ pub async fn build_app(config: ExampleConfig) -> Result<Router, ExampleError> {
             auth.run_migrations().await?;
             Ok(router_with_auth(auth, &config, memory_rate_limit_store).await?)
         }
-        DbBackend::Postgres => {
-            let adapter = PostgresAdapter::connect(&config.database_url).await?;
+        DbBackend::PostgresSqlx => {
+            let adapter = open_postgres_sqlx_adapter(&config.database_url).await?;
             let rate_limit = match config.rate_limit {
                 RateLimitBackend::Database => Some(RateLimitOptions::database(
                     PostgresRateLimitStore::from(&adapter),
@@ -617,8 +676,27 @@ pub async fn build_app(config: ExampleConfig) -> Result<Router, ExampleError> {
             auth.run_migrations().await?;
             Ok(router_with_auth(auth, &config, memory_rate_limit_store).await?)
         }
-        DbBackend::Mysql => {
-            let adapter = MySqlAdapter::connect(&config.database_url).await?;
+        DbBackend::PostgresDeadpool => {
+            let adapter = open_postgres_deadpool_adapter(&config.database_url).await?;
+            let rate_limit = match config.rate_limit {
+                RateLimitBackend::Database => Some(RateLimitOptions::database(
+                    DeadpoolPostgresRateLimitStore::from(&adapter),
+                )),
+                _ => None,
+            };
+            let auth = build_auth(
+                config.clone(),
+                AUTH_BASE_PATH.to_owned(),
+                adapter,
+                rate_limit,
+                memory_rate_limit_store.clone(),
+            )
+            .await?;
+            auth.run_migrations().await?;
+            Ok(router_with_auth(auth, &config, memory_rate_limit_store).await?)
+        }
+        DbBackend::MysqlSqlx => {
+            let adapter = open_mysql_sqlx_adapter(&config.database_url).await?;
             let rate_limit = match config.rate_limit {
                 RateLimitBackend::Database => Some(RateLimitOptions::database(
                     MySqlRateLimitStore::from(&adapter),
@@ -750,6 +828,52 @@ fn example_db_schema(
     )
 }
 
+/// Plugin-augmented schema used by the example's SQL adapters and viewer.
+fn example_auth_schema() -> Result<openauth::db::DbSchema, ExampleError> {
+    example_db_schema(Arc::new(openauth::MemoryAdapter::new()))
+}
+
+async fn open_sqlite_adapter(database_url: &str) -> Result<SqliteAdapter, ExampleError> {
+    Ok(SqliteAdapter::connect_with_schema(database_url, example_auth_schema()?).await?)
+}
+
+async fn open_postgres_sqlx_adapter(database_url: &str) -> Result<PostgresAdapter, ExampleError> {
+    Ok(PostgresAdapter::connect_with_schema(database_url, example_auth_schema()?).await?)
+}
+
+async fn open_postgres_deadpool_adapter(
+    database_url: &str,
+) -> Result<DeadpoolPostgresAdapter, ExampleError> {
+    Ok(
+        DeadpoolPostgresAdapter::connect_with_schema_checked(database_url, example_auth_schema()?)
+            .await?,
+    )
+}
+
+async fn open_mysql_sqlx_adapter(database_url: &str) -> Result<MySqlAdapter, ExampleError> {
+    Ok(MySqlAdapter::connect_with_schema(database_url, example_auth_schema()?).await?)
+}
+
+async fn connect_sql_adapter(
+    db: DbBackend,
+    database_url: &str,
+) -> Result<Arc<dyn openauth::db::DbAdapter>, ExampleError> {
+    let adapter: Arc<dyn openauth::db::DbAdapter> = match db {
+        DbBackend::Sqlite => Arc::new(open_sqlite_adapter(database_url).await?),
+        DbBackend::PostgresSqlx => Arc::new(open_postgres_sqlx_adapter(database_url).await?),
+        DbBackend::PostgresDeadpool => {
+            Arc::new(open_postgres_deadpool_adapter(database_url).await?)
+        }
+        DbBackend::MysqlSqlx => Arc::new(open_mysql_sqlx_adapter(database_url).await?),
+        DbBackend::Memory => {
+            return Err(ExampleError::InvalidConfig(
+                "memory adapters are not opened through connect_sql_adapter".to_owned(),
+            ));
+        }
+    };
+    Ok(adapter)
+}
+
 fn example_open_auth_options(
     adapter: Arc<dyn openauth::db::DbAdapter>,
 ) -> Result<OpenAuthOptions, ExampleError> {
@@ -782,8 +906,7 @@ where
             &config,
             database_rate_limit.ok_or_else(|| {
                 ExampleError::InvalidConfig(
-                    "database rate limiting requires OPENAUTH_EXAMPLE_DB=sqlite, postgres, or mysql"
-                        .to_owned(),
+                    "database rate limiting requires a SQL OPENAUTH_EXAMPLE_DB backend".to_owned(),
                 )
             })?,
         ),
@@ -945,6 +1068,7 @@ fn static_app_with_data(
         memory_rate_limit_store,
         profile_cache: Arc::new(ProfileCache::default()),
         viewer_adapter_cache: Arc::new(ViewerAdapterCache::default()),
+        preferences_store: Arc::new(Mutex::new(None)),
         dev_controls,
     };
 
@@ -1128,10 +1252,7 @@ async fn preferences_json(State(state): State<AppState>) -> Response {
     if let Some(rejection) = control_plane_guard(&state) {
         return rejection;
     }
-    match load_preferences(&state.config).await {
-        Ok(preferences) => Json(preferences).into_response(),
-        Err(error) => json_error(StatusCode::BAD_GATEWAY, &error.to_string()),
-    }
+    Json(load_preferences(&state.config, &state.preferences_store).await).into_response()
 }
 
 async fn save_preferences(
@@ -1144,9 +1265,9 @@ async fn save_preferences(
     if let Err(error) = preferences.validate() {
         return json_error(StatusCode::BAD_REQUEST, &error.to_string());
     }
-    match persist_preferences(&state.config, &preferences).await {
+    match persist_preferences(&state.config, &state.preferences_store, &preferences).await {
         Ok(()) => Json(preferences).into_response(),
-        Err(error) => json_error(StatusCode::BAD_GATEWAY, &error.to_string()),
+        Err(error) => json_error(StatusCode::BAD_REQUEST, &error.to_string()),
     }
 }
 
@@ -1160,9 +1281,10 @@ async fn tables_json(State(state): State<AppState>, Query(query): Query<DbQuery>
     };
     match db {
         DbBackend::Memory => Json(table_summaries(db)).into_response(),
-        DbBackend::Sqlite | DbBackend::Postgres | DbBackend::Mysql => {
-            Json(table_summaries(db)).into_response()
-        }
+        DbBackend::Sqlite
+        | DbBackend::PostgresSqlx
+        | DbBackend::PostgresDeadpool
+        | DbBackend::MysqlSqlx => Json(table_summaries(db)).into_response(),
     }
 }
 
@@ -1335,7 +1457,7 @@ async fn build_profile_auth(
             .await
         }
         DbBackend::Sqlite => {
-            let adapter = SqliteAdapter::connect(&config.database_url).await?;
+            let adapter = open_sqlite_adapter(&config.database_url).await?;
             let database_rate_limit =
                 RateLimitOptions::database(SqliteRateLimitStore::from(&adapter));
             // Schema work is intentionally not done on the request path; the
@@ -1350,8 +1472,8 @@ async fn build_profile_auth(
             )
             .await
         }
-        DbBackend::Postgres => {
-            let adapter = PostgresAdapter::connect(&config.database_url).await?;
+        DbBackend::PostgresSqlx => {
+            let adapter = open_postgres_sqlx_adapter(&config.database_url).await?;
             let database_rate_limit =
                 RateLimitOptions::database(PostgresRateLimitStore::from(&adapter));
             build_auth(
@@ -1363,8 +1485,21 @@ async fn build_profile_auth(
             )
             .await
         }
-        DbBackend::Mysql => {
-            let adapter = MySqlAdapter::connect(&config.database_url).await?;
+        DbBackend::PostgresDeadpool => {
+            let adapter = open_postgres_deadpool_adapter(&config.database_url).await?;
+            let database_rate_limit =
+                RateLimitOptions::database(DeadpoolPostgresRateLimitStore::from(&adapter));
+            build_auth(
+                config,
+                auth_base_path,
+                adapter,
+                Some(database_rate_limit),
+                memory_rate_limit_store,
+            )
+            .await
+        }
+        DbBackend::MysqlSqlx => {
+            let adapter = open_mysql_sqlx_adapter(&config.database_url).await?;
             let database_rate_limit =
                 RateLimitOptions::database(MySqlRateLimitStore::from(&adapter));
             build_auth(
@@ -1416,10 +1551,14 @@ async fn table_rows_for_db(
 
     match db {
         DbBackend::Memory => read_table(&state.memory_adapter, db, query).await,
-        DbBackend::Sqlite | DbBackend::Postgres | DbBackend::Mysql => {
+        DbBackend::Sqlite
+        | DbBackend::PostgresSqlx
+        | DbBackend::PostgresDeadpool
+        | DbBackend::MysqlSqlx => {
+            let schema = viewer_schema();
             let adapter = state
                 .viewer_adapter_cache
-                .get_or_connect(db, &config.database_url)
+                .get_or_connect(db, &config.database_url, &schema)
                 .await?;
             read_table(adapter.as_ref(), db, query).await
         }
@@ -1436,16 +1575,18 @@ async fn seed_database_for_db(
         DbBackend::Memory => {
             seed::seed_database(&state.memory_adapter, &schema, &password_hash).await?
         }
-        DbBackend::Sqlite | DbBackend::Postgres | DbBackend::Mysql => {
+        DbBackend::Sqlite
+        | DbBackend::PostgresSqlx
+        | DbBackend::PostgresDeadpool
+        | DbBackend::MysqlSqlx => {
             let mut config = state.config.clone();
             config.db = db;
             config.database_url = config.database_url_for(db)?;
             ensure_sqlite_parent(&config)?;
             let adapter = state
                 .viewer_adapter_cache
-                .get_or_connect(db, &config.database_url)
+                .get_or_connect_migrated(db, &config.database_url, &schema)
                 .await?;
-            adapter.run_migrations(&schema).await?;
             seed::seed_database(adapter.as_ref(), &schema, &password_hash).await?
         }
     };
@@ -1484,12 +1625,12 @@ async fn drop_database_for_db(
             invalidate_db_caches(state, db).await;
             Ok(serde_json::json!({ "db": db, "deleted": null, "reset_schema": true }))
         }
-        DbBackend::Postgres => {
+        DbBackend::PostgresSqlx | DbBackend::PostgresDeadpool => {
             reset_postgres_schema(&config).await?;
             invalidate_db_caches(state, db).await;
             Ok(serde_json::json!({ "db": db, "deleted": null, "reset_schema": true }))
         }
-        DbBackend::Mysql => {
+        DbBackend::MysqlSqlx => {
             reset_mysql_schema(&config).await?;
             invalidate_db_caches(state, db).await;
             Ok(serde_json::json!({ "db": db, "deleted": null, "reset_schema": true }))
@@ -1498,8 +1639,61 @@ async fn drop_database_for_db(
 }
 
 async fn invalidate_db_caches(state: &AppState, db: DbBackend) {
-    state.profile_cache.invalidate_db(db).await;
-    state.viewer_adapter_cache.invalidate_db(db).await;
+    for shared in db.shared_database_backends() {
+        state.profile_cache.invalidate_db(*shared).await;
+        state.viewer_adapter_cache.invalidate_db(*shared).await;
+    }
+}
+
+const SQL_RESET_DROP_BATCH: usize = 100;
+
+fn quote_mysql_ident(name: &str) -> String {
+    format!("`{}`", name.replace('`', "``"))
+}
+
+fn quote_pg_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+async fn drop_mysql_tables(pool: &sqlx::MySqlPool, tables: &[String]) -> Result<(), ExampleError> {
+    if tables.is_empty() {
+        return Ok(());
+    }
+    let mut conn = pool.acquire().await?;
+    sqlx::query("SET FOREIGN_KEY_CHECKS = 0")
+        .execute(&mut *conn)
+        .await?;
+    for chunk in tables.chunks(SQL_RESET_DROP_BATCH) {
+        let list = chunk
+            .iter()
+            .map(|table| quote_mysql_ident(table))
+            .collect::<Vec<_>>()
+            .join(", ");
+        sqlx::query(&format!("DROP TABLE IF EXISTS {list}"))
+            .execute(&mut *conn)
+            .await?;
+    }
+    sqlx::query("SET FOREIGN_KEY_CHECKS = 1")
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+async fn drop_postgres_tables(pool: &sqlx::PgPool, tables: &[String]) -> Result<(), ExampleError> {
+    if tables.is_empty() {
+        return Ok(());
+    }
+    for chunk in tables.chunks(SQL_RESET_DROP_BATCH) {
+        let list = chunk
+            .iter()
+            .map(|table| quote_pg_ident(table))
+            .collect::<Vec<_>>()
+            .join(", ");
+        sqlx::query(&format!("DROP TABLE IF EXISTS {list} CASCADE"))
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
 }
 
 async fn reset_sqlite_schema(config: &ExampleConfig) -> Result<(), ExampleError> {
@@ -1520,7 +1714,7 @@ async fn reset_sqlite_schema(config: &ExampleConfig) -> Result<(), ExampleError>
     sqlx::query("PRAGMA foreign_keys = ON")
         .execute(&pool)
         .await?;
-    let adapter = SqliteAdapter::connect(&config.database_url).await?;
+    let adapter = open_sqlite_adapter(&config.database_url).await?;
     rebuild_auth_schema(config.clone(), config.db, adapter, None).await
 }
 
@@ -1531,32 +1725,23 @@ async fn reset_postgres_schema(config: &ExampleConfig) -> Result<(), ExampleErro
     )
     .fetch_all(&pool)
     .await?;
-    for table in tables {
-        sqlx::query(&format!("DROP TABLE IF EXISTS \"{table}\" CASCADE"))
-            .execute(&pool)
-            .await?;
-    }
-    let adapter = PostgresAdapter::connect(&config.database_url).await?;
+    drop_postgres_tables(&pool, &tables).await?;
+    let adapter = open_postgres_sqlx_adapter(&config.database_url).await?;
     rebuild_auth_schema(config.clone(), config.db, adapter, None).await
 }
 
 async fn reset_mysql_schema(config: &ExampleConfig) -> Result<(), ExampleError> {
     let pool = sqlx::MySqlPool::connect(&config.database_url).await?;
-    sqlx::query("SET FOREIGN_KEY_CHECKS = 0")
-        .execute(&pool)
-        .await?;
-    let tables = sqlx::query_scalar::<_, String>("SHOW TABLES")
-        .fetch_all(&pool)
-        .await?;
-    for table in tables {
-        sqlx::query(&format!("DROP TABLE IF EXISTS `{table}`"))
-            .execute(&pool)
-            .await?;
-    }
-    sqlx::query("SET FOREIGN_KEY_CHECKS = 1")
-        .execute(&pool)
-        .await?;
-    let adapter = MySqlAdapter::connect(&config.database_url).await?;
+    // Recent MySQL builds expose table-name columns as VARBINARY; cast to CHAR so
+    // sqlx can decode them as Rust strings.
+    let tables = sqlx::query_scalar::<_, String>(
+        "SELECT CAST(table_name AS CHAR) FROM information_schema.tables \
+         WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'",
+    )
+    .fetch_all(&pool)
+    .await?;
+    drop_mysql_tables(&pool, &tables).await?;
+    let adapter = open_mysql_sqlx_adapter(&config.database_url).await?;
     rebuild_auth_schema(config.clone(), config.db, adapter, None).await
 }
 
@@ -1583,27 +1768,53 @@ where
     Ok(())
 }
 
-async fn load_preferences(config: &ExampleConfig) -> Result<ExamplePreferences, ExampleError> {
-    let Some(value) = redis_get(config, PREFERENCES_KEY).await? else {
-        return Ok(ExamplePreferences::from_config(config));
-    };
-    let preferences = serde_json::from_str::<ExamplePreferences>(&value)
-        .unwrap_or_else(|_| ExamplePreferences::from_config(config));
-    if preferences.validate().is_ok() {
-        Ok(preferences)
-    } else {
-        Ok(ExamplePreferences::from_config(config))
+fn local_preferences(
+    config: &ExampleConfig,
+    store: &Arc<Mutex<Option<ExamplePreferences>>>,
+) -> ExamplePreferences {
+    store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+        .unwrap_or_else(|| ExamplePreferences::from_config(config))
+}
+
+async fn load_preferences(
+    config: &ExampleConfig,
+    store: &Arc<Mutex<Option<ExamplePreferences>>>,
+) -> ExamplePreferences {
+    match redis_get(config, PREFERENCES_KEY).await {
+        Ok(Some(value)) => {
+            let preferences = serde_json::from_str::<ExamplePreferences>(&value)
+                .unwrap_or_else(|_| ExamplePreferences::from_config(config));
+            if preferences.validate().is_ok() {
+                preferences
+            } else {
+                ExamplePreferences::from_config(config)
+            }
+        }
+        Ok(None) => local_preferences(config, store),
+        Err(_) => local_preferences(config, store),
     }
 }
 
 async fn persist_preferences(
     config: &ExampleConfig,
+    store: &Arc<Mutex<Option<ExamplePreferences>>>,
     preferences: &ExamplePreferences,
 ) -> Result<(), ExampleError> {
     let value = serde_json::to_string(preferences).map_err(|error| {
         ExampleError::InvalidConfig(format!("preferences could not be encoded: {error}"))
     })?;
-    redis_set(config, PREFERENCES_KEY, &value).await
+    match redis_set(config, PREFERENCES_KEY, &value).await {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            *store
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(preferences.clone());
+            Ok(())
+        }
+    }
 }
 
 async fn redis_get(config: &ExampleConfig, key: &str) -> Result<Option<String>, ExampleError> {
@@ -1691,7 +1902,7 @@ where
 }
 
 fn viewer_schema() -> openauth::db::DbSchema {
-    example_db_schema(Arc::new(openauth::MemoryAdapter::new())).unwrap_or_else(|_| {
+    example_auth_schema().unwrap_or_else(|_| {
         auth_schema(AuthSchemaOptions {
             rate_limit_storage: RateLimitStorage::Database,
             ..AuthSchemaOptions::default()
@@ -1936,7 +2147,13 @@ fn render_home(state: &AppState) -> String {
     let db_options = service_options(
         &state.services,
         &state.runtime.db_backend,
-        &["memory", "sqlite", "postgres", "mysql"],
+        &[
+            "memory",
+            "sqlite",
+            "postgres-sqlx",
+            "postgres-deadpool",
+            "mysql-sqlx",
+        ],
     );
     let rate_limit_options = service_options(
         &state.services,
@@ -2070,7 +2287,7 @@ fn render_home(state: &AppState) -> String {
         <div><span>Selected DB</span><strong data-current-db>{db}</strong></div>
         <div><span>DATABASE_URL</span><strong>{database_url}</strong></div>
       </div>
-      <p class="note">Use <code>OPENAUTH_EXAMPLE_DB</code> with <code>memory</code>, <code>sqlite</code>, <code>postgres</code>, or <code>mysql</code>.</p>
+      <p class="note">Use <code>OPENAUTH_EXAMPLE_DB</code> with <code>memory</code>, <code>sqlite</code>, <code>postgres-sqlx</code>, <code>postgres-deadpool</code>, or <code>mysql-sqlx</code>.</p>
     </section>
 
     <section id="rate-limit" class="panel">
@@ -2258,6 +2475,14 @@ fn service_options(services: &[ServiceStatus], active: &str, values: &[&str]) ->
         .map(|value| {
             let available = match *value {
                 "memory" | "database" => true,
+                "postgres-sqlx" | "postgres-deadpool" => services
+                    .iter()
+                    .find(|service| service.id == "postgres")
+                    .is_some_and(|service| service.available),
+                "mysql-sqlx" => services
+                    .iter()
+                    .find(|service| service.id == "mysql")
+                    .is_some_and(|service| service.available),
                 "hybrid-redis" | "fred-redis" => services
                     .iter()
                     .find(|service| service.id == "redis")
@@ -2309,7 +2534,9 @@ fn display_database_url(config: &ExampleConfig) -> String {
     match config.db {
         DbBackend::Memory => "not used".to_owned(),
         DbBackend::Sqlite => config.database_url.clone(),
-        DbBackend::Postgres | DbBackend::Mysql => redact_password(&config.database_url),
+        DbBackend::PostgresSqlx | DbBackend::PostgresDeadpool | DbBackend::MysqlSqlx => {
+            redact_password(&config.database_url)
+        }
     }
 }
 
@@ -2337,7 +2564,12 @@ fn load_database_urls(
     let mut database_urls = HashMap::new();
     let mut any_explicit = false;
 
-    for db in [DbBackend::Sqlite, DbBackend::Postgres, DbBackend::Mysql] {
+    for db in [
+        DbBackend::Sqlite,
+        DbBackend::PostgresSqlx,
+        DbBackend::PostgresDeadpool,
+        DbBackend::MysqlSqlx,
+    ] {
         if let Some(env_name) = db.per_backend_database_url_env() {
             if let Ok(url) = env::var(env_name) {
                 database_urls.insert(db, url);
@@ -3117,6 +3349,9 @@ document.querySelectorAll(".tab").forEach((tab) => {
 window.addEventListener("hashchange", () => setActiveTab(tabFromHash(), { updateHash: false }));
 setActiveTab(tabFromHash(), { updateHash: false });
 
+const dropDatabaseButton = document.getElementById("drop-database");
+const seedDatabaseButton = document.getElementById("seed-database");
+
 function setLoading(button, loading) {
   if (!button) return;
   if (!button.dataset.defaultText) {
@@ -3127,6 +3362,33 @@ function setLoading(button, loading) {
   button.classList.toggle("is-loading", loading);
   if (label) {
     label.textContent = loading ? (button.dataset.loadingText || "Loading...") : button.dataset.defaultText;
+  }
+}
+
+function setStudioDatabaseBusy(loadingButton, busy) {
+  for (const button of [dropDatabaseButton, seedDatabaseButton]) {
+    if (!button) continue;
+    if (busy && button !== loadingButton) {
+      button.disabled = true;
+      continue;
+    }
+    if (!busy) {
+      button.disabled = false;
+      setLoading(button, false);
+      continue;
+    }
+    setLoading(button, true);
+  }
+}
+
+async function withStudioDatabaseAction(loadingButton, target, task) {
+  setStudioDatabaseBusy(loadingButton, true);
+  try {
+    show(target, await task());
+  } catch (error) {
+    show(target, { error: error.message });
+  } finally {
+    setStudioDatabaseBusy(loadingButton, false);
   }
 }
 
@@ -3429,7 +3691,7 @@ document.getElementById("drop-database")?.addEventListener("click", async (event
 
 dropDialog?.addEventListener("close", async () => {
   if (dropDialog.returnValue !== "confirm") return;
-  await withLoading(dropConfirm, "settings-output", async () => {
+  await withStudioDatabaseAction(dropDatabaseButton, "settings-output", async () => {
     const result = await exampleJson(`/api/example/database/drop?db=${encodeURIComponent(studioDb?.value || "sqlite")}`, { method: "POST" });
     hideSidebarUser();
     await loadStudioTables();
@@ -3438,7 +3700,7 @@ dropDialog?.addEventListener("close", async () => {
 });
 
 document.getElementById("seed-database")?.addEventListener("click", async (event) => {
-  await withLoading(event.currentTarget, "settings-output", async () => {
+  await withStudioDatabaseAction(event.currentTarget, "settings-output", async () => {
     const result = await exampleJson(`/api/example/database/seed?db=${encodeURIComponent(studioDb?.value || "sqlite")}`, { method: "POST" });
     await loadStudioTables();
     await loadStudioRows();
@@ -3659,8 +3921,30 @@ mod tests {
             memory_rate_limit_store: Arc::new(GovernorMemoryRateLimitStore::new()),
             profile_cache: Arc::new(ProfileCache::default()),
             viewer_adapter_cache: Arc::new(ViewerAdapterCache::default()),
+            preferences_store: Arc::new(Mutex::new(None)),
             config,
         }
+    }
+
+    #[tokio::test]
+    async fn preferences_fall_back_when_redis_is_unreachable() -> Result<(), ExampleError> {
+        let mut config = test_example_config(DbBackend::Sqlite, String::new());
+        config.redis_url = "redis://127.0.0.1:6399".to_owned();
+        let store = Arc::new(Mutex::new(None));
+
+        let preferences = load_preferences(&config, &store).await;
+        assert_eq!(preferences.db, "sqlite");
+        assert_eq!(preferences.rate_limit, "memory");
+
+        let updated = ExamplePreferences {
+            db: "memory".to_owned(),
+            rate_limit: "redis".to_owned(),
+        };
+        persist_preferences(&config, &store, &updated).await?;
+        let preferences = load_preferences(&config, &store).await;
+        assert_eq!(preferences.db, "memory");
+        assert_eq!(preferences.rate_limit, "redis");
+        Ok(())
     }
 
     #[test]
@@ -3669,8 +3953,8 @@ mod tests {
         config.database_url = DbBackend::Sqlite.default_database_url();
         config.allow_default_database_urls = true;
         assert_eq!(
-            config.database_url_for(DbBackend::Postgres)?,
-            DbBackend::Postgres.default_database_url()
+            config.database_url_for(DbBackend::PostgresSqlx)?,
+            DbBackend::PostgresSqlx.default_database_url()
         );
         Ok(())
     }
@@ -3692,13 +3976,13 @@ mod tests {
             custom_sqlite.clone(),
         ))?;
 
-        let mut config = test_example_config(DbBackend::Postgres, custom_postgres.clone());
+        let mut config = test_example_config(DbBackend::PostgresSqlx, custom_postgres.clone());
         config
             .database_urls
             .insert(DbBackend::Sqlite, custom_sqlite.clone());
 
         assert_eq!(
-            config.database_url_for(DbBackend::Postgres)?,
+            config.database_url_for(DbBackend::PostgresSqlx)?,
             custom_postgres
         );
         assert_eq!(config.database_url_for(DbBackend::Sqlite)?, custom_sqlite);
@@ -3719,7 +4003,7 @@ mod tests {
         drop(auth);
 
         assert!(matches!(
-            config.database_url_for(DbBackend::Mysql),
+            config.database_url_for(DbBackend::MysqlSqlx),
             Err(ExampleError::InvalidConfig(_))
         ));
 
@@ -3744,7 +4028,7 @@ mod tests {
         ))?;
 
         let custom_postgres = "postgres://custom:pass@127.0.0.1:5432/custom_openauth".to_owned();
-        let mut config = test_example_config(DbBackend::Postgres, custom_postgres);
+        let mut config = test_example_config(DbBackend::PostgresSqlx, custom_postgres);
         config
             .database_urls
             .insert(DbBackend::Sqlite, custom_sqlite.clone());
@@ -3786,7 +4070,7 @@ mod tests {
         assert!(matches!(
             table_rows_for_db(
                 &state,
-                DbBackend::Mysql,
+                DbBackend::MysqlSqlx,
                 TableQuery {
                     db: Some("mysql".to_owned()),
                     table: Some("user".to_owned()),
@@ -3824,15 +4108,179 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn seed_populates_sqlite_tables() -> Result<(), ExampleError> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| ExampleError::InvalidConfig(error.to_string()))?
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "openauth-example-seed-{}-{nanos}.sqlite",
+            std::process::id()
+        ));
+        let database_url = format!("sqlite://{}", path.display());
+        ensure_sqlite_parent(&test_example_config(
+            DbBackend::Sqlite,
+            database_url.clone(),
+        ))?;
+
+        let schema = viewer_schema();
+        let adapter = SqliteAdapter::connect_with_schema(&database_url, schema.clone()).await?;
+        adapter.run_migrations(&schema).await?;
+        let password_hash = seed::seed_password_hash()?;
+        let summary = seed::seed_database(&adapter, &schema, &password_hash).await?;
+        let table_lookup_errors = summary
+            .tables
+            .iter()
+            .filter_map(|table| table.error.as_deref())
+            .filter(|error| error.contains("schema table"))
+            .collect::<Vec<_>>();
+        assert!(
+            table_lookup_errors.is_empty(),
+            "adapter schema must match viewer schema during seed: {table_lookup_errors:?}"
+        );
+        assert!(
+            summary.tables_seeded >= 15,
+            "expected broad plugin coverage, got {} tables seeded ({:?})",
+            summary.tables_seeded,
+            summary
+                .tables
+                .iter()
+                .filter(|table| table.error.is_some())
+                .collect::<Vec<_>>()
+        );
+        let users = adapter
+            .count(openauth::db::Count::new("user"))
+            .await
+            .map_err(ExampleError::from)?;
+        assert!(users >= 1);
+
+        let _ = std::fs::remove_file(&path);
+        Ok(())
+    }
+
+    async fn seed_external_database(db: DbBackend, database_url: &str) -> Result<(), ExampleError> {
+        let schema = viewer_schema();
+        let adapter = match db {
+            DbBackend::PostgresSqlx => {
+                Arc::new(PostgresAdapter::connect_with_schema(database_url, schema.clone()).await?)
+                    as Arc<dyn DbAdapter>
+            }
+            DbBackend::MysqlSqlx => {
+                Arc::new(MySqlAdapter::connect_with_schema(database_url, schema.clone()).await?)
+                    as Arc<dyn DbAdapter>
+            }
+            other => {
+                return Err(ExampleError::InvalidConfig(format!(
+                    "unsupported external seed backend `{}`",
+                    other.as_str()
+                )));
+            }
+        };
+        adapter.run_migrations(&schema).await?;
+        let password_hash = seed::seed_password_hash()?;
+        let summary = seed::seed_database(adapter.as_ref(), &schema, &password_hash).await?;
+        let failures = summary
+            .tables
+            .iter()
+            .filter_map(|table| {
+                table
+                    .error
+                    .as_deref()
+                    .map(|error| (table.table.clone(), error))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            failures.is_empty(),
+            "seed failures for {}: {failures:?}",
+            db.as_str()
+        );
+        assert!(
+            summary.tables_seeded >= 15,
+            "expected broad plugin coverage for {}, got {} tables seeded",
+            db.as_str(),
+            summary.tables_seeded
+        );
+        let users = adapter
+            .count(Count::new("user"))
+            .await
+            .map_err(ExampleError::from)?;
+        assert!(users >= 1, "expected seeded user row for {}", db.as_str());
+        Ok(())
+    }
+
+    async fn external_database_available(db: DbBackend, database_url: &str) -> bool {
+        match db {
+            DbBackend::PostgresSqlx => sqlx::PgPool::connect(database_url).await.is_ok(),
+            DbBackend::MysqlSqlx => sqlx::MySqlPool::connect(database_url).await.is_ok(),
+            _ => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn seed_populates_postgres_tables() -> Result<(), ExampleError> {
+        let database_url = DbBackend::PostgresSqlx.default_database_url();
+        if !external_database_available(DbBackend::PostgresSqlx, &database_url).await {
+            eprintln!("skipping postgres seed test: database unavailable at {database_url}");
+            return Ok(());
+        }
+        seed_external_database(DbBackend::PostgresSqlx, &database_url).await
+    }
+
+    async fn mysql_table_exists(pool: &sqlx::MySqlPool, table: &str) -> Result<bool, ExampleError> {
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM information_schema.tables \
+             WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' \
+             AND table_name = ?",
+        )
+        .bind(table)
+        .fetch_one(pool)
+        .await?;
+        Ok(exists > 0)
+    }
+
+    #[tokio::test]
+    async fn mysql_seed_and_schema_reset_integration() -> Result<(), ExampleError> {
+        let database_url = DbBackend::MysqlSqlx.default_database_url();
+        if !external_database_available(DbBackend::MysqlSqlx, &database_url).await {
+            eprintln!("skipping mysql integration test: database unavailable at {database_url}");
+            return Ok(());
+        }
+
+        seed_external_database(DbBackend::MysqlSqlx, &database_url).await?;
+
+        const LEGACY_TABLE: &str = "openauth_example_legacy_reset_probe";
+        let pool = sqlx::MySqlPool::connect(&database_url).await?;
+        sqlx::query(&format!(
+            "CREATE TABLE IF NOT EXISTS `{LEGACY_TABLE}` (id INT PRIMARY KEY)"
+        ))
+        .execute(&pool)
+        .await?;
+        assert!(
+            mysql_table_exists(&pool, LEGACY_TABLE).await?,
+            "expected legacy probe table before reset"
+        );
+
+        let mut config = test_example_config(DbBackend::MysqlSqlx, database_url.clone());
+        config.db = DbBackend::MysqlSqlx;
+        reset_mysql_schema(&config).await?;
+
+        assert!(
+            !mysql_table_exists(&pool, LEGACY_TABLE).await?,
+            "reset should drop legacy tables that are not part of the current schema"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn schema_reset_rejects_unconfigured_alternate_backend() -> Result<(), ExampleError> {
         let config = test_example_config(
-            DbBackend::Postgres,
+            DbBackend::PostgresSqlx,
             "postgres://custom:pass@127.0.0.1:5432/custom_openauth".to_owned(),
         );
         let state = test_app_state(config);
 
         assert!(matches!(
-            drop_database_for_db(&state, DbBackend::Mysql).await,
+            drop_database_for_db(&state, DbBackend::MysqlSqlx).await,
             Err(ExampleError::InvalidConfig(_))
         ));
         Ok(())
@@ -3949,9 +4397,10 @@ mod tests {
         ))?;
         let cache = ViewerAdapterCache::default();
 
+        let schema = viewer_schema();
         for _ in 0..5 {
             cache
-                .get_or_connect(DbBackend::Sqlite, &database_url)
+                .get_or_connect(DbBackend::Sqlite, &database_url, &schema)
                 .await?;
         }
 
@@ -3963,7 +4412,7 @@ mod tests {
 
         cache.invalidate_db(DbBackend::Sqlite).await;
         cache
-            .get_or_connect(DbBackend::Sqlite, &database_url)
+            .get_or_connect(DbBackend::Sqlite, &database_url, &schema)
             .await?;
         assert_eq!(
             cache.connect_count(),
