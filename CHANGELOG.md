@@ -19,6 +19,11 @@ Versioning while the API is still pre-1.0.
 
 ### Changed
 
+- **Breaking:** Storage adapter crates (`openauth-sqlx`, `openauth-deadpool-postgres`,
+  `openauth-tokio-postgres`, `openauth-redis`, `openauth-fred`) now lead with
+  bundled `*Stores` types and `apply_to_options` for the recommended app-dev
+  setup. See each crate's README and CHANGELOG for removed constructors and
+  migration re-exports (`openauth_core::db` is canonical).
 - `openauth-sqlx`, `openauth-tokio-postgres`: Postgres migration planning now
   loads schema snapshots with a fixed set of batched catalog queries instead of
   per-column `information_schema` round trips.

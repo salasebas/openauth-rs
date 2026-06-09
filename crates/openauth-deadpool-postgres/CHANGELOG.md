@@ -4,6 +4,26 @@ All notable changes to `openauth-deadpool-postgres` are documented in this file.
 
 ## Unreleased
 
+## [0.1.1] - 2026-06-09
+
+### Added
+
+- `DeadpoolPostgresStores` bundles the pooled adapter and SQL-backed rate-limit
+  store with `apply_to_options`.
+- `DeadpoolPostgresBuilder` replaces the previous matrix of `connect_*` and
+  `from_config_*` constructors (`.database_url()`, `.schema()`, `.checked()`,
+  `.max_size()`, `.config()`, `.connect()`, `.connect_tls()`, `.build_adapter()`).
+
+### Changed
+
+- **Breaking:** Removed `DeadpoolPostgresAdapter::{connect, connect_checked,
+  connect_with_schema, connect_with_schema_checked, connect_tls,
+  connect_tls_checked, connect_with_schema_tls, connect_with_schema_tls_checked,
+  from_config, from_config_tls, from_config_with_schema,
+  from_config_with_schema_tls}`. Use `DeadpoolPostgresAdapter::builder()` or
+  `DeadpoolPostgresStores::connect*`.
+- **Breaking:** Removed the public `migration` module. Import planning types from
+  `openauth_core::db`.
 
 ### Fixed
 

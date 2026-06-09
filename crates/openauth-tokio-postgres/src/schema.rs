@@ -9,7 +9,7 @@ use openauth_core::error::OpenAuthError;
 use tokio_postgres::{Client, Row};
 
 use super::errors::postgres_error;
-use crate::migration::SchemaMigrationPlan;
+use openauth_core::db::SchemaMigrationPlan;
 
 pub async fn plan_migrations(
     client: &Client,
