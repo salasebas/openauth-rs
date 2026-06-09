@@ -48,20 +48,20 @@ jobs:
           crates=(
             openauth-oauth
             openauth-oidc
-            openauth-stripe
             openauth-social-providers
             openauth-core
+            openauth-stripe
             openauth-saml
-            openauth-scim
             openauth-i18n
-            openauth-plugins
             openauth-sqlx
             openauth-telemetry
             openauth-tokio-postgres
             openauth-deadpool-postgres
-            openauth-passkey
             openauth-redis
+            openauth-plugins
+            openauth-passkey
             openauth-sso
+            openauth-scim
             openauth-oauth-provider
             openauth
             openauth-fred
@@ -113,8 +113,27 @@ jobs:
             rm -f "$publish_log"
           done
 
+      - name: Prepare release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          awk -v version="$tag" '
+            /^## \[/ {
+              if (found) exit
+              if ($0 ~ "^## \\[" version "\\]") found = 1
+              next
+            }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "Release notes not found in CHANGELOG.md for version ${tag}" >&2
+            exit 1
+          fi
+
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          name: ${{ github.ref_name }}
+          body_path: release_notes.md
+          generate_release_notes: false
