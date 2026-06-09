@@ -11,11 +11,12 @@ use josekit::jwk::{Jwk, JwkSet};
 use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::Rs256;
 use josekit::jws::JwsHeader;
 use josekit::jwt::{self, JwtPayload};
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthError, OAuthProviderContract};
+use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthError};
 use openauth_social_providers::cognito::{
     cognito, cognito_issuer, cognito_jwks_uri, CognitoAuthorizationUrlInput, CognitoOptions,
 };
 use openauth_social_providers::http::ProviderHttpClient;
+use openauth_social_providers::ProviderIdentity;
 use serde_json::json;
 use time::OffsetDateTime;
 use url::Url;

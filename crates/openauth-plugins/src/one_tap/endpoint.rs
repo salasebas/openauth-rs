@@ -168,7 +168,7 @@ fn google_provider(
                 ..provider_options
             },
             ..GoogleOptions::default()
-        })));
+        })?));
     }
 
     context.social_provider(GOOGLE_PROVIDER_ID).ok_or_else(|| {

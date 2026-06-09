@@ -5,22 +5,27 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthError, ProviderOptions};
+use openauth_oauth::oauth2::{
+    create_authorization_code_request, create_refresh_access_token_request,
+    AuthorizationCodeRequest, ClientAuthentication, ClientId, ClientSecret, OAuth2Tokens,
+    OAuthError, ProviderOptions, RefreshAccessTokenRequest,
+};
 use openauth_social_providers::railway::{
     railway, RailwayAuthorizationUrlRequest, RailwayProfile, RAILWAY_AUTHORIZATION_ENDPOINT,
     RAILWAY_ID, RAILWAY_NAME, RAILWAY_TOKEN_ENDPOINT,
 };
+use openauth_social_providers::ProviderIdentity;
 
 #[test]
 fn railway_provider_exposes_upstream_metadata() {
-    let provider = railway(provider_options());
+    let provider = railway(provider_options()).expect("provider should construct");
 
     assert_eq!((provider.id(), provider.name()), (RAILWAY_ID, RAILWAY_NAME));
 }
 
 #[test]
 fn railway_authorization_url_uses_default_scopes_and_pkce() -> Result<(), OAuthError> {
-    let provider = railway(provider_options());
+    let provider = railway(provider_options()).expect("provider should construct");
     let url = provider.create_authorization_url(RailwayAuthorizationUrlRequest {
         state: "state-1".to_owned(),
         redirect_uri: "https://app.example.com/auth/callback/railway".to_owned(),
@@ -50,10 +55,11 @@ fn railway_authorization_url_appends_provider_scopes_before_request_scopes(
 ) -> Result<(), OAuthError> {
     let provider = railway(ProviderOptions {
         client_id: Some(ClientId::from("railway-client")),
-        client_secret: Some("railway-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("railway-secret").expect("valid client secret")),
         scope: vec!["team:read".to_owned()],
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(RailwayAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -71,26 +77,15 @@ fn railway_authorization_url_appends_provider_scopes_before_request_scopes(
 
 #[test]
 fn railway_authorization_url_requires_client_id_and_secret() {
-    let provider = railway(ProviderOptions::default());
-
-    let error = provider
-        .create_authorization_url(RailwayAuthorizationUrlRequest {
-            state: "state-1".to_owned(),
-            redirect_uri: "https://app.example.com/auth/callback/railway".to_owned(),
-            code_verifier: Some("01234567890123456789012345678901234567890123456789".to_owned()),
-            scopes: Vec::new(),
-        })
-        .unwrap_err();
-
-    assert_eq!(
-        error.to_string(),
-        "missing OAuth provider option `client_id`"
-    );
+    assert!(matches!(
+        railway(ProviderOptions::default()),
+        Err(OAuthError::MissingOption("client_id"))
+    ));
 }
 
 #[test]
 fn railway_authorization_url_allows_missing_code_verifier() {
-    let provider = railway(provider_options());
+    let provider = railway(provider_options()).expect("provider should construct");
 
     let url = provider
         .create_authorization_url(RailwayAuthorizationUrlRequest {
@@ -108,11 +103,15 @@ fn railway_authorization_url_allows_missing_code_verifier() {
 
 #[test]
 fn railway_token_requests_use_basic_auth() -> Result<(), OAuthError> {
-    let provider = railway(provider_options());
-    let request = provider.authorization_code_request(
-        "code-1",
-        Some("01234567890123456789012345678901234567890123456789"),
-        "https://app.example.com/auth/callback/railway",
+    let provider = railway(provider_options()).expect("provider should construct");
+    let request = create_authorization_code_request(
+        AuthorizationCodeRequest::try_new(
+            "code-1",
+            "https://app.example.com/auth/callback/railway",
+            provider.options(),
+        )?
+        .authentication(ClientAuthentication::Basic)
+        .code_verifier("01234567890123456789012345678901234567890123456789"),
     )?;
 
     assert_eq!(
@@ -136,8 +135,11 @@ fn railway_token_requests_use_basic_auth() -> Result<(), OAuthError> {
 
 #[test]
 fn railway_refresh_requests_use_basic_auth() -> Result<(), OAuthError> {
-    let provider = railway(provider_options());
-    let request = provider.refresh_access_token_request("refresh-1")?;
+    let provider = railway(provider_options()).expect("provider should construct");
+    let request = create_refresh_access_token_request(
+        RefreshAccessTokenRequest::try_new("refresh-1", provider.options())?
+            .authentication(ClientAuthentication::Basic),
+    )?;
 
     assert_eq!(provider.token_endpoint(), RAILWAY_TOKEN_ENDPOINT);
     assert_eq!(
@@ -174,7 +176,7 @@ fn railway_profile_maps_to_unverified_user_info() {
 
 #[tokio::test]
 async fn railway_get_user_info_returns_none_without_access_token() -> Result<(), OAuthError> {
-    let provider = railway(provider_options());
+    let provider = railway(provider_options()).expect("provider should construct");
 
     let user_info = provider.get_user_info(&OAuth2Tokens::default()).await?;
 
@@ -185,7 +187,7 @@ async fn railway_get_user_info_returns_none_without_access_token() -> Result<(),
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("railway-client")),
-        client_secret: Some("railway-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("railway-secret").expect("valid client secret")),
         ..ProviderOptions::default()
     }
 }

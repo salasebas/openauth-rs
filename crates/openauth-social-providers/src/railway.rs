@@ -1,13 +1,12 @@
 //! Railway social provider.
 
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token_request,
-    validate_authorization_code, AuthorizationCodeRequest, AuthorizationUrlRequest,
-    ClientAuthentication, ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError,
-    OAuthFormRequest, OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
+    ClientAuthentication, OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const RAILWAY_ID: &str = "railway";
 pub const RAILWAY_NAME: &str = "Railway";
@@ -50,34 +49,40 @@ pub struct RailwayUserInfo {
     pub data: RailwayProfile,
 }
 
+/// Railway OAuth provider configuration.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RailwayProviderOptions {
+    pub oauth: ProviderOptions,
+}
+
 #[derive(Debug, Clone)]
 pub struct RailwayProvider {
-    options: ProviderOptions,
+    client: OAuth2Client,
     http_client: reqwest::Client,
 }
 
-pub fn railway(options: ProviderOptions) -> RailwayProvider {
-    RailwayProvider::new(options)
+pub fn railway(options: ProviderOptions) -> Result<RailwayProvider, OAuthError> {
+    RailwayProvider::new(RailwayProviderOptions { oauth: options })
 }
 
 impl RailwayProvider {
-    pub fn new(options: ProviderOptions) -> Self {
-        Self {
-            options,
-            http_client: crate::http::shared_client(),
+    pub fn new(options: RailwayProviderOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(RAILWAY_ID, options.oauth)
+            .authorization_endpoint(RAILWAY_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(RAILWAY_TOKEN_ENDPOINT)?
+            .authentication(ClientAuthentication::Basic);
+        if !disable_default_scope {
+            builder = builder.default_scopes(RAILWAY_DEFAULT_SCOPES.iter().copied());
         }
+        Ok(Self {
+            client: builder.build()?,
+            http_client: crate::http::shared_client(),
+        })
     }
 
-    pub fn id(&self) -> &str {
-        RAILWAY_ID
-    }
-
-    pub fn name(&self) -> &str {
-        RAILWAY_NAME
-    }
-
-    pub fn options(&self) -> &ProviderOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn token_endpoint(&self) -> &str {
@@ -93,33 +98,13 @@ impl RailwayProvider {
         request: RailwayAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
         self.ensure_client_credentials()?;
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: RAILWAY_ID.to_owned(),
-            options: self.options.clone(),
-            authorization_endpoint: RAILWAY_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: request.code_verifier,
-            scopes: self.scopes(request.scopes),
-            ..AuthorizationUrlRequest::default()
-        })
-    }
-
-    pub fn authorization_code_request(
-        &self,
-        code: impl Into<String>,
-        code_verifier: Option<impl Into<String>>,
-        redirect_uri: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.clone(),
-            code_verifier: code_verifier.map(Into::into),
-            authentication: ClientAuthentication::Basic,
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?;
+        if let Some(code_verifier) = request.code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        url.scopes(request.scopes).build()
     }
 
     pub async fn validate_authorization_code(
@@ -128,46 +113,18 @@ impl RailwayProvider {
         code_verifier: Option<impl Into<String>>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: RAILWAY_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.clone(),
-                code_verifier: code_verifier.map(Into::into),
-                authentication: ClientAuthentication::Basic,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
-    }
-
-    pub fn refresh_access_token_request(
-        &self,
-        refresh_token: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.clone(),
-            authentication: ClientAuthentication::Basic,
-            ..RefreshAccessTokenRequest::default()
-        })
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        openauth_oauth::oauth2::refresh_access_token(ClientTokenRequest {
-            token_endpoint: RAILWAY_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.clone(),
-                authentication: ClientAuthentication::Basic,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(
@@ -201,43 +158,20 @@ impl RailwayProvider {
         }))
     }
 
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.disable_default_scope {
-            Vec::new()
-        } else {
-            RAILWAY_DEFAULT_SCOPES
-                .iter()
-                .map(|scope| (*scope).to_owned())
-                .collect()
-        };
-        scopes.extend(self.options.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
-
     fn ensure_client_credentials(&self) -> Result<(), OAuthError> {
-        if openauth_oauth::oauth2::get_primary_client_id(&self.options.client_id).is_none() {
-            return Err(OAuthError::MissingOption("client_id"));
-        }
-        if self
-            .options
-            .client_secret
-            .as_deref()
-            .unwrap_or("")
-            .is_empty()
-        {
+        if self.client.options().client_secret.is_none() {
             return Err(OAuthError::MissingOption("client_secret"));
         }
         Ok(())
     }
 }
 
-impl OAuthProviderContract for RailwayProvider {
+impl ProviderIdentity for RailwayProvider {
     fn id(&self) -> &str {
-        self.id()
+        RAILWAY_ID
     }
 
     fn name(&self) -> &str {
-        self.name()
+        RAILWAY_NAME
     }
 }

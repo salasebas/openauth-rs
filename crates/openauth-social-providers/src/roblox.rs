@@ -3,21 +3,23 @@
 use std::collections::BTreeMap;
 
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token,
-    refresh_access_token_request, validate_authorization_code, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract, OAuthProviderMetadata,
-    ProviderOptions, RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
+use crate::runtime::ProviderIdentity;
+
+const AUTHORIZATION_ENDPOINT: &str = "https://apis.roblox.com/oauth/v1/authorize";
+const TOKEN_ENDPOINT: &str = "https://apis.roblox.com/oauth/v1/token";
+const USER_INFO_ENDPOINT: &str = "https://apis.roblox.com/oauth/v1/userinfo";
+
 pub const ROBLOX_ID: &str = "roblox";
 pub const ROBLOX_NAME: &str = "Roblox";
-pub const ROBLOX_AUTHORIZATION_ENDPOINT: &str = "https://apis.roblox.com/oauth/v1/authorize";
-pub const ROBLOX_TOKEN_ENDPOINT: &str = "https://apis.roblox.com/oauth/v1/token";
-pub const ROBLOX_USER_INFO_ENDPOINT: &str = "https://apis.roblox.com/oauth/v1/userinfo";
+pub const ROBLOX_AUTHORIZATION_ENDPOINT: &str = AUTHORIZATION_ENDPOINT;
+pub const ROBLOX_TOKEN_ENDPOINT: &str = TOKEN_ENDPOINT;
+pub const ROBLOX_USER_INFO_ENDPOINT: &str = USER_INFO_ENDPOINT;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RobloxPrompt {
@@ -73,51 +75,56 @@ pub struct RobloxUserInfo {
     pub data: RobloxProfile,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RobloxProvider {
-    options: RobloxOptions,
-    metadata: OAuthProviderMetadata,
+    client: OAuth2Client,
+    prompt: RobloxPrompt,
 }
 
-pub fn roblox(options: RobloxOptions) -> RobloxProvider {
+pub fn roblox(options: RobloxOptions) -> Result<RobloxProvider, OAuthError> {
     RobloxProvider::new(options)
 }
 
 impl RobloxProvider {
-    pub fn new(options: RobloxOptions) -> Self {
-        Self {
-            options,
-            metadata: OAuthProviderMetadata::new(ROBLOX_ID, ROBLOX_NAME),
+    pub fn new(options: RobloxOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder("roblox", options.oauth)
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(TOKEN_ENDPOINT)?
+            .scope_joiner("+");
+        if !disable_default_scope {
+            builder = builder.default_scopes(["openid", "profile"]);
+        }
+        Ok(Self {
+            client: builder.build()?,
+            prompt: options.prompt,
+        })
+    }
+
+    pub fn options(&self) -> RobloxOptions {
+        RobloxOptions {
+            oauth: self.client.options().clone(),
+            prompt: self.prompt,
         }
     }
 
-    pub fn options(&self) -> &RobloxOptions {
-        &self.options
-    }
-
     pub fn token_endpoint(&self) -> &str {
-        ROBLOX_TOKEN_ENDPOINT
+        self.client.token_endpoint().as_str()
     }
 
     pub fn user_info_endpoint(&self) -> &str {
-        ROBLOX_USER_INFO_ENDPOINT
+        USER_INFO_ENDPOINT
     }
 
     pub fn create_authorization_url(
         &self,
         request: RobloxAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: ROBLOX_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: ROBLOX_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            scopes: self.authorization_scopes(request.scopes),
-            prompt: Some(self.options.prompt.as_str().to_owned()),
-            scope_joiner: "+".to_owned(),
-            ..AuthorizationUrlRequest::default()
-        })
+        self.client
+            .authorization_url(request.state, request.redirect_uri)?
+            .scopes(request.scopes)
+            .prompt(self.prompt.as_str())
+            .build()
     }
 
     pub fn create_authorization_code_request(
@@ -125,13 +132,9 @@ impl RobloxProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        self.client
+            .exchange_code(code, redirect_uri)?
+            .into_form_request()
     }
 
     pub async fn validate_authorization_code(
@@ -139,45 +142,23 @@ impl RobloxProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: ROBLOX_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        self.client.exchange_code(code, redirect_uri)?.send().await
     }
 
     pub fn refresh_access_token_request(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .refresh_token(refresh_token)?
+            .into_form_request()
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: ROBLOX_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(
@@ -189,7 +170,7 @@ impl RobloxProvider {
         };
 
         let response = match crate::http::shared_client()
-            .get(ROBLOX_USER_INFO_ENDPOINT)
+            .get(USER_INFO_ENDPOINT)
             .header("authorization", format!("Bearer {access_token}"))
             .send()
             .await
@@ -228,30 +209,21 @@ impl RobloxProvider {
         }
     }
 
-    fn authorization_scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            vec!["openid".to_owned(), "profile".to_owned()]
-        };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
+    pub fn id(&self) -> &str {
+        ROBLOX_ID
+    }
+
+    pub fn name(&self) -> &str {
+        ROBLOX_NAME
     }
 }
 
-impl Default for RobloxProvider {
-    fn default() -> Self {
-        Self::new(RobloxOptions::default())
-    }
-}
-
-impl OAuthProviderContract for RobloxProvider {
+impl ProviderIdentity for RobloxProvider {
     fn id(&self) -> &str {
-        self.metadata.id()
+        self.id()
     }
 
     fn name(&self) -> &str {
-        self.metadata.name()
+        self.name()
     }
 }

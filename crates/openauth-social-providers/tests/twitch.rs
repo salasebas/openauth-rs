@@ -10,9 +10,7 @@ use josekit::jwk::{Jwk, JwkSet};
 use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::Rs256;
 use josekit::jws::JwsHeader;
 use josekit::jwt::{self, JwtPayload};
-use openauth_oauth::oauth2::{
-    ClientId, OAuth2Tokens, OAuthError, OAuthProviderContract, ProviderOptions,
-};
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions};
 use openauth_social_providers::twitch::{
     twitch, TwitchAuthorizationUrlRequest, TwitchOptions, TWITCH_AUTHORIZATION_ENDPOINT,
     TWITCH_DEFAULT_CLAIMS, TWITCH_DEFAULT_SCOPES, TWITCH_ID, TWITCH_ISSUER, TWITCH_NAME,
@@ -23,13 +21,8 @@ use time::OffsetDateTime;
 
 #[test]
 fn twitch_provider_exposes_upstream_metadata() {
-    let provider = twitch(twitch_options());
-    let provider_contract: &dyn OAuthProviderContract = &provider;
-
-    assert_eq!(
-        (provider_contract.id(), provider_contract.name()),
-        (TWITCH_ID, TWITCH_NAME)
-    );
+    let provider = twitch(twitch_options()).expect("provider should construct");
+    assert_eq!((provider.id(), provider.name()), (TWITCH_ID, TWITCH_NAME));
 }
 
 #[test]
@@ -41,7 +34,8 @@ fn twitch_authorization_url_uses_upstream_default_scopes_and_claims() -> Result<
             ..ProviderOptions::default()
         },
         ..TwitchOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(TwitchAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -89,7 +83,8 @@ fn twitch_authorization_url_can_disable_default_scope() -> Result<(), OAuthError
             ..ProviderOptions::default()
         },
         ..TwitchOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(TwitchAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -113,7 +108,8 @@ fn twitch_authorization_url_allows_claim_override() -> Result<(), OAuthError> {
         },
         claims: vec!["preferred_username".to_owned()],
         ..TwitchOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(TwitchAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -127,7 +123,7 @@ fn twitch_authorization_url_allows_claim_override() -> Result<(), OAuthError> {
 
 #[test]
 fn twitch_authorization_code_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = twitch(twitch_options());
+    let provider = twitch(twitch_options()).expect("provider should construct");
     let request =
         provider.authorization_code_request("code-1", "https://app.example.com/auth/callback")?;
 
@@ -145,7 +141,7 @@ fn twitch_authorization_code_request_matches_upstream_form_contract() -> Result<
 
 #[test]
 fn twitch_refresh_token_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = twitch(twitch_options());
+    let provider = twitch(twitch_options()).expect("provider should construct");
     let request = provider.refresh_access_token_request("refresh-1")?;
 
     assert_eq!(request.form_value("grant_type"), Some("refresh_token"));
@@ -157,7 +153,7 @@ fn twitch_refresh_token_request_matches_upstream_form_contract() -> Result<(), O
 
 #[tokio::test]
 async fn twitch_get_user_info_maps_decoded_id_token_profile() -> Result<(), OAuthError> {
-    let provider = twitch(twitch_options());
+    let provider = twitch(twitch_options()).expect("provider should construct");
     let id_token = unsigned_jwt(json!({
         "sub": "twitch-user-1",
         "preferred_username": "ada_streams",
@@ -189,7 +185,7 @@ async fn twitch_get_user_info_maps_decoded_id_token_profile() -> Result<(), OAut
 
 #[tokio::test]
 async fn twitch_get_user_info_returns_none_without_id_token() -> Result<(), OAuthError> {
-    let provider = twitch(twitch_options());
+    let provider = twitch(twitch_options()).expect("provider should construct");
 
     let info = provider.get_user_info(&OAuth2Tokens::default()).await?;
 
@@ -209,7 +205,7 @@ async fn twitch_verify_id_token_accepts_signed_token_with_expected_claims() -> R
         true,
     );
     let jwks = jwks_with_keys(vec![jwk]);
-    let provider = twitch(twitch_options());
+    let provider = twitch(twitch_options()).expect("provider should construct");
 
     assert!(provider.verify_id_token_with_jwk_set(&token, Some("nonce-1"), &jwks)?);
     Ok(())
@@ -233,7 +229,7 @@ async fn twitch_verify_id_token_rejects_unsigned_invalid_claims_and_wrong_keys(
         true,
     );
     let jwks = jwks_with_keys(vec![jwk]);
-    let provider = twitch(twitch_options());
+    let provider = twitch(twitch_options()).expect("provider should construct");
     assert!(!provider.verify_id_token_with_jwk_set(&unsigned, Some("nonce-1"), &jwks)?);
 
     let (wrong_audience, _) = signed_twitch_id_token(
@@ -313,7 +309,7 @@ async fn twitch_verify_id_token_rejects_unsigned_invalid_claims_and_wrong_keys(
         true,
     );
     let wrong_key_jwks = jwks_with_keys(vec![wrong_key]);
-    let wrong_key_provider = twitch(twitch_options());
+    let wrong_key_provider = twitch(twitch_options()).expect("provider should construct");
     assert!(!wrong_key_provider.verify_id_token_with_jwk_set(
         &wrong_key_token,
         Some("nonce-1"),
@@ -333,7 +329,7 @@ async fn twitch_verify_id_token_rejects_tokens_missing_standard_claims() -> Resu
         "exp": now + 3600,
         "iat": now
     });
-    let provider = twitch(twitch_options());
+    let provider = twitch(twitch_options()).expect("provider should construct");
 
     for missing in ["sub", "aud", "iss", "exp"] {
         let mut claims = base.clone();
@@ -356,7 +352,7 @@ fn twitch_options() -> TwitchOptions {
     TwitchOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("twitch-client")),
-            client_secret: Some("twitch-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("twitch-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
         ..TwitchOptions::default()

@@ -1,15 +1,25 @@
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "provider tests intentionally fail fast with contextual setup errors"
+)]
+
+use openauth_social_providers::ProviderIdentity;
 use std::sync::Arc;
 
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions};
+use openauth_oauth::oauth2::{
+    create_authorization_code_request, create_refresh_access_token_request,
+    AuthorizationCodeRequest, ClientId, ClientSecret, OAuth2Tokens, OAuth2UserInfo, OAuthError,
+    ProviderOptions, RefreshAccessTokenRequest,
+};
 use openauth_social_providers::linear::{
     linear, LinearAuthorizationUrlRequest, LinearOptions, LinearUser,
-    LinearValidateAuthorizationCodeRequest, LINEAR_AUTHORIZATION_ENDPOINT, LINEAR_ID, LINEAR_NAME,
-    LINEAR_TOKEN_ENDPOINT,
+    LINEAR_AUTHORIZATION_ENDPOINT, LINEAR_ID, LINEAR_NAME, LINEAR_TOKEN_ENDPOINT,
 };
 
 #[test]
 fn linear_provider_exposes_upstream_metadata() {
-    let provider = linear(linear_options());
+    let provider = linear(linear_options()).expect("provider should construct");
 
     assert_eq!((provider.id(), provider.name()), (LINEAR_ID, LINEAR_NAME));
 }
@@ -18,7 +28,7 @@ fn linear_provider_exposes_upstream_metadata() {
 fn linear_authorization_url_uses_upstream_defaults() -> Result<(), OAuthError> {
     let mut options = linear_options();
     options.oauth.scope = vec!["issues:create".to_owned()];
-    let provider = linear(options);
+    let provider = linear(options).expect("provider should construct");
 
     let url = provider.create_authorization_url(LinearAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -54,7 +64,7 @@ fn linear_authorization_url_can_disable_default_scope() -> Result<(), OAuthError
     let mut options = linear_options();
     options.oauth.disable_default_scope = true;
     options.oauth.scope = vec!["issues:create".to_owned()];
-    let provider = linear(options);
+    let provider = linear(options).expect("provider should construct");
 
     let url = provider.create_authorization_url(LinearAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -72,12 +82,16 @@ fn linear_authorization_url_can_disable_default_scope() -> Result<(), OAuthError
 
 #[test]
 fn linear_authorization_code_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = linear(linear_options());
+    let provider = linear(linear_options()).expect("provider should construct");
 
-    let request = provider.authorization_code_request(LinearValidateAuthorizationCodeRequest {
-        code: "code-1".to_owned(),
-        redirect_uri: "https://app.example.com/auth/callback".to_owned(),
-    })?;
+    let request = create_authorization_code_request(
+        AuthorizationCodeRequest::try_new(
+            "code-1",
+            "https://app.example.com/auth/callback",
+            provider.options(),
+        )?
+        .header("accept", "application/json"),
+    )?;
 
     assert_eq!(provider.token_endpoint(), LINEAR_TOKEN_ENDPOINT);
     assert_eq!(request.form_value("grant_type"), Some("authorization_code"));
@@ -95,9 +109,12 @@ fn linear_authorization_code_request_matches_upstream_form_contract() -> Result<
 
 #[test]
 fn linear_refresh_token_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = linear(linear_options());
+    let provider = linear(linear_options()).expect("provider should construct");
 
-    let request = provider.refresh_access_token_request("refresh-1")?;
+    let request = create_refresh_access_token_request(
+        RefreshAccessTokenRequest::try_new("refresh-1", provider.options())?
+            .extra_param("client_key", "linear-key"),
+    )?;
 
     assert_eq!(request.form_value("grant_type"), Some("refresh_token"));
     assert_eq!(request.form_value("refresh_token"), Some("refresh-1"));
@@ -134,7 +151,8 @@ fn linear_custom_mapper_can_override_user_info_fields() {
             image: None,
             email_verified: true,
         })),
-    });
+    })
+    .expect("provider should construct");
 
     let mapped = provider.user_info_from_profile(linear_user());
 
@@ -146,7 +164,7 @@ fn linear_custom_mapper_can_override_user_info_fields() {
 
 #[tokio::test]
 async fn linear_get_user_info_returns_none_without_access_token() -> Result<(), OAuthError> {
-    let provider = linear(linear_options());
+    let provider = linear(linear_options()).expect("provider should construct");
 
     let user_info = provider.get_user_info(&OAuth2Tokens::default()).await?;
 
@@ -164,7 +182,7 @@ fn linear_options() -> LinearOptions {
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("linear-client")),
-        client_secret: Some("linear-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("linear-secret").expect("valid client secret")),
         client_key: Some("linear-key".to_owned()),
         ..ProviderOptions::default()
     }

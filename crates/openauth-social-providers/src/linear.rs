@@ -1,18 +1,15 @@
 //! Linear social OAuth provider.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token,
-    refresh_access_token_request, validate_authorization_code, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract, ProviderOptions,
-    RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const LINEAR_ID: &str = "linear";
 pub const LINEAR_NAME: &str = "Linear";
@@ -108,32 +105,37 @@ pub struct LinearUserInfo {
 /// Linear OAuth provider.
 #[derive(Clone)]
 pub struct LinearProvider {
-    options: LinearOptions,
+    client: OAuth2Client,
+    map_profile_to_user: Option<UserMapper>,
     http_client: reqwest::Client,
 }
 
-pub fn linear(options: LinearOptions) -> LinearProvider {
+pub fn linear(options: LinearOptions) -> Result<LinearProvider, OAuthError> {
     LinearProvider::new(options)
 }
 
 impl LinearProvider {
-    pub fn new(options: LinearOptions) -> Self {
-        Self {
-            options,
-            http_client: crate::http::shared_client(),
+    pub fn new(options: LinearOptions) -> Result<Self, OAuthError> {
+        let LinearOptions {
+            oauth,
+            map_profile_to_user,
+        } = options;
+        let disable_default_scope = oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(LINEAR_ID, oauth)
+            .authorization_endpoint(LINEAR_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(LINEAR_TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scope(LINEAR_DEFAULT_SCOPE);
         }
+        Ok(Self {
+            client: builder.build()?,
+            map_profile_to_user,
+            http_client: crate::http::shared_client(),
+        })
     }
 
-    pub fn id(&self) -> &str {
-        LINEAR_ID
-    }
-
-    pub fn name(&self) -> &str {
-        LINEAR_NAME
-    }
-
-    pub fn options(&self) -> &LinearOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn token_endpoint(&self) -> &str {
@@ -148,76 +150,34 @@ impl LinearProvider {
         &self,
         request: LinearAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: LINEAR_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: LINEAR_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            scopes: self.scopes(request.scopes),
-            login_hint: request.login_hint,
-            ..AuthorizationUrlRequest::default()
-        })
-    }
-
-    pub fn authorization_code_request(
-        &self,
-        request: LinearValidateAuthorizationCodeRequest,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: request.code,
-            redirect_uri: request.redirect_uri,
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?;
+        if let Some(login_hint) = request.login_hint {
+            url = url.login_hint(login_hint);
+        }
+        url.scopes(request.scopes).build()
     }
 
     pub async fn validate_authorization_code(
         &self,
         request: LinearValidateAuthorizationCodeRequest,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: LINEAR_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: request.code,
-                redirect_uri: request.redirect_uri,
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
-    }
-
-    pub fn refresh_access_token_request(
-        &self,
-        refresh_token: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            extra_params: self.refresh_extra_params(),
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .exchange_code(request.code, request.redirect_uri)?
+            .send()
+            .await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: LINEAR_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                extra_params: self.refresh_extra_params(),
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        let mut refresh = self.client.refresh_token(refresh_token)?;
+        if let Some(client_key) = self.client.options().client_key.clone() {
+            refresh = refresh.extra_param("client_key", client_key);
+        }
+        refresh.send().await
     }
 
     pub async fn get_user_info(
@@ -257,7 +217,6 @@ impl LinearProvider {
 
     pub fn user_info_from_profile(&self, profile: LinearUser) -> LinearUserInfo {
         let user = self
-            .options
             .map_profile_to_user
             .as_ref()
             .map(|mapper| mapper(&profile))
@@ -268,34 +227,14 @@ impl LinearProvider {
             data: profile,
         }
     }
-
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            vec![LINEAR_DEFAULT_SCOPE.to_owned()]
-        };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
-
-    fn refresh_extra_params(&self) -> BTreeMap<String, String> {
-        self.options
-            .oauth
-            .client_key
-            .as_ref()
-            .map(|client_key| BTreeMap::from([("client_key".to_owned(), client_key.clone())]))
-            .unwrap_or_default()
-    }
 }
 
-impl OAuthProviderContract for LinearProvider {
+impl ProviderIdentity for LinearProvider {
     fn id(&self) -> &str {
-        self.id()
+        LINEAR_ID
     }
 
     fn name(&self) -> &str {
-        self.name()
+        LINEAR_NAME
     }
 }

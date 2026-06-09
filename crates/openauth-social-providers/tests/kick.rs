@@ -1,6 +1,10 @@
-use openauth_oauth::oauth2::{
-    ClientId, OAuth2Tokens, OAuthError, OAuthProviderContract, ProviderOptions,
-};
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "provider tests intentionally fail fast with contextual setup errors"
+)]
+
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions};
 use openauth_social_providers::kick::{
     kick, KickAuthorizationUrlRequest, KickProfile, KickProvider, KICK_AUTHORIZATION_ENDPOINT,
     KICK_ID, KICK_NAME, KICK_TOKEN_ENDPOINT,
@@ -8,7 +12,7 @@ use openauth_social_providers::kick::{
 
 #[test]
 fn kick_provider_exposes_upstream_metadata() {
-    let provider = kick(provider_options());
+    let provider = kick(provider_options()).expect("provider should construct");
 
     assert_eq!(provider.id(), KICK_ID);
     assert_eq!(provider.name(), KICK_NAME);
@@ -20,7 +24,8 @@ fn kick_authorization_url_uses_default_configured_and_request_scopes() -> Result
         client_id: Some(ClientId::from("kick-client")),
         scope: vec!["channel:read".to_owned()],
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(KickAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -49,7 +54,8 @@ fn kick_authorization_url_can_disable_default_scope() -> Result<(), OAuthError> 
         scope: vec!["channel:read".to_owned()],
         disable_default_scope: true,
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(KickAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -63,7 +69,7 @@ fn kick_authorization_url_can_disable_default_scope() -> Result<(), OAuthError> 
 
 #[test]
 fn kick_authorization_code_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = kick(provider_options());
+    let provider = kick(provider_options()).expect("provider should construct");
 
     let request = provider.create_authorization_code_request(
         "code-1",
@@ -89,7 +95,7 @@ fn kick_authorization_code_request_matches_upstream_form_contract() -> Result<()
 
 #[test]
 fn kick_refresh_access_token_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = kick(provider_options());
+    let provider = kick(provider_options()).expect("provider should construct");
 
     let request = provider.refresh_access_token_request("refresh-1")?;
 
@@ -130,7 +136,7 @@ fn kick_empty_user_info_response_returns_none() {
 
 #[tokio::test]
 async fn kick_get_user_info_returns_none_without_access_token() -> Result<(), OAuthError> {
-    let provider = kick(provider_options());
+    let provider = kick(provider_options()).expect("provider should construct");
 
     let user_info = provider.get_user_info(&OAuth2Tokens::default()).await?;
 
@@ -141,7 +147,7 @@ async fn kick_get_user_info_returns_none_without_access_token() -> Result<(), OA
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("kick-client")),
-        client_secret: Some("kick-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("kick-secret").expect("valid client secret")),
         ..ProviderOptions::default()
     }
 }

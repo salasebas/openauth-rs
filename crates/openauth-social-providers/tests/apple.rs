@@ -8,7 +8,7 @@ use josekit::jwk::Jwk;
 use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::Rs256;
 use josekit::jws::JwsHeader;
 use josekit::jwt::{self, JwtPayload};
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthProviderContract, ProviderOptions};
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, ProviderOptions};
 use openauth_social_providers::apple::{apple, AppleName, AppleNonConformUser, AppleOptions};
 use openauth_social_providers::http::ValidationHttpClient;
 use serde_json::{json, Value};
@@ -19,7 +19,8 @@ fn apple_provider_builds_authorization_url_with_upstream_defaults() {
     let provider = apple(options_with_client_id(ClientId::Multiple(vec![
         "apple-web".to_owned(),
         "apple-ios".to_owned(),
-    ])));
+    ])))
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(
@@ -53,7 +54,7 @@ fn apple_provider_can_disable_default_scopes() {
     let mut options = options_with_client_id(ClientId::Single("apple-web".to_owned()));
     options.provider.disable_default_scope = true;
     options.provider.scope = vec!["openid".to_owned()];
-    let provider = apple(options);
+    let provider = apple(options).expect("provider should construct");
 
     let url = provider
         .create_authorization_url(
@@ -68,25 +69,11 @@ fn apple_provider_can_disable_default_scopes() {
 
 #[test]
 fn apple_provider_rejects_empty_client_id_and_missing_secret() {
-    let empty_client_id = apple(options_with_client_id(ClientId::Multiple(Vec::new())));
-    assert!(empty_client_id
-        .create_authorization_url(
-            "state",
-            std::iter::empty::<String>(),
-            "https://app.example.com/callback",
-        )
-        .is_err());
+    assert!(apple(options_with_client_id(ClientId::Multiple(Vec::new()))).is_err());
 
     let mut options = options_with_client_id(ClientId::Single("apple-web".to_owned()));
     options.provider.client_secret = None;
-    let missing_secret = apple(options);
-    assert!(missing_secret
-        .create_authorization_url(
-            "state",
-            std::iter::empty::<String>(),
-            "https://app.example.com/callback",
-        )
-        .is_err());
+    assert!(apple(options).is_err());
 }
 
 #[test]
@@ -103,7 +90,8 @@ fn apple_provider_maps_id_token_profile_without_email_name_fallback() {
     );
     let provider = apple(options_with_client_id(ClientId::Single(
         "apple-web".to_owned(),
-    )));
+    )))
+    .expect("provider should construct");
 
     let info = provider
         .get_user_info(
@@ -140,7 +128,8 @@ fn apple_provider_prefers_non_conform_user_name() {
     );
     let provider = apple(options_with_client_id(ClientId::Single(
         "apple-web".to_owned(),
-    )));
+    )))
+    .expect("provider should construct");
 
     let info = provider
         .get_user_info(
@@ -168,7 +157,8 @@ fn apple_provider_prefers_non_conform_user_name() {
 fn apple_provider_returns_none_without_id_token() {
     let provider = apple(options_with_client_id(ClientId::Single(
         "apple-web".to_owned(),
-    )));
+    )))
+    .expect("provider should construct");
 
     let info = provider
         .get_user_info(&OAuth2Tokens::default(), None)
@@ -194,6 +184,7 @@ async fn apple_provider_verifies_id_token_with_local_jwks_and_nonce() {
     let provider = apple(options_with_client_id(ClientId::Single(
         "apple-web".to_owned(),
     )))
+    .expect("provider should construct")
     .with_validation_http_client(ValidationHttpClient::permissive());
 
     assert!(provider
@@ -219,6 +210,7 @@ async fn apple_provider_rejects_id_tokens_missing_standard_claims() {
     let provider = apple(options_with_client_id(ClientId::Single(
         "apple-web".to_owned(),
     )))
+    .expect("provider should construct")
     .with_validation_http_client(ValidationHttpClient::permissive());
 
     // `iat` is required here because Apple enforces an ID-token max age.
@@ -245,7 +237,7 @@ fn options_with_client_id(client_id: ClientId) -> AppleOptions {
     AppleOptions {
         provider: ProviderOptions {
             client_id: Some(client_id),
-            client_secret: Some("apple-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("apple-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
         ..AppleOptions::default()

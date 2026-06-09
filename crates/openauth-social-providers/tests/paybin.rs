@@ -8,23 +8,22 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use openauth_oauth::oauth2::{
-    ClientId, OAuth2Tokens, OAuthError, OAuthProviderContract, ProviderOptions,
+    create_authorization_code_request, create_refresh_access_token_request,
+    AuthorizationCodeRequest, ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions,
+    RefreshAccessTokenRequest,
 };
 use openauth_social_providers::paybin::{
     paybin, PaybinAuthorizationUrlRequest, PaybinOptions, PAYBIN_AUTHORIZATION_ENDPOINT,
     PAYBIN_DEFAULT_ISSUER, PAYBIN_ID, PAYBIN_NAME, PAYBIN_TOKEN_ENDPOINT,
 };
+use openauth_social_providers::ProviderIdentity;
 use serde_json::json;
 
 #[test]
 fn paybin_provider_exposes_upstream_metadata() {
-    let provider = paybin(paybin_options());
-    let provider_contract: &dyn OAuthProviderContract = &provider;
+    let provider = paybin(paybin_options()).expect("provider should construct");
 
-    assert_eq!(
-        (provider_contract.id(), provider_contract.name()),
-        (PAYBIN_ID, PAYBIN_NAME)
-    );
+    assert_eq!((provider.id(), provider.name()), (PAYBIN_ID, PAYBIN_NAME));
 }
 
 #[test]
@@ -33,7 +32,7 @@ fn paybin_authorization_url_uses_default_issuer_scopes_pkce_prompt_and_login_hin
     let mut options = paybin_options();
     options.oauth.prompt = Some("login".to_owned());
     options.oauth.scope = vec!["transactions".to_owned()];
-    let provider = paybin(options);
+    let provider = paybin(options).expect("provider should construct");
 
     let url = provider.create_authorization_url(PaybinAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -79,7 +78,8 @@ fn paybin_custom_issuer_derives_endpoints() {
     let provider = paybin(PaybinOptions {
         issuer: Some("https://login.example.com".to_owned()),
         ..paybin_options()
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(
         provider.authorization_endpoint(),
@@ -96,7 +96,7 @@ fn paybin_authorization_url_can_disable_default_scopes() -> Result<(), OAuthErro
     let mut options = paybin_options();
     options.oauth.disable_default_scope = true;
     options.oauth.scope = vec!["transactions".to_owned()];
-    let provider = paybin(options);
+    let provider = paybin(options).expect("provider should construct");
 
     let url = provider.create_authorization_url(PaybinAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -118,16 +118,15 @@ fn paybin_authorization_url_requires_client_id_secret_and_code_verifier() {
     let mut missing_client_id = paybin_options();
     missing_client_id.oauth.client_id = None;
     assert!(matches!(
-        paybin(missing_client_id)
-            .create_authorization_url(auth_request())
-            .unwrap_err(),
-        OAuthError::MissingOption("client_id")
+        paybin(missing_client_id),
+        Err(OAuthError::MissingOption("client_id"))
     ));
 
     let mut missing_secret = paybin_options();
     missing_secret.oauth.client_secret = None;
     assert!(matches!(
         paybin(missing_secret)
+            .expect("provider should construct")
             .create_authorization_url(auth_request())
             .unwrap_err(),
         OAuthError::MissingOption("client_secret")
@@ -137,22 +136,24 @@ fn paybin_authorization_url_requires_client_id_secret_and_code_verifier() {
     missing_verifier.code_verifier = None;
     assert!(matches!(
         paybin(paybin_options())
+            .expect("provider should construct")
             .create_authorization_url(missing_verifier)
             .unwrap_err(),
         OAuthError::MissingOption("code_verifier")
     ));
 }
 
-#[test]
-fn paybin_authorization_code_request_requires_code_verifier() {
-    let provider = paybin(paybin_options());
+#[tokio::test]
+async fn paybin_validate_authorization_code_requires_code_verifier() {
+    let provider = paybin(paybin_options()).expect("provider should construct");
 
     let error = provider
-        .authorization_code_request(
+        .validate_authorization_code(
             "code-1",
             None::<String>,
             "https://app.example.com/auth/callback/paybin",
         )
+        .await
         .unwrap_err();
 
     assert!(matches!(error, OAuthError::MissingOption("code_verifier")));
@@ -160,11 +161,14 @@ fn paybin_authorization_code_request_requires_code_verifier() {
 
 #[test]
 fn paybin_authorization_code_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = paybin(paybin_options());
-    let request = provider.authorization_code_request(
-        "code-1",
-        Some("01234567890123456789012345678901234567890123456789"),
-        "https://app.example.com/auth/callback/paybin",
+    let provider = paybin(paybin_options()).expect("provider should construct");
+    let request = create_authorization_code_request(
+        AuthorizationCodeRequest::try_new(
+            "code-1",
+            "https://app.example.com/auth/callback/paybin",
+            provider.options(),
+        )?
+        .code_verifier("01234567890123456789012345678901234567890123456789"),
     )?;
 
     assert_eq!(provider.token_endpoint(), PAYBIN_TOKEN_ENDPOINT);
@@ -185,8 +189,11 @@ fn paybin_authorization_code_request_matches_upstream_form_contract() -> Result<
 
 #[test]
 fn paybin_refresh_token_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = paybin(paybin_options());
-    let request = provider.refresh_access_token_request("refresh-1")?;
+    let provider = paybin(paybin_options()).expect("provider should construct");
+    let request = create_refresh_access_token_request(RefreshAccessTokenRequest::try_new(
+        "refresh-1",
+        provider.options(),
+    )?)?;
 
     assert_eq!(request.form_value("grant_type"), Some("refresh_token"));
     assert_eq!(request.form_value("refresh_token"), Some("refresh-1"));
@@ -197,7 +204,7 @@ fn paybin_refresh_token_request_matches_upstream_form_contract() -> Result<(), O
 
 #[tokio::test]
 async fn paybin_get_user_info_maps_decoded_id_token_profile() -> Result<(), OAuthError> {
-    let provider = paybin(paybin_options());
+    let provider = paybin(paybin_options()).expect("provider should construct");
     let id_token = unsigned_jwt(json!({
         "sub": "user-123",
         "email": "ada@example.com",
@@ -231,7 +238,7 @@ async fn paybin_get_user_info_maps_decoded_id_token_profile() -> Result<(), OAut
 
 #[tokio::test]
 async fn paybin_get_user_info_returns_none_without_id_token() -> Result<(), OAuthError> {
-    let provider = paybin(paybin_options());
+    let provider = paybin(paybin_options()).expect("provider should construct");
 
     let info = provider.get_user_info(&OAuth2Tokens::default()).await?;
 
@@ -243,7 +250,7 @@ fn paybin_options() -> PaybinOptions {
     PaybinOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("paybin-client")),
-            client_secret: Some("paybin-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("paybin-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
         issuer: None,

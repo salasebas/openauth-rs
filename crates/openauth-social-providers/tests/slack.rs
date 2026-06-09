@@ -4,15 +4,16 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, ProviderOptions};
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, ProviderOptions};
 use openauth_social_providers::slack::{
     slack, SlackAuthorizationUrlRequest, SlackOptions, SlackProfile, SlackProvider,
     SLACK_AUTHORIZATION_ENDPOINT, SLACK_ID, SLACK_NAME,
 };
+use openauth_social_providers::ProviderIdentity;
 
 #[test]
 fn slack_provider_exposes_upstream_metadata() {
-    let provider = slack(slack_options());
+    let provider = slack(slack_options()).expect("provider should construct");
 
     assert_eq!(provider.id(), SLACK_ID);
     assert_eq!(provider.name(), SLACK_NAME);
@@ -20,7 +21,7 @@ fn slack_provider_exposes_upstream_metadata() {
 
 #[test]
 fn slack_authorization_url_uses_upstream_defaults() {
-    let provider = SlackProvider::new(slack_options());
+    let provider = SlackProvider::new(slack_options()).expect("provider should construct");
 
     let url = provider
         .create_authorization_url(SlackAuthorizationUrlRequest {
@@ -59,7 +60,8 @@ fn slack_authorization_url_uses_redirect_override_and_extra_scopes() {
             scope: vec!["team".to_owned()],
             ..ProviderOptions::default()
         },
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(SlackAuthorizationUrlRequest {
@@ -88,7 +90,8 @@ fn slack_authorization_url_can_disable_default_scope() {
             scope: vec!["team".to_owned()],
             ..ProviderOptions::default()
         },
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(SlackAuthorizationUrlRequest {
@@ -150,7 +153,13 @@ fn slack_profile_uses_large_user_image_when_picture_is_missing() {
 
 #[tokio::test]
 async fn slack_get_user_info_returns_none_when_access_token_is_missing() {
-    let provider = SlackProvider::default();
+    let provider = SlackProvider::new(SlackOptions {
+        oauth: ProviderOptions {
+            client_id: Some(ClientId::from("slack-client")),
+            ..ProviderOptions::default()
+        },
+    })
+    .expect("slack provider should construct");
 
     let info = provider
         .get_user_info(&OAuth2Tokens::default())
@@ -164,7 +173,7 @@ fn slack_options() -> SlackOptions {
     SlackOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("slack-client")),
-            client_secret: Some("slack-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("slack-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
     }

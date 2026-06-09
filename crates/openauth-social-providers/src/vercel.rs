@@ -5,13 +5,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, validate_authorization_code,
-    AuthorizationCodeRequest, AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest,
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract,
-    ProviderOptions,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const VERCEL_ID: &str = "vercel";
 pub const VERCEL_NAME: &str = "Vercel";
@@ -101,38 +100,39 @@ impl From<ProviderOptions> for VercelOptions {
 
 #[derive(Clone)]
 pub struct VercelProvider {
-    options: VercelOptions,
+    client: OAuth2Client,
+    get_user_info: Option<VercelGetUserInfo>,
+    map_profile_to_user: Option<VercelProfileMapper>,
     userinfo_endpoint: String,
     http_client: reqwest::Client,
 }
 
-pub fn vercel(options: impl Into<VercelOptions>) -> VercelProvider {
+pub fn vercel(options: impl Into<VercelOptions>) -> Result<VercelProvider, OAuthError> {
     VercelProvider::new(options)
 }
 
 impl VercelProvider {
-    pub fn new(options: impl Into<VercelOptions>) -> Self {
-        Self {
-            options: options.into(),
+    pub fn new(options: impl Into<VercelOptions>) -> Result<Self, OAuthError> {
+        let options = options.into();
+        let VercelOptions {
+            oauth,
+            get_user_info,
+            map_profile_to_user,
+        } = options;
+        Ok(Self {
+            client: OAuth2Client::builder(VERCEL_ID, oauth)
+                .authorization_endpoint(VERCEL_AUTHORIZATION_ENDPOINT)?
+                .token_endpoint(VERCEL_TOKEN_ENDPOINT)?
+                .build()?,
+            get_user_info,
+            map_profile_to_user,
             userinfo_endpoint: VERCEL_USERINFO_ENDPOINT.to_owned(),
             http_client: crate::http::shared_client(),
-        }
+        })
     }
 
-    pub fn id(&self) -> &str {
-        VERCEL_ID
-    }
-
-    pub fn name(&self) -> &str {
-        VERCEL_NAME
-    }
-
-    pub fn options(&self) -> &VercelOptions {
-        &self.options
-    }
-
-    pub fn provider_options(&self) -> &ProviderOptions {
-        &self.options.oauth
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn token_endpoint(&self) -> &str {
@@ -150,37 +150,11 @@ impl VercelProvider {
         let code_verifier = request
             .code_verifier
             .ok_or(OAuthError::MissingOption("code_verifier"))?;
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: VERCEL_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: VERCEL_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: Some(code_verifier),
-            scopes: self.scopes(request.scopes),
-            ..AuthorizationUrlRequest::default()
-        })
-    }
-
-    pub fn authorization_code_request(
-        &self,
-        code: impl Into<String>,
-        code_verifier: Option<impl Into<String>>,
-        redirect_uri: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        let code_verifier = code_verifier
-            .map(Into::into)
-            .ok_or(OAuthError::MissingOption("code_verifier"))?;
-
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.oauth.clone(),
-            code_verifier: Some(code_verifier),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        self.client
+            .authorization_url(request.state, request.redirect_uri)?
+            .code_verifier(code_verifier)
+            .scopes(request.scopes)
+            .build()
     }
 
     pub async fn validate_authorization_code(
@@ -192,26 +166,18 @@ impl VercelProvider {
         let code_verifier = code_verifier
             .map(Into::into)
             .ok_or(OAuthError::MissingOption("code_verifier"))?;
-
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: VERCEL_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                code_verifier: Some(code_verifier),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        self.client
+            .exchange_code(code, redirect_uri)?
+            .code_verifier(code_verifier)
+            .send()
+            .await
     }
 
     pub async fn get_user_info(
         &self,
         token: &OAuth2Tokens,
     ) -> Result<Option<VercelUserInfo>, OAuthError> {
-        if let Some(get_user_info) = &self.options.get_user_info {
+        if let Some(get_user_info) = &self.get_user_info {
             return get_user_info(token.clone()).await;
         }
 
@@ -261,27 +227,20 @@ impl VercelProvider {
 
     pub fn map_profile(&self, profile: VercelProfile) -> VercelUserInfo {
         let mut user_info = Self::user_info_from_profile(profile);
-        if let Some(map_profile_to_user) = &self.options.map_profile_to_user {
+        if let Some(map_profile_to_user) = &self.map_profile_to_user {
             map_profile_to_user(&user_info.data).apply_to(&mut user_info.user);
         }
         user_info
     }
-
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = Vec::new();
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
 }
 
-impl OAuthProviderContract for VercelProvider {
+impl ProviderIdentity for VercelProvider {
     fn id(&self) -> &str {
-        self.id()
+        VERCEL_ID
     }
 
     fn name(&self) -> &str {
-        self.name()
+        VERCEL_NAME
     }
 }
 
@@ -294,6 +253,7 @@ mod tests {
     )]
 
     use super::*;
+    use openauth_oauth::oauth2::ClientId;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
@@ -302,7 +262,21 @@ mod tests {
     async fn get_user_info_returns_none_for_invalid_json() {
         let server = RawServer::spawn("not-json");
         let provider = VercelProvider {
-            options: VercelOptions::default(),
+            client: OAuth2Client::builder(
+                VERCEL_ID,
+                ProviderOptions {
+                    client_id: Some(ClientId::from("vercel-test-client")),
+                    ..ProviderOptions::default()
+                },
+            )
+            .authorization_endpoint(VERCEL_AUTHORIZATION_ENDPOINT)
+            .expect("authorization endpoint")
+            .token_endpoint(VERCEL_TOKEN_ENDPOINT)
+            .expect("token endpoint")
+            .build()
+            .expect("client"),
+            get_user_info: None,
+            map_profile_to_user: None,
             userinfo_endpoint: server.url(),
             http_client: crate::http::shared_client(),
         };

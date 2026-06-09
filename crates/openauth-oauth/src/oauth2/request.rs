@@ -5,7 +5,7 @@ use base64::Engine;
 use url::form_urlencoded::{byte_serialize, Serializer};
 
 use super::error::OAuthError;
-use super::http::{default_http_client, OAuthHttpClient};
+use super::http::OAuthHttpClient;
 use super::tokens::{get_primary_client_id, ProviderOptions};
 
 /// OAuth request parameters that carry validated security invariants of a flow
@@ -64,11 +64,11 @@ impl OAuthFormRequest {
         }
     }
 
-    pub fn push_body(&mut self, key: impl Into<String>, value: impl Into<String>) {
+    pub(crate) fn push_body(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.body.push((key.into(), value.into()));
     }
 
-    pub fn set_body(&mut self, key: impl Into<String>, value: impl Into<String>) {
+    pub(crate) fn set_body(&mut self, key: impl Into<String>, value: impl Into<String>) {
         let key = key.into();
         self.body.retain(|(existing, _)| existing != &key);
         self.body.push((key, value.into()));
@@ -99,7 +99,7 @@ impl OAuthFormRequest {
             .map(String::as_str)
     }
 
-    pub fn set_header(&mut self, key: impl Into<String>, value: impl Into<String>) {
+    pub(crate) fn set_header(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.headers
             .insert(key.into().to_ascii_lowercase(), value.into());
     }
@@ -113,7 +113,7 @@ impl OAuthFormRequest {
     }
 }
 
-pub fn apply_client_authentication(
+pub(crate) fn apply_client_authentication(
     request: &mut OAuthFormRequest,
     options: &ProviderOptions,
     authentication: ClientAuthentication,
@@ -161,10 +161,7 @@ pub fn apply_client_authentication(
 }
 
 fn non_empty_secret(options: &ProviderOptions) -> Option<&str> {
-    options
-        .client_secret
-        .as_deref()
-        .filter(|secret| !secret.is_empty())
+    options.client_secret_str()
 }
 
 /// Encodes a Basic-auth credential component with `application/x-www-form-urlencoded`
@@ -174,14 +171,7 @@ fn form_encode_credential(value: &str) -> String {
     byte_serialize(value.as_bytes()).collect()
 }
 
-pub async fn post_form(
-    token_endpoint: &str,
-    request: OAuthFormRequest,
-) -> Result<serde_json::Value, OAuthError> {
-    post_form_with_client(token_endpoint, request, &default_http_client()?).await
-}
-
-pub async fn post_form_with_client(
+pub(crate) async fn post_form_with_client(
     token_endpoint: &str,
     request: OAuthFormRequest,
     client: &OAuthHttpClient,

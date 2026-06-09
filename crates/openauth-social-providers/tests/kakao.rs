@@ -5,18 +5,24 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{ClientId, ProviderOptions};
+use openauth_oauth::oauth2::{
+    create_authorization_code_request, create_refresh_access_token_request,
+    AuthorizationCodeRequest, ClientId, ClientSecret, OAuthError, ProviderOptions,
+    RefreshAccessTokenRequest,
+};
 use openauth_social_providers::kakao::{
     kakao, KakaoAccount, KakaoAccountProfile, KakaoAuthorizationUrlRequest, KakaoProfile,
     KakaoProvider, KakaoProviderOptions, KAKAO_AUTHORIZATION_ENDPOINT, KAKAO_ID, KAKAO_NAME,
     KAKAO_TOKEN_ENDPOINT,
 };
+use openauth_social_providers::ProviderIdentity;
 
 #[test]
 fn kakao_provider_exposes_upstream_metadata() {
     let provider = KakaoProvider::new(KakaoProviderOptions {
         oauth: provider_options(),
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(provider.id(), KAKAO_ID);
     assert_eq!(provider.name(), KAKAO_NAME);
@@ -24,7 +30,7 @@ fn kakao_provider_exposes_upstream_metadata() {
 
 #[test]
 fn authorization_url_includes_upstream_default_scopes() {
-    let provider = kakao(provider_options());
+    let provider = kakao(provider_options()).expect("provider should construct");
 
     let url = provider
         .create_authorization_url(KakaoAuthorizationUrlRequest {
@@ -60,7 +66,8 @@ fn authorization_url_appends_configured_and_request_scopes() {
     let provider = kakao(ProviderOptions {
         scope: vec!["name".to_owned()],
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(KakaoAuthorizationUrlRequest {
@@ -83,7 +90,8 @@ fn authorization_url_can_disable_default_scope() {
         disable_default_scope: true,
         scope: vec!["name".to_owned()],
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(KakaoAuthorizationUrlRequest {
@@ -98,16 +106,18 @@ fn authorization_url_can_disable_default_scope() {
 }
 
 #[test]
-fn token_requests_use_kakao_token_endpoint_and_post_auth() {
-    let provider = kakao(provider_options());
+fn token_requests_use_kakao_token_endpoint_and_post_auth() -> Result<(), OAuthError> {
+    let provider = kakao(provider_options()).expect("provider should construct");
 
-    let code_request = provider
-        .authorization_code_request(
+    let code_request = create_authorization_code_request(
+        AuthorizationCodeRequest::try_new(
             "code-1",
-            Some("01234567890123456789012345678901234567890123456789"),
             "https://app.example.com/auth/kakao/callback",
-        )
-        .expect("authorization code request should build");
+            provider.options(),
+        )?
+        .code_verifier("01234567890123456789012345678901234567890123456789"),
+    )
+    .expect("authorization code request should build");
 
     assert_eq!(provider.token_endpoint(), KAKAO_TOKEN_ENDPOINT);
     assert_eq!(code_request.header("authorization"), None);
@@ -130,9 +140,11 @@ fn token_requests_use_kakao_token_endpoint_and_post_auth() {
         Some("kakao-admin-key")
     );
 
-    let refresh_request = provider
-        .refresh_access_token_request("refresh-1")
-        .expect("refresh token request should build");
+    let refresh_request = create_refresh_access_token_request(RefreshAccessTokenRequest::try_new(
+        "refresh-1",
+        provider.options(),
+    )?)
+    .expect("refresh token request should build");
 
     assert_eq!(refresh_request.header("authorization"), None);
     assert_eq!(
@@ -151,6 +163,7 @@ fn token_requests_use_kakao_token_endpoint_and_post_auth() {
         refresh_request.form_value("client_secret"),
         Some("kakao-secret")
     );
+    Ok(())
 }
 
 #[test]
@@ -203,7 +216,7 @@ fn maps_kakao_profile_without_optional_account_fields() {
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("kakao-client")),
-        client_secret: Some("kakao-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("kakao-secret").expect("valid client secret")),
         client_key: Some("kakao-admin-key".to_owned()),
         ..ProviderOptions::default()
     }

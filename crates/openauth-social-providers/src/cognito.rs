@@ -7,11 +7,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use josekit::jwk::JwkSet;
 use openauth_oauth::oauth2::{
-    create_authorization_url, get_primary_client_id, refresh_access_token,
-    validate_authorization_code, validate_token, verify_jws_with_jwks, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientAuthentication, ClientId, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
-    TokenValidationOptions,
+    get_primary_client_id, validate_token, verify_jws_with_jwks, ClientId, ClientSecret,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
+    TokenValidationOptions, ValidateTokenOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,6 +17,7 @@ use time::OffsetDateTime;
 use url::Url;
 
 use crate::http::ProviderHttpClient;
+use crate::runtime::ProviderIdentity;
 
 const DEFAULT_SCOPES: &[&str] = &["openid", "profile", "email"];
 const ID_TOKEN_MAX_AGE_SECONDS: i64 = 60 * 60;
@@ -107,10 +106,9 @@ impl CognitoOptions {
         }
     }
 
-    fn provider_options(&self) -> ProviderOptions {
-        ProviderOptions {
+    fn provider_options(&self) -> Result<ProviderOptions, OAuthError> {
+        let mut options = ProviderOptions {
             client_id: Some(self.client_id.clone()),
-            client_secret: self.client_secret.clone(),
             client_key: self.client_key.clone(),
             scope: self.scope.clone(),
             disable_default_scope: self.disable_default_scope,
@@ -120,7 +118,11 @@ impl CognitoOptions {
             prompt: self.prompt.clone(),
             response_mode: self.response_mode.clone(),
             ..ProviderOptions::default()
+        };
+        if let Some(secret) = &self.client_secret {
+            options.client_secret = Some(ClientSecret::new(secret.clone())?);
         }
+        Ok(options)
     }
 }
 
@@ -143,9 +145,8 @@ pub struct CognitoUserInfo {
 /// Amazon Cognito OAuth provider.
 #[derive(Clone)]
 pub struct CognitoProvider {
+    client: OAuth2Client,
     options: CognitoOptions,
-    authorization_endpoint: String,
-    token_endpoint: String,
     user_info_endpoint: String,
     http_client: ProviderHttpClient,
 }
@@ -158,13 +159,27 @@ impl CognitoProvider {
         }
 
         let clean_domain = clean_cognito_domain(&options.domain).to_owned();
+        let authorization_endpoint = format!("https://{clean_domain}/oauth2/authorize");
+        let token_endpoint = format!("https://{clean_domain}/oauth2/token");
+        let user_info_endpoint = format!("https://{clean_domain}/oauth2/userinfo");
+        let disable_default_scope = options.disable_default_scope;
+        let provider_options = options.provider_options()?;
+        let mut builder = OAuth2Client::builder("cognito", provider_options)
+            .authorization_endpoint(authorization_endpoint)?
+            .token_endpoint(token_endpoint)?;
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
+        }
         Ok(Self {
+            client: builder.build()?,
             options,
-            authorization_endpoint: format!("https://{clean_domain}/oauth2/authorize"),
-            token_endpoint: format!("https://{clean_domain}/oauth2/token"),
-            user_info_endpoint: format!("https://{clean_domain}/oauth2/userinfo"),
+            user_info_endpoint,
             http_client: ProviderHttpClient::shared(),
         })
+    }
+
+    pub fn provider_options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     /// Overrides the HTTP client used for userinfo requests. Use
@@ -179,11 +194,11 @@ impl CognitoProvider {
     }
 
     pub fn authorization_endpoint(&self) -> &str {
-        &self.authorization_endpoint
+        self.client.authorization_endpoint().as_str()
     }
 
     pub fn token_endpoint(&self) -> &str {
-        &self.token_endpoint
+        self.client.token_endpoint().as_str()
     }
 
     pub fn user_info_endpoint(&self) -> &str {
@@ -209,25 +224,19 @@ impl CognitoProvider {
             return Err(OAuthError::MissingOption("client_secret"));
         }
 
-        let mut scopes = Vec::new();
-        if !self.options.disable_default_scope {
-            scopes.extend(DEFAULT_SCOPES.iter().map(|scope| (*scope).to_owned()));
+        let mut url = self
+            .client
+            .authorization_url(input.state, input.redirect_uri)?;
+        if let Some(code_verifier) = input.code_verifier {
+            url = url.code_verifier(code_verifier);
         }
-        scopes.extend(self.options.scope.iter().cloned());
-        scopes.extend(input.scopes);
-
-        let url = create_authorization_url(AuthorizationUrlRequest {
-            id: self.id().to_owned(),
-            options: self.options.provider_options(),
-            authorization_endpoint: self.authorization_endpoint.clone(),
-            redirect_uri: input.redirect_uri,
-            state: input.state,
-            code_verifier: input.code_verifier,
-            scopes,
-            prompt: self.options.prompt.clone(),
-            response_mode: self.options.response_mode.clone(),
-            ..AuthorizationUrlRequest::default()
-        })?;
+        if let Some(prompt) = self.options.prompt.clone() {
+            url = url.prompt(prompt);
+        }
+        if let Some(response_mode) = self.options.response_mode.clone() {
+            url = url.response_mode(response_mode);
+        }
+        let url = url.scopes(input.scopes).build()?;
 
         Ok(encode_scope_with_percent_twenty(url))
     }
@@ -238,34 +247,18 @@ impl CognitoProvider {
         code_verifier: Option<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: self.token_endpoint.clone(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.provider_options(),
-                code_verifier,
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: self.token_endpoint.clone(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token_value.into(),
-                options: self.options.provider_options(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token_value)?.send().await
     }
 
     pub async fn verify_id_token(
@@ -292,11 +285,11 @@ impl CognitoProvider {
         let result = validate_token(
             token,
             jwks_url,
-            TokenValidationOptions {
+            ValidateTokenOptions::new(TokenValidationOptions {
                 audience,
                 issuer: vec![self.expected_issuer()],
                 ..TokenValidationOptions::default().require_standard_claims()
-            },
+            }),
         )
         .await?;
 
@@ -399,7 +392,7 @@ impl CognitoProvider {
     }
 }
 
-impl OAuthProviderContract for CognitoProvider {
+impl ProviderIdentity for CognitoProvider {
     fn id(&self) -> &str {
         "cognito"
     }

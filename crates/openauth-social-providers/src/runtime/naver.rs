@@ -2,7 +2,7 @@ use super::*;
 
 impl_social_oauth_provider!(
     crate::naver::NaverProvider,
-    options | provider | { provider.options().oauth.clone() },
+    options | provider | { provider.options() },
     authorization | provider,
     input | {
         provider.create_authorization_url(crate::naver::NaverAuthorizationUrlRequest {

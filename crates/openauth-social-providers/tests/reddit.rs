@@ -1,6 +1,10 @@
-use openauth_oauth::oauth2::{
-    ClientId, OAuth2Tokens, OAuthError, OAuthProviderContract, ProviderOptions,
-};
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "provider tests intentionally fail fast with contextual setup errors"
+)]
+
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions};
 use openauth_social_providers::reddit::{
     reddit, RedditAuthorizationUrlRequest, RedditOptions, RedditProfile, RedditProvider,
     REDDIT_AUTHORIZATION_ENDPOINT, REDDIT_DEFAULT_SCOPE, REDDIT_ID, REDDIT_NAME,
@@ -9,7 +13,7 @@ use openauth_social_providers::reddit::{
 
 #[test]
 fn reddit_provider_exposes_upstream_metadata() {
-    let provider = reddit(reddit_options());
+    let provider = reddit(reddit_options()).expect("provider should construct");
 
     assert_eq!((provider.id(), provider.name()), (REDDIT_ID, REDDIT_NAME));
 }
@@ -23,7 +27,8 @@ fn reddit_authorization_url_includes_default_scopes_and_duration() -> Result<(),
             ..ProviderOptions::default()
         },
         duration: Some("permanent".to_owned()),
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(RedditAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -55,7 +60,8 @@ fn reddit_authorization_url_can_disable_default_scope() -> Result<(), OAuthError
             ..ProviderOptions::default()
         },
         ..RedditOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(RedditAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -74,7 +80,7 @@ fn reddit_authorization_url_can_disable_default_scope() -> Result<(), OAuthError
 #[test]
 fn reddit_authorization_code_request_uses_basic_auth_and_upstream_headers() -> Result<(), OAuthError>
 {
-    let provider = reddit(reddit_options());
+    let provider = reddit(reddit_options()).expect("provider should construct");
     let request =
         provider.authorization_code_request("code-1", "https://app.example.com/auth/callback")?;
 
@@ -98,7 +104,7 @@ fn reddit_authorization_code_request_uses_basic_auth_and_upstream_headers() -> R
 
 #[test]
 fn reddit_refresh_request_uses_basic_auth() -> Result<(), OAuthError> {
-    let provider = reddit(reddit_options());
+    let provider = reddit(reddit_options()).expect("provider should construct");
     let request = provider.refresh_access_token_request("refresh-1")?;
 
     assert_eq!(request.form_value("grant_type"), Some("refresh_token"));
@@ -156,7 +162,7 @@ fn reddit_profile_without_icon_maps_to_no_image() {
 
 #[tokio::test]
 async fn reddit_get_user_info_returns_none_without_access_token() -> Result<(), OAuthError> {
-    let provider = reddit(reddit_options());
+    let provider = reddit(reddit_options()).expect("provider should construct");
 
     let user_info = provider.get_user_info(&OAuth2Tokens::default()).await?;
 
@@ -168,7 +174,7 @@ fn reddit_options() -> RedditOptions {
     RedditOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("reddit-client")),
-            client_secret: Some("reddit-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("reddit-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
         ..RedditOptions::default()

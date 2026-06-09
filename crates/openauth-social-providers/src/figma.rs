@@ -1,20 +1,25 @@
 //! Figma social provider.
 
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token_request,
-    validate_authorization_code, AuthorizationCodeRequest, AuthorizationUrlRequest,
-    ClientAuthentication, ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError,
-    OAuthFormRequest, OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
+    get_primary_client_id, ClientAuthentication, OAuth2Client, OAuth2Tokens, OAuth2UserInfo,
+    OAuthError, OAuthFormRequest, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::runtime::ProviderIdentity;
+
+const AUTHORIZATION_ENDPOINT: &str = "https://www.figma.com/oauth";
+const TOKEN_ENDPOINT: &str = "https://api.figma.com/v1/oauth/token";
+const USERINFO_ENDPOINT: &str = "https://api.figma.com/v1/me";
+const DEFAULT_SCOPE: &str = "current_user:read";
+
 pub const FIGMA_ID: &str = "figma";
 pub const FIGMA_NAME: &str = "Figma";
-pub const FIGMA_AUTHORIZATION_ENDPOINT: &str = "https://www.figma.com/oauth";
-pub const FIGMA_TOKEN_ENDPOINT: &str = "https://api.figma.com/v1/oauth/token";
-pub const FIGMA_USERINFO_ENDPOINT: &str = "https://api.figma.com/v1/me";
-pub const FIGMA_DEFAULT_SCOPE: &str = "current_user:read";
+pub const FIGMA_AUTHORIZATION_ENDPOINT: &str = AUTHORIZATION_ENDPOINT;
+pub const FIGMA_TOKEN_ENDPOINT: &str = TOKEN_ENDPOINT;
+pub const FIGMA_USERINFO_ENDPOINT: &str = USERINFO_ENDPOINT;
+pub const FIGMA_DEFAULT_SCOPE: &str = DEFAULT_SCOPE;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FigmaProfile {
@@ -52,20 +57,29 @@ pub struct FigmaUserInfo {
 
 #[derive(Debug, Clone)]
 pub struct FigmaProvider {
-    options: ProviderOptions,
+    client: OAuth2Client,
     http_client: reqwest::Client,
 }
 
-pub fn figma(options: ProviderOptions) -> FigmaProvider {
+pub fn figma(options: ProviderOptions) -> Result<FigmaProvider, OAuthError> {
     FigmaProvider::new(options)
 }
 
 impl FigmaProvider {
-    pub fn new(options: ProviderOptions) -> Self {
-        Self {
-            options,
-            http_client: crate::http::shared_client(),
+    pub fn new(options: ProviderOptions) -> Result<Self, OAuthError> {
+        Self::ensure_client_credentials(&options)?;
+        let disable_default_scope = options.disable_default_scope;
+        let mut builder = OAuth2Client::builder("figma", options)
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(TOKEN_ENDPOINT)?
+            .authentication(ClientAuthentication::Basic);
+        if !disable_default_scope {
+            builder = builder.default_scope(DEFAULT_SCOPE);
         }
+        Ok(Self {
+            client: builder.build()?,
+            http_client: crate::http::shared_client(),
+        })
     }
 
     pub fn id(&self) -> &str {
@@ -76,37 +90,31 @@ impl FigmaProvider {
         FIGMA_NAME
     }
 
-    pub fn options(&self) -> &ProviderOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn token_endpoint(&self) -> &str {
-        FIGMA_TOKEN_ENDPOINT
+        self.client.token_endpoint().as_str()
     }
 
     pub fn userinfo_endpoint(&self) -> &str {
-        FIGMA_USERINFO_ENDPOINT
+        USERINFO_ENDPOINT
     }
 
     pub fn create_authorization_url(
         &self,
         request: FigmaAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        self.ensure_client_credentials()?;
-        if request.code_verifier.is_none() {
-            return Err(OAuthError::MissingOption("code_verifier"));
-        }
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: FIGMA_ID.to_owned(),
-            options: self.options.clone(),
-            authorization_endpoint: FIGMA_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: request.code_verifier,
-            scopes: self.scopes(request.scopes),
-            ..AuthorizationUrlRequest::default()
-        })
+        Self::ensure_client_credentials(self.client.options())?;
+        let code_verifier = request
+            .code_verifier
+            .ok_or(OAuthError::MissingOption("code_verifier"))?;
+        self.client
+            .authorization_url(request.state, request.redirect_uri)?
+            .code_verifier(code_verifier)
+            .scopes(request.scopes)
+            .build()
     }
 
     pub fn authorization_code_request(
@@ -118,15 +126,10 @@ impl FigmaProvider {
         let code_verifier = code_verifier
             .map(Into::into)
             .ok_or(OAuthError::MissingOption("code_verifier"))?;
-
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.clone(),
-            code_verifier: Some(code_verifier),
-            authentication: ClientAuthentication::Basic,
-            ..AuthorizationCodeRequest::default()
-        })
+        self.client
+            .exchange_code(code, redirect_uri)?
+            .code_verifier(code_verifier)
+            .into_form_request()
     }
 
     pub async fn validate_authorization_code(
@@ -138,47 +141,27 @@ impl FigmaProvider {
         let code_verifier = code_verifier
             .map(Into::into)
             .ok_or(OAuthError::MissingOption("code_verifier"))?;
-
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: FIGMA_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.clone(),
-                code_verifier: Some(code_verifier),
-                authentication: ClientAuthentication::Basic,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        self.client
+            .exchange_code(code, redirect_uri)?
+            .code_verifier(code_verifier)
+            .send()
+            .await
     }
 
     pub fn refresh_access_token_request(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.clone(),
-            authentication: ClientAuthentication::Basic,
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .refresh_token(refresh_token)?
+            .into_form_request()
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        openauth_oauth::oauth2::refresh_access_token(ClientTokenRequest {
-            token_endpoint: FIGMA_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.clone(),
-                authentication: ClientAuthentication::Basic,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(
@@ -190,7 +173,7 @@ impl FigmaProvider {
         };
         let response = match self
             .http_client
-            .get(FIGMA_USERINFO_ENDPOINT)
+            .get(USERINFO_ENDPOINT)
             .bearer_auth(access_token)
             .send()
             .await
@@ -212,27 +195,14 @@ impl FigmaProvider {
         }))
     }
 
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.disable_default_scope {
-            Vec::new()
-        } else {
-            vec![FIGMA_DEFAULT_SCOPE.to_owned()]
-        };
-        scopes.extend(self.options.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
-
-    fn ensure_client_credentials(&self) -> Result<(), OAuthError> {
-        if openauth_oauth::oauth2::get_primary_client_id(&self.options.client_id).is_none() {
+    fn ensure_client_credentials(options: &ProviderOptions) -> Result<(), OAuthError> {
+        if get_primary_client_id(&options.client_id).is_none() {
             return Err(OAuthError::MissingOption("client_id"));
         }
-        if self
-            .options
-            .client_secret
-            .as_deref()
-            .unwrap_or("")
-            .is_empty()
+        if options
+            .client_secret_str()
+            .filter(|secret| !secret.is_empty())
+            .is_none()
         {
             return Err(OAuthError::MissingOption("client_secret"));
         }
@@ -240,7 +210,7 @@ impl FigmaProvider {
     }
 }
 
-impl OAuthProviderContract for FigmaProvider {
+impl ProviderIdentity for FigmaProvider {
     fn id(&self) -> &str {
         self.id()
     }

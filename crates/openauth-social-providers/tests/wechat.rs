@@ -4,11 +4,12 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, ProviderOptions};
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, ProviderOptions};
 use openauth_social_providers::wechat::{
     wechat, WeChatAuthorizationUrlRequest, WeChatLang, WeChatProfile, WeChatProvider,
     WeChatProviderOptions, WECHAT_AUTHORIZATION_ENDPOINT, WECHAT_ID, WECHAT_NAME,
 };
+use openauth_social_providers::ProviderIdentity;
 use serde_json::json;
 
 #[test]
@@ -16,7 +17,8 @@ fn wechat_provider_exposes_upstream_metadata() {
     let provider = WeChatProvider::new(WeChatProviderOptions {
         oauth: provider_options(),
         ..WeChatProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(provider.id(), WECHAT_ID);
     assert_eq!(provider.name(), WECHAT_NAME);
@@ -24,7 +26,7 @@ fn wechat_provider_exposes_upstream_metadata() {
 
 #[test]
 fn authorization_url_uses_wechat_oauth_shape_and_defaults() {
-    let provider = wechat(provider_options());
+    let provider = wechat(provider_options()).expect("provider should construct");
 
     let url = provider
         .create_authorization_url(WeChatAuthorizationUrlRequest {
@@ -55,7 +57,8 @@ fn authorization_url_merges_scopes_and_can_disable_default_scope() {
     let provider = wechat(ProviderOptions {
         scope: vec!["configured".to_owned()],
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(WeChatAuthorizationUrlRequest {
@@ -74,7 +77,8 @@ fn authorization_url_merges_scopes_and_can_disable_default_scope() {
         disable_default_scope: true,
         scope: vec!["configured".to_owned()],
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(WeChatAuthorizationUrlRequest {
@@ -92,7 +96,7 @@ fn authorization_url_merges_scopes_and_can_disable_default_scope() {
 
 #[test]
 fn authorization_url_rejects_empty_state() {
-    let provider = wechat(provider_options());
+    let provider = wechat(provider_options()).expect("provider should construct");
 
     let error = provider
         .create_authorization_url(WeChatAuthorizationUrlRequest {
@@ -101,16 +105,15 @@ fn authorization_url_rejects_empty_state() {
             scopes: Vec::new(),
         })
         .err()
-        .map(|error| error.to_string());
+        .map(|error| error.to_string())
+        .expect("error should be present");
 
-    assert!(error
-        .as_deref()
-        .is_some_and(|message| message.contains("authorization state")));
+    assert!(error.contains("authorization state"));
 }
 
 #[test]
 fn authorization_url_rejects_invalid_redirect_uri_without_override() {
-    let provider = wechat(provider_options());
+    let provider = wechat(provider_options()).expect("provider should construct");
 
     let error = provider
         .create_authorization_url(WeChatAuthorizationUrlRequest {
@@ -119,11 +122,10 @@ fn authorization_url_rejects_invalid_redirect_uri_without_override() {
             scopes: Vec::new(),
         })
         .err()
-        .map(|error| error.to_string());
+        .map(|error| error.to_string())
+        .expect("error should be present");
 
-    assert!(error
-        .as_deref()
-        .is_some_and(|message| message.contains("OAuth URL")));
+    assert!(error.contains("OAuth URL"));
 }
 
 #[test]
@@ -134,7 +136,8 @@ fn authorization_url_uses_redirect_override_and_english_lang() {
             ..provider_options()
         },
         lang: Some(WeChatLang::En),
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(WeChatAuthorizationUrlRequest {
@@ -153,7 +156,7 @@ fn authorization_url_uses_redirect_override_and_english_lang() {
 
 #[test]
 fn token_and_refresh_urls_use_wechat_get_parameters() {
-    let provider = wechat(provider_options());
+    let provider = wechat(provider_options()).expect("provider should construct");
 
     let token_url = provider
         .authorization_code_url("code-1")
@@ -191,19 +194,17 @@ fn token_and_refresh_urls_use_wechat_get_parameters() {
 
 #[test]
 fn token_and_refresh_urls_require_configured_credentials() {
-    let missing_client_id = wechat(ProviderOptions {
-        client_secret: Some("wechat-secret".to_owned()),
+    assert!(wechat(ProviderOptions {
+        client_secret: Some(ClientSecret::new("wechat-secret").expect("valid client secret")),
         ..ProviderOptions::default()
-    });
-    assert!(missing_client_id.authorization_code_url("code-1").is_err());
-    assert!(missing_client_id
-        .refresh_access_token_url("refresh-1")
-        .is_err());
+    })
+    .is_err());
 
     let missing_secret = wechat(ProviderOptions {
         client_id: Some(ClientId::from("wechat-client")),
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
     assert!(missing_secret.authorization_code_url("code-1").is_err());
     assert!(missing_secret
         .refresh_access_token_url("refresh-1")
@@ -212,7 +213,7 @@ fn token_and_refresh_urls_require_configured_credentials() {
 
 #[test]
 fn user_info_url_requires_openid_from_raw_token_payload() {
-    let provider = wechat(provider_options());
+    let provider = wechat(provider_options()).expect("provider should construct");
 
     let without_openid = OAuth2Tokens {
         access_token: Some("access-1".to_owned()),
@@ -268,7 +269,7 @@ fn maps_wechat_profile_to_oauth_user_info() {
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("wechat-client")),
-        client_secret: Some("wechat-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("wechat-secret").expect("valid client secret")),
         ..ProviderOptions::default()
     }
 }

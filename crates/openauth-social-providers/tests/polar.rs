@@ -5,11 +5,10 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
+use openauth_social_providers::ProviderIdentity;
 use std::sync::Arc;
 
-use openauth_oauth::oauth2::{
-    ClientId, OAuth2Tokens, OAuthError, OAuthProviderContract, ProviderOptions,
-};
+use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthError, ProviderOptions};
 use openauth_social_providers::polar::{
     PolarAuthorizationUrlRequest, PolarOptions, PolarProfile, PolarProvider,
 };
@@ -22,7 +21,8 @@ fn polar_provider_exposes_upstream_metadata() {
             ..ProviderOptions::default()
         },
         ..PolarOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(provider.id(), "polar");
     assert_eq!(provider.name(), "Polar");
@@ -38,7 +38,8 @@ fn polar_authorization_url_uses_defaults_prompt_pkce_and_redirect_override() {
             ..ProviderOptions::default()
         },
         ..PolarOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(PolarAuthorizationUrlRequest {
@@ -85,7 +86,8 @@ fn polar_authorization_url_can_disable_default_scope() {
             ..ProviderOptions::default()
         },
         ..PolarOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(PolarAuthorizationUrlRequest {
@@ -149,7 +151,8 @@ fn polar_profile_mapper_can_override_normalized_user() {
             user.email_verified = true;
             user
         })),
-    });
+    })
+    .expect("provider should construct");
 
     let mapped = provider.map_user_info(PolarProfile {
         id: "polar-user".to_owned(),
@@ -170,7 +173,8 @@ async fn polar_get_user_info_returns_none_without_access_token() -> Result<(), O
             ..ProviderOptions::default()
         },
         ..PolarOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let user_info = provider.get_user_info(&OAuth2Tokens::default()).await?;
 

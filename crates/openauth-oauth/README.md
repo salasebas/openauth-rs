@@ -13,50 +13,56 @@ It does not turn your server into an OAuth provider. Use
 
 ## What It Provides
 
-- Authorization URL construction.
-- Authorization-code, refresh-token, and client-credentials request helpers.
-- OAuth token parsing and validation helpers.
+- [`OAuth2Client`](src/oauth2/client.rs) — configured provider client (authorization URL, code exchange, refresh, client credentials).
+- Authorization URL construction (`create_authorization_url`, advanced).
+- Token form builders (`create_authorization_code_request`, …) and `exchange_authorization_code` / `refresh_access_token_at` for discovery-based flows.
+- OAuth token parsing (`get_oauth2_tokens`) and validation helpers.
 - PKCE code challenge generation.
 - JWKS fetching/cache helpers and JWS verification behind the `jose` feature.
-- Provider traits used by `openauth-social-providers` and OpenAuth core.
+- [`SocialOAuthProvider`](src/oauth2/provider.rs) trait used by `openauth-social-providers` and OpenAuth core.
 
 ## Quick Start
 
 ```rust
-use openauth_oauth::oauth2::{
-    create_authorization_url, AuthorizationUrlRequest, ProviderOptions,
-};
+use openauth_oauth::oauth2::{ClientSecret, OAuth2Client, ProviderOptions};
 
-let request = AuthorizationUrlRequest::try_new(
+let client = OAuth2Client::builder(
     "github",
     ProviderOptions {
         client_id: Some("github-client-id".into()),
-        client_secret: Some("github-client-secret".into()),
+        client_secret: Some(ClientSecret::new("github-client-secret")?),
         ..ProviderOptions::default()
     },
-    "https://github.com/login/oauth/authorize",
-    "https://app.example.com/api/auth/callback/github",
-    "csrf-state",
-)?
-.scope("read:user")
-.scope("user:email")
-.code_verifier("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk");
+)
+.authorization_endpoint("https://github.com/login/oauth/authorize")?
+.token_endpoint("https://github.com/login/oauth/access_token")?
+.default_scope("read:user")
+.default_scope("user:email")
+.build()?;
 
-let url = create_authorization_url(request)?;
-# let _ = url;
-# Ok::<(), Box<dyn std::error::Error>>(())
+let url = client
+    .authorization_url("csrf-state", "https://app.example.com/api/auth/callback/github")?
+    .code_verifier("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+    .build()?;
+
+let tokens = client
+    .exchange_code("authorization-code", "https://app.example.com/api/auth/callback/github")?
+    .code_verifier("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+    .send()
+    .await?;
+# let _ = (url, tokens);
+# Ok::<(), openauth_oauth::oauth2::OAuthError>(())
 ```
 
-Provider authors can use this crate directly. Application code should usually
-configure social providers through `openauth-social-providers`.
+Provider authors should build one `OAuth2Client` per provider. Application code should usually configure social providers through `openauth-social-providers`.
 
 ## Security Notes
 
 - Request builders validate required OAuth fields.
 - Token parsing rejects malformed field types and invalid expiry values.
+- `ClientSecret` redacts in `Debug` output.
 - JWS verification rejects HMAC algorithms unless explicitly allowed.
-- JWKS responses are cached and refetched when a token references an unknown
-  `kid`.
+- JWKS responses are cached and refetched when a token references an unknown `kid`.
 - Provider errors avoid returning access, refresh, ID, or revocation tokens.
 
 ## Status

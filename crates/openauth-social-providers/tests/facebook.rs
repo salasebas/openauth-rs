@@ -10,7 +10,7 @@ use josekit::jwk::{Jwk, JwkSet};
 use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::Rs256;
 use josekit::jws::JwsHeader;
 use josekit::jwt::{self, JwtPayload};
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, ProviderOptions};
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, ProviderOptions};
 use openauth_social_providers::facebook::{
     FacebookOptions, FacebookPicture, FacebookPictureData, FacebookProfile, FacebookProvider,
     FACEBOOK_LIMITED_LOGIN_ISSUER,
@@ -24,7 +24,8 @@ fn facebook_authorization_url_uses_upstream_defaults() -> Result<(), Box<dyn std
         oauth: provider_options(),
         config_id: Some("login-config".to_owned()),
         ..FacebookOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(
         "state-value",
@@ -58,16 +59,7 @@ fn facebook_authorization_url_uses_upstream_defaults() -> Result<(), Box<dyn std
 
 #[test]
 fn facebook_authorization_url_rejects_missing_required_credentials() {
-    let provider = FacebookProvider::new(FacebookOptions::default());
-
-    let result = provider.create_authorization_url(
-        "state",
-        Vec::<String>::new(),
-        "https://app/callback",
-        None,
-    );
-
-    assert!(result.is_err());
+    assert!(FacebookProvider::new(FacebookOptions::default()).is_err());
 }
 
 #[test]
@@ -79,7 +71,8 @@ fn facebook_authorization_url_can_disable_default_scopes() -> Result<(), Box<dyn
             ..provider_options()
         },
         ..FacebookOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(
         "state",
@@ -97,7 +90,11 @@ fn facebook_authorization_url_can_disable_default_scopes() -> Result<(), Box<dyn
 
 #[test]
 fn facebook_profile_mapping_matches_graph_profile_behavior() {
-    let provider = FacebookProvider::new(FacebookOptions::default());
+    let provider = FacebookProvider::new(FacebookOptions {
+        oauth: provider_options(),
+        ..FacebookOptions::default()
+    })
+    .expect("provider should construct");
     let profile = FacebookProfile {
         id: "123".to_owned(),
         name: "Ada Lovelace".to_owned(),
@@ -128,7 +125,11 @@ fn facebook_profile_mapping_matches_graph_profile_behavior() {
 #[test]
 fn facebook_limited_login_id_token_maps_to_user_with_unverified_email(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let provider = FacebookProvider::new(FacebookOptions::default());
+    let provider = FacebookProvider::new(FacebookOptions {
+        oauth: provider_options(),
+        ..FacebookOptions::default()
+    })
+    .expect("provider should construct");
     let token = unsigned_jwt(json!({
         "sub": "limited-user",
         "email": "limited@example.com",
@@ -153,9 +154,11 @@ fn facebook_limited_login_id_token_maps_to_user_with_unverified_email(
 #[test]
 fn facebook_user_info_url_extends_default_fields() -> Result<(), Box<dyn std::error::Error>> {
     let provider = FacebookProvider::new(FacebookOptions {
+        oauth: provider_options(),
         fields: vec!["first_name".to_owned(), "last_name".to_owned()],
         ..FacebookOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.user_info_url()?;
 
@@ -171,7 +174,8 @@ async fn facebook_verify_id_token_rejects_opaque_access_tokens() {
     let provider = FacebookProvider::new(FacebookOptions {
         oauth: provider_options(),
         ..FacebookOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     assert!(!provider.verify_id_token("opaque-token", None).await);
 }
@@ -182,7 +186,8 @@ fn facebook_verify_id_token_accepts_limited_login_jwt_via_jwks(
     let provider = FacebookProvider::new(FacebookOptions {
         oauth: provider_options(),
         ..FacebookOptions::default()
-    });
+    })
+    .expect("provider should construct");
     let (token, jwk) =
         signed_limited_login_jwt("fb-web", FACEBOOK_LIMITED_LOGIN_ISSUER, Some("n"))?;
     let jwks = jwks_with_key(jwk)?;
@@ -197,7 +202,8 @@ fn facebook_verify_id_token_rejects_wrong_nonce_issuer_and_disabled_sign_in(
     let provider = FacebookProvider::new(FacebookOptions {
         oauth: provider_options(),
         ..FacebookOptions::default()
-    });
+    })
+    .expect("provider should construct");
     let (token, jwk) =
         signed_limited_login_jwt("fb-web", FACEBOOK_LIMITED_LOGIN_ISSUER, Some("n"))?;
     let jwks = jwks_with_key(jwk)?;
@@ -214,7 +220,8 @@ fn facebook_verify_id_token_rejects_wrong_nonce_issuer_and_disabled_sign_in(
             ..provider_options()
         },
         ..FacebookOptions::default()
-    });
+    })
+    .expect("provider should construct");
     assert!(!disabled.verify_id_token_with_jwk_set(&token, Some("n"), &jwks));
     Ok(())
 }
@@ -222,7 +229,11 @@ fn facebook_verify_id_token_rejects_wrong_nonce_issuer_and_disabled_sign_in(
 #[tokio::test]
 async fn facebook_get_user_info_returns_none_when_access_token_is_missing(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let provider = FacebookProvider::new(FacebookOptions::default());
+    let provider = FacebookProvider::new(FacebookOptions {
+        oauth: provider_options(),
+        ..FacebookOptions::default()
+    })
+    .expect("provider should construct");
     let tokens = OAuth2Tokens::default();
 
     let info = provider.get_user_info(&tokens).await?;
@@ -237,7 +248,7 @@ fn provider_options() -> ProviderOptions {
             "fb-web".to_owned(),
             "fb-mobile".to_owned(),
         ])),
-        client_secret: Some("fb-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("fb-secret").expect("valid client secret")),
         scope: vec!["pages_show_list".to_owned()],
         ..ProviderOptions::default()
     }
@@ -261,7 +272,8 @@ fn facebook_verify_id_token_accepts_complete_signed_token_with_standard_claims(
     let provider = FacebookProvider::new(FacebookOptions {
         oauth: provider_options(),
         ..FacebookOptions::default()
-    });
+    })
+    .expect("provider should construct");
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let (token, jwk) = signed_token(json!({
         "sub": "limited-user",
@@ -283,7 +295,8 @@ fn facebook_verify_id_token_rejects_signed_tokens_missing_standard_claims(
     let provider = FacebookProvider::new(FacebookOptions {
         oauth: provider_options(),
         ..FacebookOptions::default()
-    });
+    })
+    .expect("provider should construct");
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let base = json!({
         "sub": "limited-user",

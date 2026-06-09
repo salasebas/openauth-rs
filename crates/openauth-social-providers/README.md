@@ -20,14 +20,14 @@ Spotify, TikTok, Twitch, Twitter/X, Vercel, VK, WeChat, Zoom, and others.
 
 ```rust
 use openauth::OpenAuth;
-use openauth_oauth::oauth2::ProviderOptions;
-use openauth_social_providers::github::github;
+use openauth_oauth::oauth2::{ClientSecret, ProviderOptions};
+use openauth_social_providers::github::GitHubProvider;
 
-let github = github(ProviderOptions {
+let github = GitHubProvider::new(ProviderOptions {
     client_id: Some("github-client-id".into()),
-    client_secret: Some("github-client-secret".into()),
+    client_secret: Some(ClientSecret::new("github-client-secret")?),
     ..ProviderOptions::default()
-});
+})?;
 
 let auth = OpenAuth::builder()
     .secret("secret-a-at-least-32-chars-long!!")
@@ -37,6 +37,14 @@ let auth = OpenAuth::builder()
 # let _ = auth;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+Each provider exposes a typed `*Provider::new(...)` that returns
+`Result<_, OAuthError>`. Providers build on [`OAuth2Client`] from
+`openauth-oauth` internally; use [`ProviderIdentity`] when you only need
+provider id/name metadata.
+
+[`OAuth2Client`]: https://docs.rs/openauth-oauth/latest/openauth_oauth/oauth2/struct.OAuth2Client.html
+[`ProviderIdentity`]: https://docs.rs/openauth-social-providers/latest/openauth_social_providers/trait.ProviderIdentity.html
 
 Browser redirects and UI remain application/client concerns. This crate only
 defines server-side OAuth provider behavior.

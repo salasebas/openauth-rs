@@ -6,25 +6,30 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use josekit::jwk::JwkSet;
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token,
-    refresh_access_token_request, validate_authorization_code, validate_token,
-    verify_jws_with_jwks, AuthorizationCodeRequest, AuthorizationUrlRequest, ClientAuthentication,
-    ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest,
-    OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest, TokenValidationOptions,
+    validate_token, verify_jws_with_jwks, OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError,
+    OAuthFormRequest, ProviderOptions, TokenValidationOptions, ValidateTokenOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
+use crate::runtime::ProviderIdentity;
+
+const AUTHORIZATION_ENDPOINT: &str = "https://id.twitch.tv/oauth2/authorize";
+const TOKEN_ENDPOINT: &str = "https://id.twitch.tv/oauth2/token";
+const JWKS_ENDPOINT: &str = "https://id.twitch.tv/oauth2/keys";
+const ISSUER: &str = "https://id.twitch.tv/oauth2";
+const DEFAULT_SCOPES: &[&str] = &["user:read:email", "openid"];
+const DEFAULT_CLAIMS: &[&str] = &["email", "email_verified", "preferred_username", "picture"];
+
 pub const TWITCH_ID: &str = "twitch";
 pub const TWITCH_NAME: &str = "Twitch";
-pub const TWITCH_AUTHORIZATION_ENDPOINT: &str = "https://id.twitch.tv/oauth2/authorize";
-pub const TWITCH_TOKEN_ENDPOINT: &str = "https://id.twitch.tv/oauth2/token";
-pub const TWITCH_JWKS_ENDPOINT: &str = "https://id.twitch.tv/oauth2/keys";
-pub const TWITCH_ISSUER: &str = "https://id.twitch.tv/oauth2";
-pub const TWITCH_DEFAULT_SCOPES: &[&str] = &["user:read:email", "openid"];
-pub const TWITCH_DEFAULT_CLAIMS: &[&str] =
-    &["email", "email_verified", "preferred_username", "picture"];
+pub const TWITCH_AUTHORIZATION_ENDPOINT: &str = AUTHORIZATION_ENDPOINT;
+pub const TWITCH_TOKEN_ENDPOINT: &str = TOKEN_ENDPOINT;
+pub const TWITCH_JWKS_ENDPOINT: &str = JWKS_ENDPOINT;
+pub const TWITCH_ISSUER: &str = ISSUER;
+pub const TWITCH_DEFAULT_SCOPES: &[&str] = DEFAULT_SCOPES;
+pub const TWITCH_DEFAULT_CLAIMS: &[&str] = DEFAULT_CLAIMS;
 
 /// Twitch provider configuration.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -79,18 +84,29 @@ pub struct TwitchUserInfo {
 }
 
 /// Twitch OAuth/OIDC provider.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct TwitchProvider {
+    client: OAuth2Client,
     options: TwitchOptions,
 }
 
-pub fn twitch(options: TwitchOptions) -> TwitchProvider {
+pub fn twitch(options: TwitchOptions) -> Result<TwitchProvider, OAuthError> {
     TwitchProvider::new(options)
 }
 
 impl TwitchProvider {
-    pub fn new(options: TwitchOptions) -> Self {
-        Self { options }
+    pub fn new(options: TwitchOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder("twitch", options.oauth.clone())
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
+        }
+        Ok(Self {
+            client: builder.build()?,
+            options,
+        })
     }
 
     pub fn options(&self) -> &TwitchOptions {
@@ -98,23 +114,21 @@ impl TwitchProvider {
     }
 
     pub fn token_endpoint(&self) -> &str {
-        TWITCH_TOKEN_ENDPOINT
+        self.client.token_endpoint().as_str()
     }
 
     pub fn create_authorization_url(
         &self,
         request: TwitchAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: TWITCH_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: TWITCH_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            scopes: self.scopes(request.scopes),
-            claims: self.claims(),
-            ..AuthorizationUrlRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?
+            .scopes(request.scopes);
+        for claim in self.claims() {
+            url = url.claim(claim);
+        }
+        url.build()
     }
 
     pub fn authorization_code_request(
@@ -122,13 +136,9 @@ impl TwitchProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        self.client
+            .exchange_code(code, redirect_uri)?
+            .into_form_request()
     }
 
     pub async fn validate_authorization_code(
@@ -136,45 +146,23 @@ impl TwitchProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: TWITCH_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        self.client.exchange_code(code, redirect_uri)?.send().await
     }
 
     pub fn refresh_access_token_request(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .refresh_token(refresh_token)?
+            .into_form_request()
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: TWITCH_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(
@@ -207,15 +195,15 @@ impl TwitchProvider {
             .options
             .jwks_endpoint
             .as_deref()
-            .unwrap_or(TWITCH_JWKS_ENDPOINT);
+            .unwrap_or(JWKS_ENDPOINT);
         let payload = match validate_token(
             token,
             jwks_endpoint,
-            TokenValidationOptions {
+            ValidateTokenOptions::new(TokenValidationOptions {
                 audience: audiences,
-                issuer: vec![TWITCH_ISSUER.to_owned()],
+                issuer: vec![ISSUER.to_owned()],
                 ..TokenValidationOptions::default().require_standard_claims()
-            },
+            }),
         )
         .await
         {
@@ -243,7 +231,7 @@ impl TwitchProvider {
             jwk_set,
             &TokenValidationOptions {
                 audience: audiences,
-                issuer: vec![TWITCH_ISSUER.to_owned()],
+                issuer: vec![ISSUER.to_owned()],
                 ..TokenValidationOptions::default().require_standard_claims()
             },
         ) {
@@ -274,23 +262,17 @@ impl TwitchProvider {
         Ok(true)
     }
 
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            TWITCH_DEFAULT_SCOPES
-                .iter()
-                .map(|scope| (*scope).to_owned())
-                .collect()
-        };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
+    pub fn id(&self) -> &str {
+        TWITCH_ID
+    }
+
+    pub fn name(&self) -> &str {
+        TWITCH_NAME
     }
 
     fn claims(&self) -> Vec<String> {
         if self.options.claims.is_empty() {
-            TWITCH_DEFAULT_CLAIMS
+            DEFAULT_CLAIMS
                 .iter()
                 .map(|claim| (*claim).to_owned())
                 .collect()
@@ -300,7 +282,7 @@ impl TwitchProvider {
     }
 
     fn client_id_audiences(&self) -> Vec<String> {
-        match &self.options.oauth.client_id {
+        match &self.client.options().client_id {
             Some(openauth_oauth::oauth2::ClientId::Single(value)) if !value.is_empty() => {
                 vec![value.clone()]
             }
@@ -314,13 +296,13 @@ impl TwitchProvider {
     }
 }
 
-impl OAuthProviderContract for TwitchProvider {
+impl ProviderIdentity for TwitchProvider {
     fn id(&self) -> &str {
-        TWITCH_ID
+        self.id()
     }
 
     fn name(&self) -> &str {
-        TWITCH_NAME
+        self.name()
     }
 }
 
