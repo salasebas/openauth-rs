@@ -9,15 +9,15 @@ pub fn schema_contributions(options: &StripeOptions) -> Vec<PluginSchemaContribu
     let mut contributions = vec![
         PluginSchemaContribution::field(
             "user",
-            "stripeCustomerId",
+            "stripe_customer_id",
             DbField::new("stripe_customer_id", DbFieldType::String).optional(),
         ),
-        PluginSchemaContribution::table("stripeWebhookEvent", webhook_event_table()),
+        PluginSchemaContribution::table("stripe_webhook_event", webhook_event_table()),
     ];
     if options.organization.as_ref().is_some_and(|org| org.enabled) {
         contributions.push(PluginSchemaContribution::field(
             "organization",
-            "stripeCustomerId",
+            "stripe_customer_id",
             DbField::new("stripe_customer_id", DbFieldType::String).optional(),
         ));
     }
@@ -60,16 +60,16 @@ fn merge_subscription_table(base: &mut DbTable, custom: &DbTable) {
 /// used to make webhook delivery idempotent (skip already-processed events).
 fn webhook_event_table() -> DbTable {
     table(
-        "stripe_webhook_event",
+        "stripe_webhook_events",
         Some(71),
         [
             ("id", DbField::new("id", DbFieldType::String)),
             (
-                "eventType",
+                "event_type",
                 DbField::new("event_type", DbFieldType::String).indexed(),
             ),
             (
-                "createdAt",
+                "created_at",
                 DbField::new("created_at", DbFieldType::Timestamp),
             ),
         ],
@@ -84,17 +84,17 @@ fn subscription_table() -> DbTable {
             ("id", DbField::new("id", DbFieldType::String)),
             ("plan", DbField::new("plan", DbFieldType::String).indexed()),
             (
-                "referenceId",
+                "reference_id",
                 DbField::new("reference_id", DbFieldType::String).indexed(),
             ),
             (
-                "stripeCustomerId",
+                "stripe_customer_id",
                 DbField::new("stripe_customer_id", DbFieldType::String)
                     .optional()
                     .indexed(),
             ),
             (
-                "stripeSubscriptionId",
+                "stripe_subscription_id",
                 DbField::new("stripe_subscription_id", DbFieldType::String)
                     .optional()
                     .indexed(),
@@ -104,35 +104,35 @@ fn subscription_table() -> DbTable {
                 DbField::new("status", DbFieldType::String).indexed(),
             ),
             (
-                "periodStart",
+                "period_start",
                 DbField::new("period_start", DbFieldType::Timestamp).optional(),
             ),
             (
-                "periodEnd",
+                "period_end",
                 DbField::new("period_end", DbFieldType::Timestamp).optional(),
             ),
             (
-                "trialStart",
+                "trial_start",
                 DbField::new("trial_start", DbFieldType::Timestamp).optional(),
             ),
             (
-                "trialEnd",
+                "trial_end",
                 DbField::new("trial_end", DbFieldType::Timestamp).optional(),
             ),
             (
-                "cancelAtPeriodEnd",
+                "cancel_at_period_end",
                 DbField::new("cancel_at_period_end", DbFieldType::Boolean).optional(),
             ),
             (
-                "cancelAt",
+                "cancel_at",
                 DbField::new("cancel_at", DbFieldType::Timestamp).optional(),
             ),
             (
-                "canceledAt",
+                "canceled_at",
                 DbField::new("canceled_at", DbFieldType::Timestamp).optional(),
             ),
             (
-                "endedAt",
+                "ended_at",
                 DbField::new("ended_at", DbFieldType::Timestamp).optional(),
             ),
             (
@@ -140,11 +140,11 @@ fn subscription_table() -> DbTable {
                 DbField::new("seats", DbFieldType::Number).optional(),
             ),
             (
-                "billingInterval",
+                "billing_interval",
                 DbField::new("billing_interval", DbFieldType::String).optional(),
             ),
             (
-                "stripeScheduleId",
+                "stripe_schedule_id",
                 DbField::new("stripe_schedule_id", DbFieldType::String).optional(),
             ),
             (

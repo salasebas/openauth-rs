@@ -74,7 +74,7 @@ async fn domain_verification_allows_organization_member_for_org_provider(
 
     assert_eq!(verify_response.status(), StatusCode::NO_CONTENT);
     assert_eq!(
-        adapter.records("ssoProvider").await[0].get("domainVerified"),
+        adapter.records("sso_provider").await[0].get("domain_verified"),
         Some(&DbValue::Boolean(true))
     );
 

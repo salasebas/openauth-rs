@@ -30,7 +30,7 @@ async fn verify_endpoint_creates_anonymous_user_wallet_account_and_session(
     assert_eq!(body["user"]["walletAddress"], WALLET);
     assert_eq!(adapter.len("user").await, 1);
     assert_eq!(adapter.len("session").await, 1);
-    assert_eq!(adapter.len("walletAddress").await, 1);
+    assert_eq!(adapter.len("wallet_address").await, 1);
     let accounts = adapter.records("account").await;
     assert!(accounts.iter().any(|record| {
         record.get("user_id") == Some(&DbValue::String(user_id.to_owned()))
@@ -116,18 +116,18 @@ async fn verify_endpoint_reuses_same_wallet_and_adds_second_chain(
     assert_eq!(adapter.len("user").await, 1);
     let wallet_records = adapter
         .find_many(
-            FindMany::new("walletAddress")
+            FindMany::new("wallet_address")
                 .where_clause(Where::new("address", DbValue::String(WALLET.to_owned()))),
         )
         .await?;
     assert_eq!(wallet_records.len(), 2);
     assert!(wallet_records.iter().any(|record| {
-        record.get("chainId") == Some(&DbValue::Number(1))
-            && record.get("isPrimary") == Some(&DbValue::Boolean(true))
+        record.get("chain_id") == Some(&DbValue::Number(1))
+            && record.get("is_primary") == Some(&DbValue::Boolean(true))
     }));
     assert!(wallet_records.iter().any(|record| {
-        record.get("chainId") == Some(&DbValue::Number(137))
-            && record.get("isPrimary") == Some(&DbValue::Boolean(false))
+        record.get("chain_id") == Some(&DbValue::Number(137))
+            && record.get("is_primary") == Some(&DbValue::Boolean(false))
     }));
     Ok(())
 }
@@ -162,7 +162,7 @@ async fn verify_endpoint_reuses_same_wallet_when_case_changes(
     assert_eq!(first.status(), StatusCode::OK);
     assert_eq!(second.status(), StatusCode::OK);
     assert_eq!(adapter.len("user").await, 1);
-    assert_eq!(adapter.len("walletAddress").await, 1);
+    assert_eq!(adapter.len("wallet_address").await, 1);
     Ok(())
 }
 
@@ -199,6 +199,6 @@ async fn verify_endpoint_reuses_same_wallet_on_same_chain() -> Result<(), Box<dy
 
     assert_eq!(first["user"]["id"], second["user"]["id"]);
     assert_eq!(adapter.len("user").await, 1);
-    assert_eq!(adapter.len("walletAddress").await, 1);
+    assert_eq!(adapter.len("wallet_address").await, 1);
     Ok(())
 }

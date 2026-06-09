@@ -367,7 +367,7 @@ async fn subscription_webhook_releases_idempotency_claim_on_handler_failure(
     // error and must not leave the event marked as processed, so Stripe retries
     // can recover instead of short-circuiting on the stored idempotency row.
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(adapter.len("stripeWebhookEvent").await, 0);
+    assert_eq!(adapter.len("stripe_webhook_event").await, 0);
     Ok(())
 }
 

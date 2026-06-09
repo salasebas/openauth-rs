@@ -688,9 +688,12 @@ async fn management_delete_provider_purges_users_and_blocks_provider_id_reuse() 
 
     let profile = adapter
         .find_one(
-            FindOne::new("scimUserProfile")
-                .where_clause(Where::new("providerId", DbValue::String("okta".to_owned())))
-                .where_clause(Where::new("userId", DbValue::String(user_id.clone()))),
+            FindOne::new("scim_user_profile")
+                .where_clause(Where::new(
+                    "provider_id",
+                    DbValue::String("okta".to_owned()),
+                ))
+                .where_clause(Where::new("user_id", DbValue::String(user_id.clone()))),
         )
         .await
         .expect("profile lookup should succeed");
@@ -774,10 +777,10 @@ async fn management_delete_provider_purges_groups_without_touching_native_teams(
     assert!(scim_team.is_none());
 
     let scim_profile = adapter
-        .find_one(
-            FindOne::new("scimGroupProfile")
-                .where_clause(Where::new("providerId", DbValue::String("okta".to_owned()))),
-        )
+        .find_one(FindOne::new("scim_group_profile").where_clause(Where::new(
+            "provider_id",
+            DbValue::String("okta".to_owned()),
+        )))
         .await
         .expect("group profile lookup should succeed");
     assert!(scim_profile.is_none());

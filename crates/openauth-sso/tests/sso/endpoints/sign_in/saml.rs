@@ -279,8 +279,8 @@ async fn sign_in_sso_with_configured_saml_services_prefers_redirect_binding(
         )?)
         .await?;
 
-    let records = adapter.records("ssoProvider").await;
-    let Some(DbValue::String(config)) = records[0].get("samlConfig") else {
+    let records = adapter.records("sso_provider").await;
+    let Some(DbValue::String(config)) = records[0].get("saml_config") else {
         return Err("missing stored SAML config".into());
     };
     assert!(config.contains(r#""entryPoint":"https://idp.example.com/saml/redirect""#));

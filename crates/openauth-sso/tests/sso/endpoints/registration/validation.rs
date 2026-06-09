@@ -16,7 +16,7 @@ async fn register_rejects_public_suffix_domain() -> Result<(), Box<dyn std::erro
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(response)?["code"], "INVALID_DOMAIN");
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
 
     Ok(())
 }
@@ -38,7 +38,7 @@ async fn register_rejects_empty_comma_separated_domain_segment(
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(response)?["code"], "INVALID_DOMAIN");
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
 
     Ok(())
 }
@@ -73,7 +73,7 @@ async fn register_rejects_provider_id_that_cannot_be_used_in_paths(
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{provider_id}");
         assert_eq!(json_body(response)?["code"], "INVALID_PROVIDER_ID");
     }
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
 
     Ok(())
 }
@@ -108,7 +108,7 @@ async fn register_rejects_invalid_oidc_endpoint_url_when_discovery_is_skipped(
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(response)?["code"], "INVALID_OIDC_CONFIG");
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
 
     Ok(())
 }
@@ -148,7 +148,7 @@ async fn register_rejects_saml_config_with_invalid_entry_point(
     assert!(body["message"]
         .as_str()
         .is_some_and(|message| message.contains("entryPoint")));
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
 
     Ok(())
 }
@@ -184,7 +184,7 @@ async fn register_rejects_saml_config_with_non_http_entry_point(
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(response)?["code"], "INVALID_SAML_CONFIG");
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
 
     Ok(())
 }
@@ -221,7 +221,7 @@ async fn register_rejects_saml_config_with_unknown_signature_algorithm(
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(response)?["code"], "SAML_UNKNOWN_ALGORITHM");
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
 
     Ok(())
 }
@@ -263,7 +263,7 @@ async fn register_rejects_deprecated_saml_algorithm_when_configured(
         json_body(response)?["code"],
         "SAML_DEPRECATED_CONFIG_ALGORITHM"
     );
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
 
     Ok(())
 }

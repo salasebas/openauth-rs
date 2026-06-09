@@ -13,7 +13,7 @@ use crate::options::StripeOptions;
 use super::support::{error_response, json_response};
 
 /// Logical model name of the durable webhook idempotency table.
-const WEBHOOK_EVENT_MODEL: &str = "stripeWebhookEvent";
+const WEBHOOK_EVENT_MODEL: &str = "stripe_webhook_event";
 
 pub fn stripe_webhook(options: StripeOptions) -> openauth_core::api::AsyncAuthEndpoint {
     create_auth_endpoint(

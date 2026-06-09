@@ -344,16 +344,16 @@ async fn purge_provider_groups(
     };
     let profiles = adapter
         .find_many(
-            FindMany::new("scimGroupProfile")
+            FindMany::new("scim_group_profile")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String(provider.provider_id.clone()),
                 ))
-                .select(["teamId"]),
+                .select(["team_id"]),
         )
         .await?;
     for profile in profiles {
-        let team_id = required_string(&profile, "teamId")?.to_owned();
+        let team_id = required_string(&profile, "team_id")?.to_owned();
         delete_group(adapter, organization_id, &provider.provider_id, &team_id).await?;
     }
     Ok(())

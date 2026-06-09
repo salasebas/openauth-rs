@@ -81,7 +81,7 @@ async fn duplicate_event_runs_side_effects_only_once() -> Result<(), Box<dyn std
     assert_eq!(second.status(), StatusCode::OK);
     // on_event (and every other side effect) runs once despite two deliveries.
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(adapter.len("stripeWebhookEvent").await, 1);
+    assert_eq!(adapter.len("stripe_webhook_event").await, 1);
     Ok(())
 }
 
@@ -118,13 +118,13 @@ async fn failed_on_event_is_not_marked_processed_and_can_be_retried(
         (endpoint.handler)(&context, signed_webhook_request("whsec_test", PAYLOAD)?).await?;
     assert_eq!(first.status(), StatusCode::BAD_REQUEST);
     // A failed delivery must not leave a processed-event row behind.
-    assert_eq!(adapter.len("stripeWebhookEvent").await, 0);
+    assert_eq!(adapter.len("stripe_webhook_event").await, 0);
 
     let retry =
         (endpoint.handler)(&context, signed_webhook_request("whsec_test", PAYLOAD)?).await?;
     assert_eq!(retry.status(), StatusCode::OK);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert_eq!(adapter.len("stripeWebhookEvent").await, 1);
+    assert_eq!(adapter.len("stripe_webhook_event").await, 1);
     Ok(())
 }
 
@@ -216,13 +216,13 @@ async fn failed_built_in_handler_is_not_marked_processed_and_can_be_retried(
         (endpoint.handler)(&context, signed_webhook_request("whsec_test", payload)?).await?;
     assert_eq!(first.status(), StatusCode::BAD_REQUEST);
     // The failed delivery must not leave a processed-event row behind.
-    assert_eq!(adapter.len("stripeWebhookEvent").await, 0);
+    assert_eq!(adapter.len("stripe_webhook_event").await, 0);
 
     // Stripe retries the same signed event; the second Stripe call succeeds.
     let retry =
         (endpoint.handler)(&context, signed_webhook_request("whsec_test", payload)?).await?;
     assert_eq!(retry.status(), StatusCode::OK);
-    assert_eq!(adapter.len("stripeWebhookEvent").await, 1);
+    assert_eq!(adapter.len("stripe_webhook_event").await, 1);
 
     // The retry re-ran the built-in handler and synced local billing state.
     let subscription = adapter

@@ -46,7 +46,7 @@ pub(super) async fn enable_totp(
     adapter: &MemoryAdapter,
     router: &AuthRouter,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    enable_totp_in_table(adapter, router, "twoFactor").await
+    enable_totp_in_table(adapter, router, "two_factor").await
 }
 
 pub(super) async fn enable_totp_in_table(
@@ -233,7 +233,7 @@ pub(super) fn signed_cookie_value(
 }
 
 pub(super) async fn two_factor_record(adapter: &MemoryAdapter) -> Result<DbRecord, OpenAuthError> {
-    two_factor_record_in(adapter, "twoFactor").await
+    two_factor_record_in(adapter, "two_factor").await
 }
 
 pub(super) async fn two_factor_record_in(

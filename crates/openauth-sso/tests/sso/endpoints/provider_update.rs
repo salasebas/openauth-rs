@@ -32,13 +32,13 @@ async fn update_provider_applies_owner_scope_and_resets_domain_verification(
     assert_eq!(body["organizationId"], "org_1");
     assert_eq!(body["domainVerified"], false);
 
-    let records = adapter.records("ssoProvider").await;
+    let records = adapter.records("sso_provider").await;
     assert_eq!(
         records[0].get("domain"),
         Some(&DbValue::String("corp.example.com".to_owned()))
     );
     assert_eq!(
-        records[0].get("organizationId"),
+        records[0].get("organization_id"),
         Some(&DbValue::String("org_1".to_owned()))
     );
 
@@ -77,8 +77,8 @@ async fn update_provider_rejects_organization_id_without_membership(
         json_body(response)?["code"],
         "ORGANIZATION_MEMBERSHIP_REQUIRED"
     );
-    let records = adapter.records("ssoProvider").await;
-    assert_eq!(records[0].get("organizationId"), Some(&DbValue::Null));
+    let records = adapter.records("sso_provider").await;
+    assert_eq!(records[0].get("organization_id"), Some(&DbValue::Null));
 
     Ok(())
 }
@@ -171,8 +171,8 @@ async fn update_provider_merges_partial_saml_config() -> Result<(), Box<dyn std:
     assert_eq!(body["samlConfig"]["wantAssertionsSigned"], false);
     assert!(body["samlConfig"].get("cert").is_none());
 
-    let records = adapter.records("ssoProvider").await;
-    let Some(DbValue::String(config)) = records[0].get("samlConfig") else {
+    let records = adapter.records("sso_provider").await;
+    let Some(DbValue::String(config)) = records[0].get("saml_config") else {
         return Err("missing stored SAML config".into());
     };
     assert!(config.contains(r#""cert":"CERTIFICATE""#));
@@ -225,8 +225,8 @@ async fn update_provider_merges_partial_oidc_config_and_keeps_secret(
     assert_eq!(body["oidcConfig"]["scopes"], json!(["openid", "profile"]));
     assert_eq!(body["oidcConfig"]["clientIdLastFour"], "****3456");
 
-    let records = adapter.records("ssoProvider").await;
-    let Some(DbValue::String(config)) = records[0].get("oidcConfig") else {
+    let records = adapter.records("sso_provider").await;
+    let Some(DbValue::String(config)) = records[0].get("oidc_config") else {
         return Err("missing stored OIDC config".into());
     };
     assert!(config.contains(r#""clientSecret":"super-secret""#));
@@ -440,7 +440,7 @@ async fn update_provider_rejects_public_suffix_domain() -> Result<(), Box<dyn st
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(response)?["code"], "INVALID_DOMAIN");
-    let records = adapter.records("ssoProvider").await;
+    let records = adapter.records("sso_provider").await;
     assert_eq!(
         records[0].get("domain"),
         Some(&DbValue::String("example.com".to_owned()))
@@ -488,7 +488,7 @@ async fn update_provider_oidc_trust_boundary_change_resets_domain_verification(
         let body = json_body(response)?;
         assert_eq!(body["domainVerified"], false, "payload: {payload}");
         assert_eq!(
-            adapter.records("ssoProvider").await[0].get("domainVerified"),
+            adapter.records("sso_provider").await[0].get("domain_verified"),
             Some(&DbValue::Boolean(false)),
             "payload: {payload}"
         );
@@ -527,7 +527,7 @@ async fn update_provider_oidc_safe_metadata_preserves_domain_verification(
     let body = json_body(response)?;
     assert_eq!(body["domainVerified"], true);
     assert_eq!(
-        adapter.records("ssoProvider").await[0].get("domainVerified"),
+        adapter.records("sso_provider").await[0].get("domain_verified"),
         Some(&DbValue::Boolean(true))
     );
 
@@ -562,7 +562,7 @@ async fn update_provider_saml_trust_boundary_change_resets_domain_verification(
         let body = json_body(response)?;
         assert_eq!(body["domainVerified"], false, "payload: {payload}");
         assert_eq!(
-            adapter.records("ssoProvider").await[0].get("domainVerified"),
+            adapter.records("sso_provider").await[0].get("domain_verified"),
             Some(&DbValue::Boolean(false)),
             "payload: {payload}"
         );
@@ -599,7 +599,7 @@ async fn update_provider_saml_callback_url_preserves_domain_verification(
     let body = json_body(response)?;
     assert_eq!(body["domainVerified"], true);
     assert_eq!(
-        adapter.records("ssoProvider").await[0].get("domainVerified"),
+        adapter.records("sso_provider").await[0].get("domain_verified"),
         Some(&DbValue::Boolean(true))
     );
 

@@ -31,14 +31,14 @@ async fn device_code_route_generates_codes_and_persists_record(
         .await
         .ok_or("missing device record")?;
     assert_eq!(
-        record.get("clientId"),
+        record.get("client_id"),
         Some(&DbValue::String("test-client".to_owned()))
     );
     assert_eq!(
         record.get("scope"),
         Some(&DbValue::String("read write".to_owned()))
     );
-    assert_eq!(record.get("pollingInterval"), Some(&DbValue::Number(2000)));
+    assert_eq!(record.get("polling_interval"), Some(&DbValue::Number(2000)));
     Ok(())
 }
 

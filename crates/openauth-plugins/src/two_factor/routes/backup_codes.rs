@@ -51,7 +51,7 @@ pub(super) fn generate_backup_codes_endpoint(
                 {
                     return flow_error_response(error);
                 }
-                let Some(record) = TwoFactorStore::new(adapter.as_ref(), &options.two_factor_table)
+                let Some(record) = TwoFactorStore::new(adapter.as_ref())
                     .find_by_user(&user.id)
                     .await?
                 else {
@@ -63,7 +63,7 @@ pub(super) fn generate_backup_codes_endpoint(
                 };
                 let codes = generate_backup_codes(&options.backup_codes);
                 let encoded = encode_backup_codes(&codes, &context.secret, &options.backup_codes)?;
-                TwoFactorStore::new(adapter.as_ref(), &options.two_factor_table)
+                TwoFactorStore::new(adapter.as_ref())
                     .update_backup_codes_if_current(&record.id, &record.backup_codes, encoded)
                     .await?;
                 json_response(
@@ -94,10 +94,9 @@ pub(super) fn verify_backup_code_endpoint(
                     Ok(flow) => flow,
                     Err(error) => return flow_error_response(error),
                 };
-                let Some(record) =
-                    TwoFactorStore::new(flow.adapter.as_ref(), &options.two_factor_table)
-                        .find_by_user(&flow.user.id)
-                        .await?
+                let Some(record) = TwoFactorStore::new(flow.adapter.as_ref())
+                    .find_by_user(&flow.user.id)
+                    .await?
                 else {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -119,7 +118,7 @@ pub(super) fn verify_backup_code_endpoint(
                 };
                 let encoded =
                     encode_backup_codes(&updated, &context.secret, &options.backup_codes)?;
-                if !TwoFactorStore::new(flow.adapter.as_ref(), &options.two_factor_table)
+                if !TwoFactorStore::new(flow.adapter.as_ref())
                     .update_backup_codes_if_current(&record.id, &record.backup_codes, encoded)
                     .await?
                 {
@@ -168,7 +167,7 @@ pub(super) fn view_backup_codes_endpoint(
                         "two factor plugin requires a database adapter".to_owned(),
                     )
                 })?;
-                let Some(record) = TwoFactorStore::new(adapter.as_ref(), &options.two_factor_table)
+                let Some(record) = TwoFactorStore::new(adapter.as_ref())
                     .find_by_user(&body.user_id)
                     .await?
                 else {

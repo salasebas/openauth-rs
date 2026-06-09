@@ -20,14 +20,14 @@ async fn register_persists_provider_for_session_user() -> Result<(), Box<dyn std
     assert_eq!(body["providerId"], "okta");
     assert_eq!(body["domainVerified"], false);
 
-    let records = adapter.records("ssoProvider").await;
+    let records = adapter.records("sso_provider").await;
     assert_eq!(records.len(), 1);
     assert_eq!(
-        records[0].get("providerId"),
+        records[0].get("provider_id"),
         Some(&openauth_core::db::DbValue::String("okta".to_owned()))
     );
     assert_eq!(
-        records[0].get("userId"),
+        records[0].get("user_id"),
         Some(&openauth_core::db::DbValue::String("user_1".to_owned()))
     );
 
@@ -52,11 +52,11 @@ async fn register_uses_custom_sso_provider_model_name() -> Result<(), Box<dyn st
         .await?;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
     let records = adapter.records("enterpriseSsoProvider").await;
     assert_eq!(records.len(), 1);
     assert_eq!(
-        records[0].get("providerId"),
+        records[0].get("provider_id"),
         Some(&openauth_core::db::DbValue::String("okta".to_owned()))
     );
 

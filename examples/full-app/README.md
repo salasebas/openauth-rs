@@ -4,6 +4,10 @@ This example is the living integration app for the current workspace version of
 OpenAuth. It uses local path dependencies, so it tracks the repository API
 instead of a published crate version.
 
+The app also enables `openauth-oauth-provider` with MCP protected-resource
+metadata. OAuth clients use the standard `/oauth2/*` routes under the auth base
+path (`/api/axum/auth` by default).
+
 ## Run with SQLite
 
 ```bash

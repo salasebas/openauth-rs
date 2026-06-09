@@ -19,26 +19,26 @@ use crate::utils::client_id_last_four;
 const SSO_PROVIDER_FIELDS: [&str; 9] = [
     "id",
     "issuer",
-    "oidcConfig",
-    "samlConfig",
-    "userId",
-    "providerId",
-    "organizationId",
+    "oidc_config",
+    "saml_config",
+    "user_id",
+    "provider_id",
+    "organization_id",
     "domain",
-    "createdAt",
+    "created_at",
 ];
 
 const SSO_PROVIDER_FIELDS_WITH_DOMAIN_VERIFIED: [&str; 10] = [
     "id",
     "issuer",
-    "oidcConfig",
-    "samlConfig",
-    "userId",
-    "providerId",
-    "organizationId",
+    "oidc_config",
+    "saml_config",
+    "user_id",
+    "provider_id",
+    "organization_id",
     "domain",
-    "domainVerified",
-    "createdAt",
+    "domain_verified",
+    "created_at",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,7 +227,7 @@ impl<'a> SsoProviderStore<'a> {
         user_id: &str,
     ) -> Result<Vec<SsoProviderRecord>, OpenAuthError> {
         let query = FindMany::new(self.model_name)
-            .where_clause(Where::new("userId", DbValue::String(user_id.to_owned())));
+            .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned())));
         self.adapter
             .find_many(self.select_find_many(query))
             .await?
@@ -255,7 +255,7 @@ impl<'a> SsoProviderStore<'a> {
         organization_id: &str,
     ) -> Result<Option<SsoProviderRecord>, OpenAuthError> {
         let query = FindOne::new(self.model_name).where_clause(Where::new(
-            "organizationId",
+            "organization_id",
             DbValue::String(organization_id.to_owned()),
         ));
         self.adapter
@@ -274,18 +274,18 @@ impl<'a> SsoProviderStore<'a> {
         let mut query = Create::new(self.model_name)
             .data("id", DbValue::String(generate_random_string(32)))
             .data("issuer", DbValue::String(input.issuer))
-            .data("oidcConfig", optional_string(input.oidc_config))
-            .data("samlConfig", optional_string(input.saml_config))
-            .data("userId", DbValue::String(input.user_id))
-            .data("providerId", DbValue::String(input.provider_id))
-            .data("organizationId", optional_string(input.organization_id))
+            .data("oidc_config", optional_string(input.oidc_config))
+            .data("saml_config", optional_string(input.saml_config))
+            .data("user_id", DbValue::String(input.user_id))
+            .data("provider_id", DbValue::String(input.provider_id))
+            .data("organization_id", optional_string(input.organization_id))
             .data("domain", DbValue::String(input.domain))
-            .data("createdAt", DbValue::Timestamp(now))
-            .data("updatedAt", DbValue::Timestamp(now))
+            .data("created_at", DbValue::Timestamp(now))
+            .data("updated_at", DbValue::Timestamp(now))
             .force_allow_id();
         query = self.select_create(query);
         if let Some(domain_verified) = input.domain_verified {
-            query = query.data("domainVerified", DbValue::Boolean(domain_verified));
+            query = query.data("domain_verified", DbValue::Boolean(domain_verified));
         }
 
         record_from_db(self.adapter.create(query).await?)
@@ -301,8 +301,8 @@ impl<'a> SsoProviderStore<'a> {
             .update(
                 Update::new(self.model_name)
                     .where_clause(provider_id_where(provider_id))
-                    .data("domainVerified", DbValue::Boolean(verified))
-                    .data("updatedAt", DbValue::Timestamp(OffsetDateTime::now_utc())),
+                    .data("domain_verified", DbValue::Boolean(verified))
+                    .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc())),
             )
             .await?
             .map(record_from_db)
@@ -317,7 +317,7 @@ impl<'a> SsoProviderStore<'a> {
     ) -> Result<Option<SsoProviderRecord>, OpenAuthError> {
         let mut query = Update::new(self.model_name)
             .where_clause(provider_id_where(provider_id))
-            .data("updatedAt", DbValue::Timestamp(OffsetDateTime::now_utc()));
+            .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc()));
 
         if let Some(issuer) = input.issuer {
             query = query.data("issuer", DbValue::String(issuer));
@@ -326,16 +326,16 @@ impl<'a> SsoProviderStore<'a> {
             query = query.data("domain", DbValue::String(domain));
         }
         if let Some(organization_id) = input.organization_id {
-            query = query.data("organizationId", DbValue::String(organization_id));
+            query = query.data("organization_id", DbValue::String(organization_id));
         }
         if let Some(oidc_config) = input.oidc_config {
-            query = query.data("oidcConfig", optional_string(oidc_config));
+            query = query.data("oidc_config", optional_string(oidc_config));
         }
         if let Some(saml_config) = input.saml_config {
-            query = query.data("samlConfig", optional_string(saml_config));
+            query = query.data("saml_config", optional_string(saml_config));
         }
         if let Some(domain_verified) = input.domain_verified {
-            query = query.data("domainVerified", DbValue::Boolean(domain_verified));
+            query = query.data("domain_verified", DbValue::Boolean(domain_verified));
         }
 
         self.adapter
@@ -505,7 +505,7 @@ impl SsoProviderRecord {
 }
 
 fn provider_id_where(provider_id: &str) -> Where {
-    Where::new("providerId", DbValue::String(provider_id.to_owned()))
+    Where::new("provider_id", DbValue::String(provider_id.to_owned()))
 }
 
 fn optional_string(value: Option<String>) -> DbValue {
@@ -516,14 +516,14 @@ fn record_from_db(record: DbRecord) -> Result<SsoProviderRecord, OpenAuthError> 
     Ok(SsoProviderRecord {
         id: required_string(&record, "id")?.to_owned(),
         issuer: required_string(&record, "issuer")?.to_owned(),
-        oidc_config: optional_string_field(&record, "oidcConfig")?,
-        saml_config: optional_string_field(&record, "samlConfig")?,
-        user_id: required_string(&record, "userId")?.to_owned(),
-        provider_id: required_string(&record, "providerId")?.to_owned(),
-        organization_id: optional_string_field(&record, "organizationId")?,
+        oidc_config: optional_string_field(&record, "oidc_config")?,
+        saml_config: optional_string_field(&record, "saml_config")?,
+        user_id: required_string(&record, "user_id")?.to_owned(),
+        provider_id: required_string(&record, "provider_id")?.to_owned(),
+        organization_id: optional_string_field(&record, "organization_id")?,
         domain: required_string(&record, "domain")?.to_owned(),
-        domain_verified: optional_bool_field(&record, "domainVerified")?,
-        created_at: optional_timestamp_field(&record, "createdAt")?,
+        domain_verified: optional_bool_field(&record, "domain_verified")?,
+        created_at: optional_timestamp_field(&record, "created_at")?,
     })
 }
 

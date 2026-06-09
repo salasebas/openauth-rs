@@ -44,8 +44,8 @@ async fn register_persists_and_sanitizes_oidc_config() -> Result<(), Box<dyn std
         "https://idp.example.com/oauth2/v1/authorize"
     );
 
-    let records = adapter.records("ssoProvider").await;
-    let Some(DbValue::String(config)) = records[0].get("oidcConfig") else {
+    let records = adapter.records("sso_provider").await;
+    let Some(DbValue::String(config)) = records[0].get("oidc_config") else {
         return Err("missing stored OIDC config".into());
     };
     assert!(config.contains(r#""clientSecret":"super-secret""#));
@@ -161,13 +161,13 @@ async fn register_allows_provider_with_oidc_and_saml_configs(
         "https://app.example.com/sso/callback/hybrid"
     );
 
-    let records = adapter.records("ssoProvider").await;
+    let records = adapter.records("sso_provider").await;
     assert!(matches!(
-        records[0].get("oidcConfig"),
+        records[0].get("oidc_config"),
         Some(DbValue::String(_))
     ));
     assert!(matches!(
-        records[0].get("samlConfig"),
+        records[0].get("saml_config"),
         Some(DbValue::String(_))
     ));
 

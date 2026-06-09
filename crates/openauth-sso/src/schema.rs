@@ -4,7 +4,7 @@ use openauth_core::plugin::PluginSchemaContribution;
 
 use crate::options::SsoOptions;
 
-pub const SSO_PROVIDER_MODEL: &str = "ssoProvider";
+pub const SSO_PROVIDER_MODEL: &str = "sso_provider";
 
 pub fn contributions(options: &SsoOptions) -> Vec<PluginSchemaContribution> {
     vec![PluginSchemaContribution::table(
@@ -21,29 +21,29 @@ fn provider_table(options: &SsoOptions) -> DbTable {
         DbField::new("issuer", DbFieldType::String),
     );
     fields.insert(
-        "oidcConfig".to_owned(),
+        "oidc_config".to_owned(),
         DbField::new("oidc_config", DbFieldType::String)
             .optional()
             .hidden(),
     );
     fields.insert(
-        "samlConfig".to_owned(),
+        "saml_config".to_owned(),
         DbField::new("saml_config", DbFieldType::String)
             .optional()
             .hidden(),
     );
     fields.insert(
-        "userId".to_owned(),
+        "user_id".to_owned(),
         DbField::new("user_id", DbFieldType::String)
             .indexed()
             .references(ForeignKey::new("users", "id", OnDelete::Cascade)),
     );
     fields.insert(
-        "providerId".to_owned(),
+        "provider_id".to_owned(),
         DbField::new("provider_id", DbFieldType::String).unique(),
     );
     fields.insert(
-        "organizationId".to_owned(),
+        "organization_id".to_owned(),
         DbField::new("organization_id", DbFieldType::String)
             .optional()
             .indexed(),
@@ -54,18 +54,18 @@ fn provider_table(options: &SsoOptions) -> DbTable {
     );
     if options.domain_verification.enabled {
         fields.insert(
-            "domainVerified".to_owned(),
+            "domain_verified".to_owned(),
             DbField::new("domain_verified", DbFieldType::Boolean).optional(),
         );
     }
     fields.insert(
-        "createdAt".to_owned(),
+        "created_at".to_owned(),
         DbField::new("created_at", DbFieldType::Timestamp)
             .optional()
             .generated(),
     );
     fields.insert(
-        "updatedAt".to_owned(),
+        "updated_at".to_owned(),
         DbField::new("updated_at", DbFieldType::Timestamp)
             .optional()
             .generated(),

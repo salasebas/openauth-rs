@@ -4,9 +4,9 @@ use indexmap::IndexMap;
 use openauth_core::db::{DbField, DbFieldType, DbTable, ForeignKey, OnDelete};
 use openauth_core::plugin::PluginSchemaContribution;
 
-pub const SCIM_PROVIDER_MODEL: &str = "scimProvider";
-pub const SCIM_USER_PROFILE_MODEL: &str = "scimUserProfile";
-pub const SCIM_GROUP_PROFILE_MODEL: &str = "scimGroupProfile";
+pub const SCIM_PROVIDER_MODEL: &str = "scim_provider";
+pub const SCIM_USER_PROFILE_MODEL: &str = "scim_user_profile";
+pub const SCIM_GROUP_PROFILE_MODEL: &str = "scim_group_profile";
 
 pub fn contributions() -> Vec<PluginSchemaContribution> {
     vec![
@@ -23,23 +23,23 @@ fn scim_provider_table() -> DbTable {
     // logical IdP integration. Use distinct ids (for example `okta` vs `okta-org-a`)
     // when you need separate tokens or scopes; organization scope lives on the row.
     fields.insert(
-        "providerId".to_owned(),
+        "provider_id".to_owned(),
         DbField::new("provider_id", DbFieldType::String).unique(),
     );
     fields.insert(
-        "scimToken".to_owned(),
+        "scim_token".to_owned(),
         DbField::new("scim_token", DbFieldType::String)
             .unique()
             .hidden(),
     );
     fields.insert(
-        "organizationId".to_owned(),
+        "organization_id".to_owned(),
         DbField::new("organization_id", DbFieldType::String)
             .optional()
             .indexed(),
     );
     fields.insert(
-        "userId".to_owned(),
+        "user_id".to_owned(),
         DbField::new("user_id", DbFieldType::String)
             .optional()
             .indexed()
@@ -57,17 +57,17 @@ fn scim_user_profile_table() -> DbTable {
     let mut fields = IndexMap::new();
     fields.insert("id".to_owned(), DbField::new("id", DbFieldType::String));
     fields.insert(
-        "providerId".to_owned(),
+        "provider_id".to_owned(),
         DbField::new("provider_id", DbFieldType::String).indexed(),
     );
     fields.insert(
-        "userId".to_owned(),
+        "user_id".to_owned(),
         DbField::new("user_id", DbFieldType::String)
             .indexed()
             .references(ForeignKey::new("users", "id", OnDelete::Cascade)),
     );
     fields.insert(
-        "externalId".to_owned(),
+        "external_id".to_owned(),
         DbField::new("external_id", DbFieldType::String).optional(),
     );
     fields.insert(
@@ -79,11 +79,11 @@ fn scim_user_profile_table() -> DbTable {
         DbField::new("version", DbFieldType::String).optional(),
     );
     fields.insert(
-        "createdAt".to_owned(),
+        "created_at".to_owned(),
         DbField::new("created_at", DbFieldType::Timestamp).generated(),
     );
     fields.insert(
-        "updatedAt".to_owned(),
+        "updated_at".to_owned(),
         DbField::new("updated_at", DbFieldType::Timestamp).generated(),
     );
 
@@ -98,19 +98,19 @@ fn scim_group_profile_table() -> DbTable {
     let mut fields = IndexMap::new();
     fields.insert("id".to_owned(), DbField::new("id", DbFieldType::String));
     fields.insert(
-        "providerId".to_owned(),
+        "provider_id".to_owned(),
         DbField::new("provider_id", DbFieldType::String).indexed(),
     );
     fields.insert(
-        "organizationId".to_owned(),
+        "organization_id".to_owned(),
         DbField::new("organization_id", DbFieldType::String).indexed(),
     );
     fields.insert(
-        "teamId".to_owned(),
+        "team_id".to_owned(),
         DbField::new("team_id", DbFieldType::String).indexed(),
     );
     fields.insert(
-        "externalId".to_owned(),
+        "external_id".to_owned(),
         DbField::new("external_id", DbFieldType::String).optional(),
     );
     fields.insert(
@@ -122,11 +122,11 @@ fn scim_group_profile_table() -> DbTable {
         DbField::new("version", DbFieldType::String).optional(),
     );
     fields.insert(
-        "createdAt".to_owned(),
+        "created_at".to_owned(),
         DbField::new("created_at", DbFieldType::Timestamp).generated(),
     );
     fields.insert(
-        "updatedAt".to_owned(),
+        "updated_at".to_owned(),
         DbField::new("updated_at", DbFieldType::Timestamp).generated(),
     );
 

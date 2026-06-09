@@ -1,15 +1,23 @@
 [package]
 name = "openauth-example-full-app"
-version = "0.0.6"
+version = "0.1.0"
 edition.workspace = true
 publish = false
 
 [dependencies]
 axum.workspace = true
 http.workspace = true
-openauth = { path = "../../crates/openauth", features = ["sqlx"] }
+openauth = { path = "../../crates/openauth", features = [
+    "sqlx",
+    "plugins",
+    "passkey",
+    "sso",
+    "scim",
+    "stripe",
+] }
 openauth-core = { workspace = true, features = ["test-utils"] }
 openauth-axum = { path = "../../crates/openauth-axum" }
+openauth-oauth-provider = { path = "../../crates/openauth-oauth-provider" }
 openauth-fred = { path = "../../crates/openauth-fred" }
 openauth-redis = { path = "../../crates/openauth-redis" }
 openauth-sqlx = { path = "../../crates/openauth-sqlx", features = ["mysql", "postgres", "sqlite"] }

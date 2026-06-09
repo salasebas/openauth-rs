@@ -2,6 +2,8 @@ use indexmap::IndexMap;
 use openauth_core::db::{DbField, DbFieldType, DbTable, ForeignKey, OnDelete};
 use openauth_core::plugin::PluginSchemaContribution;
 
+pub const TWO_FACTOR_MODEL: &str = "two_factor";
+
 pub fn contributions(table_name: &str) -> Vec<PluginSchemaContribution> {
     vec![
         PluginSchemaContribution::field(
@@ -11,7 +13,7 @@ pub fn contributions(table_name: &str) -> Vec<PluginSchemaContribution> {
                 .optional()
                 .generated(),
         ),
-        PluginSchemaContribution::table("twoFactor", two_factor_table(table_name)),
+        PluginSchemaContribution::table(TWO_FACTOR_MODEL, two_factor_table(table_name)),
     ]
 }
 

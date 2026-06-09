@@ -42,16 +42,16 @@ async fn groups_route_rejects_duplicate_external_id_for_same_provider() {
 
     let profiles = adapter
         .find_many(
-            openauth_core::db::FindMany::new("scimGroupProfile")
+            openauth_core::db::FindMany::new("scim_group_profile")
                 .where_clause(openauth_core::db::Where::new(
-                    "providerId",
+                    "provider_id",
                     openauth_core::db::DbValue::String("okta".to_owned()),
                 ))
                 .where_clause(openauth_core::db::Where::new(
-                    "externalId",
+                    "external_id",
                     openauth_core::db::DbValue::String("eng".to_owned()),
                 ))
-                .select(["teamId"]),
+                .select(["team_id"]),
         )
         .await
         .expect("profiles should list");

@@ -50,7 +50,7 @@ pub(super) fn enable_endpoint(
                 let backup_codes = generate_backup_codes(&options.backup_codes);
                 let encoded_backup_codes =
                     encode_backup_codes(&backup_codes, &context.secret, &options.backup_codes)?;
-                let store = TwoFactorStore::new(adapter.as_ref(), &options.two_factor_table);
+                let store = TwoFactorStore::new(adapter.as_ref());
                 let verified = options.skip_verification_on_enable
                     || store
                         .find_by_user(&user.id)
@@ -124,7 +124,7 @@ pub(super) fn get_totp_uri_endpoint(
                 {
                     return flow_error_response(error);
                 }
-                let Some(record) = TwoFactorStore::new(adapter.as_ref(), &options.two_factor_table)
+                let Some(record) = TwoFactorStore::new(adapter.as_ref())
                     .find_by_user(&user.id)
                     .await?
                 else {

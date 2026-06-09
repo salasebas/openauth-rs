@@ -45,7 +45,7 @@ async fn get_and_delete_provider_apply_authenticated_user_scope(
         )?)
         .await?;
     assert_eq!(delete_response.status(), StatusCode::OK);
-    assert_eq!(adapter.records("ssoProvider").await.len(), 0);
+    assert_eq!(adapter.records("sso_provider").await.len(), 0);
 
     Ok(())
 }
@@ -88,7 +88,7 @@ async fn delete_provider_does_not_delete_linked_accounts() -> Result<(), Box<dyn
         .await?;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
     let accounts = adapter.records("account").await;
     assert_eq!(accounts.len(), 1);
     assert_eq!(

@@ -91,24 +91,24 @@ pub(super) async fn create_scim_group_profile(
     let now = OffsetDateTime::now_utc();
     adapter
         .create(
-            Create::new("scimGroupProfile")
+            Create::new("scim_group_profile")
                 .data("id", DbValue::String(generate_random_string(32)))
-                .data("providerId", DbValue::String(provider_id.to_owned()))
+                .data("provider_id", DbValue::String(provider_id.to_owned()))
                 .data(
-                    "organizationId",
+                    "organization_id",
                     DbValue::String(organization_id.to_owned()),
                 )
-                .data("teamId", DbValue::String(team_id.to_owned()))
+                .data("team_id", DbValue::String(team_id.to_owned()))
                 .data(
-                    "externalId",
+                    "external_id",
                     external_id
                         .map(|value| DbValue::String(value.to_owned()))
                         .unwrap_or(DbValue::Null),
                 )
                 .data("attributes", DbValue::Json(serde_json::json!({})))
                 .data("version", DbValue::String(resource_version(now)))
-                .data("createdAt", DbValue::Timestamp(now))
-                .data("updatedAt", DbValue::Timestamp(now))
+                .data("created_at", DbValue::Timestamp(now))
+                .data("updated_at", DbValue::Timestamp(now))
                 .force_allow_id(),
         )
         .await?;
@@ -144,26 +144,26 @@ async fn find_scim_group_team_id_by_external_id(
 ) -> Result<Option<String>, OpenAuthError> {
     let Some(record) = adapter
         .find_one(
-            FindOne::new("scimGroupProfile")
+            FindOne::new("scim_group_profile")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String(provider_id.to_owned()),
                 ))
                 .where_clause(Where::new(
-                    "organizationId",
+                    "organization_id",
                     DbValue::String(organization_id.to_owned()),
                 ))
                 .where_clause(Where::new(
-                    "externalId",
+                    "external_id",
                     DbValue::String(external_id.to_owned()),
                 ))
-                .select(["teamId"]),
+                .select(["team_id"]),
         )
         .await?
     else {
         return Ok(None);
     };
-    optional_string(&record, "teamId")
+    optional_string(&record, "team_id")
 }
 
 pub(super) async fn create_group_with_profile_and_members(
@@ -409,28 +409,28 @@ pub(super) async fn scim_managed_team_ids(
     }
     let profiles = match adapter
         .find_many(
-            FindMany::new("scimGroupProfile")
+            FindMany::new("scim_group_profile")
                 .where_clause(Where::new(
-                    "organizationId",
+                    "organization_id",
                     DbValue::String(organization_id.to_owned()),
                 ))
                 .where_clause(
-                    Where::new("teamId", DbValue::StringArray(team_ids.to_vec()))
+                    Where::new("team_id", DbValue::StringArray(team_ids.to_vec()))
                         .operator(WhereOperator::In),
                 )
-                .select(["teamId"]),
+                .select(["team_id"]),
         )
         .await
     {
         Ok(profiles) => profiles,
-        Err(OpenAuthError::TableNotFound { table }) if table == "scimGroupProfile" => {
+        Err(OpenAuthError::TableNotFound { table }) if table == "scim_group_profile" => {
             return Ok(std::collections::BTreeSet::new());
         }
         Err(error) => return Err(error),
     };
     let mut managed = std::collections::BTreeSet::new();
     for profile in profiles {
-        let Some(team_id) = optional_string(&profile, "teamId")? else {
+        let Some(team_id) = optional_string(&profile, "team_id")? else {
             continue;
         };
         managed.insert(team_id);
@@ -535,31 +535,31 @@ pub(super) async fn upsert_scim_group_profile(
 ) -> Result<(), OpenAuthError> {
     if adapter
         .find_one(
-            FindOne::new("scimGroupProfile")
+            FindOne::new("scim_group_profile")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String(provider_id.to_owned()),
                 ))
-                .where_clause(Where::new("teamId", DbValue::String(team_id.to_owned()))),
+                .where_clause(Where::new("team_id", DbValue::String(team_id.to_owned()))),
         )
         .await?
         .is_some()
     {
         adapter
             .update(
-                Update::new("scimGroupProfile")
+                Update::new("scim_group_profile")
                     .where_clause(Where::new(
-                        "providerId",
+                        "provider_id",
                         DbValue::String(provider_id.to_owned()),
                     ))
-                    .where_clause(Where::new("teamId", DbValue::String(team_id.to_owned())))
+                    .where_clause(Where::new("team_id", DbValue::String(team_id.to_owned())))
                     .data(
-                        "externalId",
+                        "external_id",
                         external_id
                             .map(|value| DbValue::String(value.to_owned()))
                             .unwrap_or(DbValue::Null),
                     )
-                    .data("updatedAt", DbValue::Timestamp(OffsetDateTime::now_utc())),
+                    .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc())),
             )
             .await?;
         return Ok(());
@@ -835,9 +835,9 @@ pub(super) async fn delete_group(
                 .await?;
                 transaction
                     .delete_many(
-                        DeleteMany::new("scimGroupProfile")
-                            .where_clause(Where::new("providerId", DbValue::String(provider_id)))
-                            .where_clause(Where::new("teamId", DbValue::String(group_id.clone()))),
+                        DeleteMany::new("scim_group_profile")
+                            .where_clause(Where::new("provider_id", DbValue::String(provider_id)))
+                            .where_clause(Where::new("team_id", DbValue::String(group_id.clone()))),
                     )
                     .await?;
                 transaction
@@ -912,18 +912,18 @@ pub(super) async fn scim_group_profile(
 ) -> Result<Option<ScimGroupProfileRecord>, OpenAuthError> {
     adapter
         .find_one(
-            FindOne::new("scimGroupProfile")
+            FindOne::new("scim_group_profile")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String(provider_id.to_owned()),
                 ))
-                .where_clause(Where::new("teamId", DbValue::String(team_id.to_owned())))
-                .select(["externalId"]),
+                .where_clause(Where::new("team_id", DbValue::String(team_id.to_owned())))
+                .select(["external_id"]),
         )
         .await?
         .map(|record| {
             Ok(ScimGroupProfileRecord {
-                external_id: optional_string(&record, "externalId")?,
+                external_id: optional_string(&record, "external_id")?,
             })
         })
         .transpose()

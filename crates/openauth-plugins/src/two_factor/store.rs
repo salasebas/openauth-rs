@@ -5,6 +5,8 @@ use openauth_core::db::{
 use openauth_core::error::OpenAuthError;
 use openauth_core::user::DbUserStore;
 
+use super::schema::TWO_FACTOR_MODEL;
+
 const USER_MODEL: &str = "user";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,12 +21,11 @@ pub struct TwoFactorRecord {
 #[derive(Clone, Copy)]
 pub struct TwoFactorStore<'a> {
     adapter: &'a dyn DbAdapter,
-    table: &'a str,
 }
 
 impl<'a> TwoFactorStore<'a> {
-    pub fn new(adapter: &'a dyn DbAdapter, table: &'a str) -> Self {
-        Self { adapter, table }
+    pub fn new(adapter: &'a dyn DbAdapter) -> Self {
+        Self { adapter }
     }
 
     pub async fn find_by_user(
@@ -33,7 +34,7 @@ impl<'a> TwoFactorStore<'a> {
     ) -> Result<Option<TwoFactorRecord>, OpenAuthError> {
         self.adapter
             .find_one(
-                FindOne::new(self.table)
+                FindOne::new(TWO_FACTOR_MODEL)
                     .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned()))),
             )
             .await?
@@ -52,7 +53,7 @@ impl<'a> TwoFactorStore<'a> {
             let Some(record) = self
                 .adapter
                 .update(
-                    Update::new(self.table)
+                    Update::new(TWO_FACTOR_MODEL)
                         .where_clause(Where::new("id", DbValue::String(existing.id)))
                         .data("secret", DbValue::String(secret))
                         .data("backup_codes", DbValue::String(backup_codes))
@@ -70,7 +71,7 @@ impl<'a> TwoFactorStore<'a> {
         let record = self
             .adapter
             .create(
-                Create::new(self.table)
+                Create::new(TWO_FACTOR_MODEL)
                     .data("id", DbValue::String(generate_random_string(32)))
                     .data("user_id", DbValue::String(user_id.to_owned()))
                     .data("secret", DbValue::String(secret))
@@ -85,7 +86,7 @@ impl<'a> TwoFactorStore<'a> {
     pub async fn mark_verified(&self, id: &str) -> Result<(), OpenAuthError> {
         self.adapter
             .update(
-                Update::new(self.table)
+                Update::new(TWO_FACTOR_MODEL)
                     .where_clause(Where::new("id", DbValue::String(id.to_owned())))
                     .data("verified", DbValue::Boolean(true)),
             )
@@ -102,7 +103,7 @@ impl<'a> TwoFactorStore<'a> {
         let updated = self
             .adapter
             .update(
-                Update::new(self.table)
+                Update::new(TWO_FACTOR_MODEL)
                     .where_clause(Where::new("id", DbValue::String(id.to_owned())))
                     .where_clause(Where::new(
                         "backup_codes",
@@ -117,7 +118,7 @@ impl<'a> TwoFactorStore<'a> {
     pub async fn delete_for_user(&self, user_id: &str) -> Result<(), OpenAuthError> {
         self.adapter
             .delete(
-                Delete::new(self.table)
+                Delete::new(TWO_FACTOR_MODEL)
                     .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned()))),
             )
             .await

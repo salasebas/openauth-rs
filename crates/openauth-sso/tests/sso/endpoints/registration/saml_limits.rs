@@ -58,7 +58,7 @@ async fn register_saml_honors_providers_limit_callback() -> Result<(), Box<dyn s
 
     assert_eq!(second.status(), StatusCode::FORBIDDEN);
     assert_eq!(json_body(second)?["code"], "SSO_PROVIDERS_LIMIT_REACHED");
-    assert_eq!(adapter.records("ssoProvider").await.len(), 1);
+    assert_eq!(adapter.records("sso_provider").await.len(), 1);
 
     Ok(())
 }
@@ -103,7 +103,7 @@ async fn register_saml_rejects_duplicate_provider_id() -> Result<(), Box<dyn std
 
     assert_eq!(second.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(json_body(second)?["code"], "PROVIDER_EXISTS");
-    assert_eq!(adapter.records("ssoProvider").await.len(), 1);
+    assert_eq!(adapter.records("sso_provider").await.len(), 1);
 
     Ok(())
 }
@@ -131,7 +131,7 @@ async fn register_saml_dynamic_provider_limit_zero_disables_registration(
         json_body(response)?["code"],
         "SSO_PROVIDER_REGISTRATION_DISABLED"
     );
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
 
     Ok(())
 }

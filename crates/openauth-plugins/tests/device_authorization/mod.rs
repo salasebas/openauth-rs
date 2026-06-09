@@ -156,5 +156,5 @@ fn string_field<'a>(body: &'a Value, name: &str) -> &'a str {
 }
 
 async fn device_record(adapter: &TestAdapter) -> Option<indexmap::IndexMap<String, DbValue>> {
-    adapter.records("deviceCode").await.into_iter().next()
+    adapter.records("device_code").await.into_iter().next()
 }

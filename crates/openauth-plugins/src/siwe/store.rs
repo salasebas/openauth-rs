@@ -7,7 +7,7 @@ use openauth_core::user::DbUserStore;
 
 use super::types::WalletAddress;
 
-const WALLET_MODEL: &str = "walletAddress";
+const WALLET_MODEL: &str = "wallet_address";
 const DEFAULT_ID_LENGTH: usize = 32;
 
 pub(crate) async fn find_wallet(
@@ -19,7 +19,7 @@ pub(crate) async fn find_wallet(
         .find_one(
             FindOne::new(WALLET_MODEL)
                 .where_clause(Where::new("address", DbValue::String(address.to_owned())))
-                .where_clause(Where::new("chainId", DbValue::Number(chain_id))),
+                .where_clause(Where::new("chain_id", DbValue::Number(chain_id))),
         )
         .await?;
     record.map(wallet_from_record).transpose()
@@ -52,11 +52,11 @@ pub(crate) async fn create_wallet(
                     "id",
                     DbValue::String(generate_random_string(DEFAULT_ID_LENGTH)),
                 )
-                .data("userId", DbValue::String(user_id.to_owned()))
+                .data("user_id", DbValue::String(user_id.to_owned()))
                 .data("address", DbValue::String(address.to_owned()))
-                .data("chainId", DbValue::Number(chain_id))
-                .data("isPrimary", DbValue::Boolean(is_primary))
-                .data("createdAt", DbValue::Timestamp(OffsetDateTime::now_utc()))
+                .data("chain_id", DbValue::Number(chain_id))
+                .data("is_primary", DbValue::Boolean(is_primary))
+                .data("created_at", DbValue::Timestamp(OffsetDateTime::now_utc()))
                 .force_allow_id(),
         )
         .await?;
@@ -75,11 +75,11 @@ pub(crate) async fn user_for_wallet(
 fn wallet_from_record(record: DbRecord) -> Result<WalletAddress, OpenAuthError> {
     Ok(WalletAddress {
         id: required_string(&record, "id")?.to_owned(),
-        user_id: required_string(&record, "userId")?.to_owned(),
+        user_id: required_string(&record, "user_id")?.to_owned(),
         address: required_string(&record, "address")?.to_owned(),
-        chain_id: required_number(&record, "chainId")?,
-        is_primary: required_bool(&record, "isPrimary")?,
-        created_at: required_timestamp(&record, "createdAt")?,
+        chain_id: required_number(&record, "chain_id")?,
+        is_primary: required_bool(&record, "is_primary")?,
+        created_at: required_timestamp(&record, "created_at")?,
     })
 }
 

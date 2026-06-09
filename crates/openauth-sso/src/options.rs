@@ -131,7 +131,7 @@ pub struct SsoOptions {
 impl Default for SsoOptions {
     fn default() -> Self {
         Self {
-            model_name: "ssoProvider".to_owned(),
+            model_name: "sso_provider".to_owned(),
             provider_table: "sso_providers".to_owned(),
             providers_limit: 10,
             providers_limit_callback: None,

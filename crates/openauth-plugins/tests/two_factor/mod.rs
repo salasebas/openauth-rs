@@ -24,7 +24,11 @@ async fn plugin_registers_schema_and_error_codes() -> Result<(), Box<dyn std::er
         context.db_schema.field("user", "two_factor_enabled")?.name,
         "two_factor_enabled"
     );
-    assert!(context.db_schema.table("twoFactor").is_some());
+    let table = context
+        .db_schema
+        .table("two_factor")
+        .ok_or("two_factor schema missing")?;
+    assert_eq!(table.name, "two_factors");
     assert!(context
         .plugin_error_codes
         .contains_key("INVALID_TWO_FACTOR_COOKIE"));
@@ -395,7 +399,7 @@ async fn disable_two_factor_clears_user_flag_and_row() -> Result<(), Box<dyn std
     assert!(!user_enabled(adapter.as_ref()).await?);
     assert!(adapter
         .find_one(
-            FindOne::new("twoFactor")
+            FindOne::new("two_factor")
                 .where_clause(Where::new("user_id", DbValue::String("user_1".to_owned()),))
         )
         .await?
@@ -646,10 +650,10 @@ async fn otp_expiry_rejects_stale_codes() -> Result<(), Box<dyn std::error::Erro
 async fn custom_table_name_is_used_for_two_factor_records() -> Result<(), Box<dyn std::error::Error>>
 {
     let options = TwoFactorOptions {
-        two_factor_table: "customTwoFactor".to_owned(),
+        two_factor_table: "custom_two_factors".to_owned(),
         ..TwoFactorOptions::default()
     };
-    let (adapter, router) = seeded_router_with_options(options).await?;
+    let (adapter, router) = seeded_router_with_options(options.clone()).await?;
     let cookie = sign_in_cookie(&router).await?;
 
     let response = router
@@ -662,16 +666,18 @@ async fn custom_table_name_is_used_for_two_factor_records() -> Result<(), Box<dy
         .await?;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(two_factor_record_in(adapter.as_ref(), "customTwoFactor")
+    assert!(two_factor_record_in(adapter.as_ref(), "two_factor")
         .await
         .is_ok());
-    assert!(adapter
-        .find_one(
-            FindOne::new("twoFactor")
-                .where_clause(Where::new("user_id", DbValue::String("user_1".to_owned())))
-        )
-        .await?
-        .is_none());
+    let context =
+        create_auth_context_with_adapter(options_with_two_factor(options), adapter.clone())?;
+    assert_eq!(
+        context
+            .db_schema
+            .table("two_factor")
+            .map(|table| table.name.as_str()),
+        Some("custom_two_factors")
+    );
     Ok(())
 }
 

@@ -35,7 +35,7 @@ async fn verify_domain_returns_stable_error_when_dns_resolver_fails(
     assert_eq!(body["code"], "DOMAIN_VERIFICATION_FAILED");
     assert_eq!(body["reason"], "resolver_error");
     assert_eq!(
-        adapter.records("ssoProvider").await[0].get("domainVerified"),
+        adapter.records("sso_provider").await[0].get("domain_verified"),
         Some(&DbValue::Boolean(false))
     );
 
@@ -73,7 +73,7 @@ async fn verify_domain_returns_stable_error_when_txt_records_are_missing(
     assert_eq!(body["code"], "DOMAIN_VERIFICATION_FAILED");
     assert_eq!(body["reason"], "no_txt_records");
     assert_eq!(
-        adapter.records("ssoProvider").await[0].get("domainVerified"),
+        adapter.records("sso_provider").await[0].get("domain_verified"),
         Some(&DbValue::Boolean(false))
     );
 
@@ -111,7 +111,7 @@ async fn verify_domain_returns_stable_error_when_txt_value_does_not_match(
     assert_eq!(body["code"], "DOMAIN_VERIFICATION_FAILED");
     assert_eq!(body["reason"], "txt_value_mismatch");
     assert_eq!(
-        adapter.records("ssoProvider").await[0].get("domainVerified"),
+        adapter.records("sso_provider").await[0].get("domain_verified"),
         Some(&DbValue::Boolean(false))
     );
 
@@ -226,7 +226,7 @@ async fn verify_domain_returns_stable_error_for_invalid_stored_hostname(
     assert_eq!(body["code"], "INVALID_DOMAIN");
     assert_eq!(body["message"], "Invalid domain");
     assert_eq!(
-        adapter.records("ssoProvider").await[0].get("domainVerified"),
+        adapter.records("sso_provider").await[0].get("domain_verified"),
         Some(&DbValue::Boolean(false))
     );
 

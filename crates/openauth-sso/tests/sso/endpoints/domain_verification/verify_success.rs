@@ -116,9 +116,9 @@ async fn verify_domain_marks_provider_verified_when_txt_record_matches(
             .as_slice(),
         ["_better-auth-token-okta.example.com"]
     );
-    let records = adapter.records("ssoProvider").await;
+    let records = adapter.records("sso_provider").await;
     assert_eq!(
-        records[0].get("domainVerified"),
+        records[0].get("domain_verified"),
         Some(&DbValue::Boolean(true))
     );
 

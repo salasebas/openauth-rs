@@ -62,8 +62,8 @@ async fn register_discovers_oidc_endpoints_when_skip_discovery_is_false(
         "discovered scopes_supported must not become configured request scopes"
     );
 
-    let records = adapter.records("ssoProvider").await;
-    let Some(DbValue::String(config)) = records[0].get("oidcConfig") else {
+    let records = adapter.records("sso_provider").await;
+    let Some(DbValue::String(config)) = records[0].get("oidc_config") else {
         return Err("missing stored OIDC config".into());
     };
     assert!(config.contains(&format!(

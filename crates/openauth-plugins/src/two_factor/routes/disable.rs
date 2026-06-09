@@ -41,7 +41,7 @@ pub(super) fn disable_endpoint(
                     return flow_error_response(error);
                 }
                 update_user_two_factor_enabled(adapter.as_ref(), &user.id, false).await?;
-                TwoFactorStore::new(adapter.as_ref(), &options.two_factor_table)
+                TwoFactorStore::new(adapter.as_ref())
                     .delete_for_user(&user.id)
                     .await?;
                 let mut cookies =

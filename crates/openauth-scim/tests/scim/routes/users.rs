@@ -1828,10 +1828,10 @@ async fn users_route_delete_removes_scim_profile_and_team_memberships() {
         .expect("request should succeed");
     assert_eq!(delete.status(), StatusCode::NO_CONTENT);
 
-    let profiles = adapter.records("scimUserProfile").await;
+    let profiles = adapter.records("scim_user_profile").await;
     assert!(
         profiles.iter().all(|record| {
-            !matches!(record.get("userId"), Some(DbValue::String(value)) if value == &user_id)
+            !matches!(record.get("user_id"), Some(DbValue::String(value)) if value == &user_id)
         }),
         "deleted users must not leave SCIM user profiles"
     );

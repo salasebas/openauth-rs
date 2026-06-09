@@ -4,7 +4,7 @@ use openauth_core::plugin::PluginSchemaContribution;
 
 use super::options::{DeviceAuthorizationSchemaFields, DeviceAuthorizationSchemaOptions};
 
-pub const DEVICE_CODE_MODEL: &str = "deviceCode";
+pub const DEVICE_CODE_MODEL: &str = "device_code";
 
 pub fn device_code_table(options: &DeviceAuthorizationSchemaOptions) -> PluginSchemaContribution {
     PluginSchemaContribution::table(
@@ -27,32 +27,35 @@ fn fields(options: &DeviceAuthorizationSchemaFields) -> IndexMap<String, DbField
             DbField::new(field_name(&options.id, "id"), DbFieldType::String),
         ),
         (
-            "deviceCode",
+            "device_code",
             DbField::new(
-                field_name(&options.device_code, "deviceCode"),
+                field_name(&options.device_code, DEFAULT_DEVICE_CODE),
                 DbFieldType::String,
             )
             .unique(),
         ),
         (
-            "userCode",
+            "user_code",
             DbField::new(
-                field_name(&options.user_code, "userCode"),
+                field_name(&options.user_code, DEFAULT_USER_CODE),
                 DbFieldType::String,
             )
             .unique()
             .indexed(),
         ),
         (
-            "userId",
-            DbField::new(field_name(&options.user_id, "userId"), DbFieldType::String)
-                .optional()
-                .indexed(),
+            "user_id",
+            DbField::new(
+                field_name(&options.user_id, DEFAULT_USER_ID),
+                DbFieldType::String,
+            )
+            .optional()
+            .indexed(),
         ),
         (
-            "expiresAt",
+            "expires_at",
             DbField::new(
-                field_name(&options.expires_at, "expiresAt"),
+                field_name(&options.expires_at, DEFAULT_EXPIRES_AT),
                 DbFieldType::Timestamp,
             ),
         ),
@@ -61,25 +64,25 @@ fn fields(options: &DeviceAuthorizationSchemaFields) -> IndexMap<String, DbField
             DbField::new(field_name(&options.status, "status"), DbFieldType::String),
         ),
         (
-            "lastPolledAt",
+            "last_polled_at",
             DbField::new(
-                field_name(&options.last_polled_at, "lastPolledAt"),
+                field_name(&options.last_polled_at, DEFAULT_LAST_POLLED_AT),
                 DbFieldType::Timestamp,
             )
             .optional(),
         ),
         (
-            "pollingInterval",
+            "polling_interval",
             DbField::new(
-                field_name(&options.polling_interval, "pollingInterval"),
+                field_name(&options.polling_interval, DEFAULT_POLLING_INTERVAL),
                 DbFieldType::Number,
             )
             .optional(),
         ),
         (
-            "clientId",
+            "client_id",
             DbField::new(
-                field_name(&options.client_id, "clientId"),
+                field_name(&options.client_id, DEFAULT_CLIENT_ID),
                 DbFieldType::String,
             )
             .optional(),
@@ -89,17 +92,17 @@ fn fields(options: &DeviceAuthorizationSchemaFields) -> IndexMap<String, DbField
             DbField::new(field_name(&options.scope, "scope"), DbFieldType::String).optional(),
         ),
         (
-            "createdAt",
+            "created_at",
             DbField::new(
-                field_name(&options.created_at, "createdAt"),
+                field_name(&options.created_at, DEFAULT_CREATED_AT),
                 DbFieldType::Timestamp,
             )
             .generated(),
         ),
         (
-            "updatedAt",
+            "updated_at",
             DbField::new(
-                field_name(&options.updated_at, "updatedAt"),
+                field_name(&options.updated_at, DEFAULT_UPDATED_AT),
                 DbFieldType::Timestamp,
             )
             .generated(),
@@ -113,3 +116,13 @@ fn fields(options: &DeviceAuthorizationSchemaFields) -> IndexMap<String, DbField
 fn field_name<'a>(configured: &'a Option<String>, default: &'static str) -> &'a str {
     configured.as_deref().unwrap_or(default)
 }
+
+const DEFAULT_DEVICE_CODE: &str = "device_code";
+const DEFAULT_USER_CODE: &str = "user_code";
+const DEFAULT_USER_ID: &str = "user_id";
+const DEFAULT_EXPIRES_AT: &str = "expires_at";
+const DEFAULT_LAST_POLLED_AT: &str = "last_polled_at";
+const DEFAULT_POLLING_INTERVAL: &str = "polling_interval";
+const DEFAULT_CLIENT_ID: &str = "client_id";
+const DEFAULT_CREATED_AT: &str = "created_at";
+const DEFAULT_UPDATED_AT: &str = "updated_at";

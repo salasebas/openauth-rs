@@ -273,7 +273,7 @@ fn tag_for_operation_id(operation_id: &str) -> Option<&'static str> {
 
 fn tag_for_path_segment(segment: &str) -> Option<&'static str> {
     match segment {
-        ".well-known" | "mcp" => Some("MCP"),
+        "mcp" => Some("MCP"),
         "admin" => Some("Admin"),
         "anonymous" | "delete-anonymous-user" => Some("Anonymous"),
         "device" | "device-authorization" => Some("Device Authorization"),
@@ -694,7 +694,7 @@ fn openapi_schema_name(logical_table: &str) -> String {
         "team" => "Team".to_owned(),
         "team_member" => "TeamMember".to_owned(),
         "organization_role" => "OrganizationRole".to_owned(),
-        "walletAddress" => "WalletAddress".to_owned(),
+        "wallet_address" => "WalletAddress".to_owned(),
         value => pascal_case(value),
     }
 }

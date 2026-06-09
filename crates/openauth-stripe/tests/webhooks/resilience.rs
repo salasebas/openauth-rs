@@ -88,7 +88,7 @@ async fn checkout_completed_webhook_releases_claim_when_subscription_retrieve_fa
     // must not partially update local state, and must release the idempotency
     // claim so a Stripe retry can re-run the handler.
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(adapter.len("stripeWebhookEvent").await, 0);
+    assert_eq!(adapter.len("stripe_webhook_event").await, 0);
     let subscription = adapter.records("subscription").await;
     assert_eq!(
         subscription[0].get("status"),

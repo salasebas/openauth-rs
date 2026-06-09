@@ -23,7 +23,7 @@ async fn register_provider_with_organization_id_requires_membership(
         json_body(response)?["code"],
         "ORGANIZATION_MEMBERSHIP_REQUIRED"
     );
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
 
     Ok(())
 }

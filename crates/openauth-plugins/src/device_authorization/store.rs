@@ -10,17 +10,17 @@ use super::schema::DEVICE_CODE_MODEL;
 
 const DEVICE_CODE_FIELDS: [&str; 12] = [
     "id",
-    "deviceCode",
-    "userCode",
-    "userId",
-    "expiresAt",
+    "device_code",
+    "user_code",
+    "user_id",
+    "expires_at",
     "status",
-    "lastPolledAt",
-    "pollingInterval",
-    "clientId",
+    "last_polled_at",
+    "polling_interval",
+    "client_id",
     "scope",
-    "createdAt",
-    "updatedAt",
+    "created_at",
+    "updated_at",
 ];
 const DEFAULT_ID_LENGTH: usize = 32;
 
@@ -106,20 +106,20 @@ impl<'a> DeviceCodeStore<'a> {
                         "id",
                         DbValue::String(generate_random_string(DEFAULT_ID_LENGTH)),
                     )
-                    .data("deviceCode", DbValue::String(input.device_code))
-                    .data("userCode", DbValue::String(input.user_code))
-                    .data("userId", DbValue::Null)
-                    .data("expiresAt", DbValue::Timestamp(input.expires_at))
+                    .data("device_code", DbValue::String(input.device_code))
+                    .data("user_code", DbValue::String(input.user_code))
+                    .data("user_id", DbValue::Null)
+                    .data("expires_at", DbValue::Timestamp(input.expires_at))
                     .data(
                         "status",
                         DbValue::String(DeviceAuthorizationStatus::Pending.as_str().to_owned()),
                     )
-                    .data("lastPolledAt", DbValue::Null)
-                    .data("pollingInterval", DbValue::Number(input.polling_interval))
-                    .data("clientId", DbValue::String(input.client_id))
+                    .data("last_polled_at", DbValue::Null)
+                    .data("polling_interval", DbValue::Number(input.polling_interval))
+                    .data("client_id", DbValue::String(input.client_id))
                     .data("scope", optional_string(input.scope))
-                    .data("createdAt", DbValue::Timestamp(now))
-                    .data("updatedAt", DbValue::Timestamp(now))
+                    .data("created_at", DbValue::Timestamp(now))
+                    .data("updated_at", DbValue::Timestamp(now))
                     .select(DEVICE_CODE_FIELDS)
                     .force_allow_id(),
             )
@@ -132,7 +132,7 @@ impl<'a> DeviceCodeStore<'a> {
         device_code: &str,
     ) -> Result<Option<DeviceCodeRecord>, OpenAuthError> {
         self.find_one(Where::new(
-            "deviceCode",
+            "device_code",
             DbValue::String(device_code.to_owned()),
         ))
         .await
@@ -143,7 +143,7 @@ impl<'a> DeviceCodeStore<'a> {
         user_code: &str,
     ) -> Result<Option<DeviceCodeRecord>, OpenAuthError> {
         self.find_one(Where::new(
-            "userCode",
+            "user_code",
             DbValue::String(user_code.to_owned()),
         ))
         .await
@@ -153,7 +153,7 @@ impl<'a> DeviceCodeStore<'a> {
         self.update(
             id,
             DbRecord::from([(
-                "lastPolledAt".to_owned(),
+                "last_polled_at".to_owned(),
                 DbValue::Timestamp(OffsetDateTime::now_utc()),
             )]),
         )
@@ -172,7 +172,7 @@ impl<'a> DeviceCodeStore<'a> {
                     "status".to_owned(),
                     DbValue::String(DeviceAuthorizationStatus::Approved.as_str().to_owned()),
                 ),
-                ("userId".to_owned(), DbValue::String(user_id.to_owned())),
+                ("user_id".to_owned(), DbValue::String(user_id.to_owned())),
             ]),
         )
         .await
@@ -190,7 +190,7 @@ impl<'a> DeviceCodeStore<'a> {
                     "status".to_owned(),
                     DbValue::String(DeviceAuthorizationStatus::Denied.as_str().to_owned()),
                 ),
-                ("userId".to_owned(), DbValue::String(user_id.to_owned())),
+                ("user_id".to_owned(), DbValue::String(user_id.to_owned())),
             ]),
         )
         .await
@@ -244,7 +244,7 @@ impl<'a> DeviceCodeStore<'a> {
     ) -> Result<Option<DeviceCodeRecord>, OpenAuthError> {
         let mut query = Update::new(DEVICE_CODE_MODEL)
             .where_clause(id_where(id))
-            .data("updatedAt", DbValue::Timestamp(OffsetDateTime::now_utc()));
+            .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc()));
         for (field, value) in data {
             query = query.data(field, value);
         }
@@ -268,17 +268,17 @@ fn optional_string(value: Option<String>) -> DbValue {
 fn record_from_db(record: DbRecord) -> Result<DeviceCodeRecord, OpenAuthError> {
     Ok(DeviceCodeRecord {
         id: required_string(&record, "id")?.to_owned(),
-        device_code: required_string(&record, "deviceCode")?.to_owned(),
-        user_code: required_string(&record, "userCode")?.to_owned(),
-        user_id: optional_string_field(&record, "userId")?,
-        expires_at: required_timestamp(&record, "expiresAt")?,
+        device_code: required_string(&record, "device_code")?.to_owned(),
+        user_code: required_string(&record, "user_code")?.to_owned(),
+        user_id: optional_string_field(&record, "user_id")?,
+        expires_at: required_timestamp(&record, "expires_at")?,
         status: DeviceAuthorizationStatus::try_from(required_string(&record, "status")?)?,
-        last_polled_at: optional_timestamp(&record, "lastPolledAt")?,
-        polling_interval: optional_number(&record, "pollingInterval")?,
-        client_id: optional_string_field(&record, "clientId")?,
+        last_polled_at: optional_timestamp(&record, "last_polled_at")?,
+        polling_interval: optional_number(&record, "polling_interval")?,
+        client_id: optional_string_field(&record, "client_id")?,
         scope: optional_string_field(&record, "scope")?,
-        created_at: required_timestamp(&record, "createdAt")?,
-        updated_at: required_timestamp(&record, "updatedAt")?,
+        created_at: required_timestamp(&record, "created_at")?,
+        updated_at: required_timestamp(&record, "updated_at")?,
     })
 }
 

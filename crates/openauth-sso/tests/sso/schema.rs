@@ -22,27 +22,27 @@ fn sso_plugin_registers_snake_case_plural_schema() -> Result<(), Box<dyn std::er
 
     let table = context
         .db_schema
-        .table("ssoProvider")
-        .ok_or("missing ssoProvider table")?;
+        .table("sso_provider")
+        .ok_or("missing sso_provider table")?;
     assert_eq!(table.name, "sso_providers");
 
-    let provider_id = context.db_schema.field("ssoProvider", "providerId")?;
+    let provider_id = context.db_schema.field("sso_provider", "provider_id")?;
     assert_eq!(provider_id.name, "provider_id");
     assert_eq!(provider_id.field_type, DbFieldType::String);
     assert!(provider_id.required);
     assert!(provider_id.unique);
 
-    let user_id = context.db_schema.field("ssoProvider", "userId")?;
+    let user_id = context.db_schema.field("sso_provider", "user_id")?;
     assert_eq!(user_id.name, "user_id");
     assert!(user_id.foreign_key.is_some());
 
-    let oidc_config = context.db_schema.field("ssoProvider", "oidcConfig")?;
+    let oidc_config = context.db_schema.field("sso_provider", "oidc_config")?;
     assert_eq!(oidc_config.name, "oidc_config");
     assert_eq!(oidc_config.field_type, DbFieldType::String);
     assert!(!oidc_config.required);
     assert!(!oidc_config.returned);
 
-    let saml_config = context.db_schema.field("ssoProvider", "samlConfig")?;
+    let saml_config = context.db_schema.field("sso_provider", "saml_config")?;
     assert_eq!(saml_config.name, "saml_config");
     assert_eq!(saml_config.field_type, DbFieldType::String);
     assert!(!saml_config.required);
@@ -50,7 +50,7 @@ fn sso_plugin_registers_snake_case_plural_schema() -> Result<(), Box<dyn std::er
 
     assert!(context
         .db_schema
-        .field("ssoProvider", "domainVerified")
+        .field("sso_provider", "domain_verified")
         .is_err());
 
     Ok(())
@@ -64,7 +64,7 @@ fn domain_verification_adds_domain_verified_field() -> Result<(), Box<dyn std::e
         ..OpenAuthOptions::default()
     })?;
 
-    let field = context.db_schema.field("ssoProvider", "domainVerified")?;
+    let field = context.db_schema.field("sso_provider", "domain_verified")?;
 
     assert_eq!(field.name, "domain_verified");
     assert_eq!(field.field_type, DbFieldType::Boolean);
@@ -84,7 +84,7 @@ fn sso_plugin_uses_custom_model_name_for_schema() -> Result<(), Box<dyn std::err
         ..OpenAuthOptions::default()
     })?;
 
-    assert!(context.db_schema.table("ssoProvider").is_none());
+    assert!(context.db_schema.table("sso_provider").is_none());
     let table = context
         .db_schema
         .table("enterpriseSsoProvider")
@@ -93,7 +93,7 @@ fn sso_plugin_uses_custom_model_name_for_schema() -> Result<(), Box<dyn std::err
     assert_eq!(
         context
             .db_schema
-            .field("enterpriseSsoProvider", "providerId")?
+            .field("enterpriseSsoProvider", "provider_id")?
             .name,
         "provider_id"
     );

@@ -39,8 +39,8 @@ async fn register_saml_config_accepts_idp_metadata_single_sign_on_service(
     assert_eq!(body["providerType"], "saml");
     assert_eq!(body["type"], "saml");
     assert!(body.get("redirectURI").is_none());
-    let records = adapter.records("ssoProvider").await;
-    let Some(DbValue::String(config)) = records[0].get("samlConfig") else {
+    let records = adapter.records("sso_provider").await;
+    let Some(DbValue::String(config)) = records[0].get("saml_config") else {
         return Err("missing stored SAML config".into());
     };
     assert!(config.contains(r#""entryPoint":"https://idp.example.com/saml/from-service""#));
@@ -82,8 +82,8 @@ async fn register_saml_config_extracts_entry_point_from_idp_metadata_xml(
         .await?;
 
     assert_eq!(response.status(), StatusCode::OK);
-    let records = adapter.records("ssoProvider").await;
-    let Some(DbValue::String(config)) = records[0].get("samlConfig") else {
+    let records = adapter.records("sso_provider").await;
+    let Some(DbValue::String(config)) = records[0].get("saml_config") else {
         return Err("missing stored SAML config".into());
     };
     assert!(config.contains(r#""entryPoint":"https://idp.example.com/saml/from-metadata""#));
@@ -127,7 +127,7 @@ async fn register_saml_config_rejects_oversized_idp_metadata_xml(
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(response)?["code"], "SAML_METADATA_TOO_LARGE");
-    assert!(adapter.records("ssoProvider").await.is_empty());
+    assert!(adapter.records("sso_provider").await.is_empty());
 
     Ok(())
 }

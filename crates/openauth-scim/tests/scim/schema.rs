@@ -22,30 +22,32 @@ fn scim_plugin_registers_snake_case_plural_schema() -> Result<(), Box<dyn std::e
 
     let table = context
         .db_schema
-        .table("scimProvider")
-        .ok_or("missing scimProvider table")?;
+        .table("scim_provider")
+        .ok_or("missing scim_provider table")?;
     assert_eq!(table.name, "scim_providers");
 
-    let provider_id = context.db_schema.field("scimProvider", "providerId")?;
+    let provider_id = context.db_schema.field("scim_provider", "provider_id")?;
     assert_eq!(provider_id.name, "provider_id");
     assert_eq!(provider_id.field_type, DbFieldType::String);
     assert!(provider_id.required);
     assert!(provider_id.unique);
 
-    let scim_token = context.db_schema.field("scimProvider", "scimToken")?;
+    let scim_token = context.db_schema.field("scim_provider", "scim_token")?;
     assert_eq!(scim_token.name, "scim_token");
     assert_eq!(scim_token.field_type, DbFieldType::String);
     assert!(scim_token.required);
     assert!(scim_token.unique);
     assert!(!scim_token.returned);
 
-    let organization_id = context.db_schema.field("scimProvider", "organizationId")?;
+    let organization_id = context
+        .db_schema
+        .field("scim_provider", "organization_id")?;
     assert_eq!(organization_id.name, "organization_id");
     assert_eq!(organization_id.field_type, DbFieldType::String);
     assert!(!organization_id.required);
     assert!(organization_id.index);
 
-    let user_id = context.db_schema.field("scimProvider", "userId")?;
+    let user_id = context.db_schema.field("scim_provider", "user_id")?;
     assert_eq!(user_id.name, "user_id");
     assert_eq!(user_id.field_type, DbFieldType::String);
     assert!(!user_id.required);
@@ -59,32 +61,32 @@ fn scim_plugin_registers_snake_case_plural_schema() -> Result<(), Box<dyn std::e
     })?;
     let stable_user_id = context_without_ownership
         .db_schema
-        .field("scimProvider", "userId")?;
+        .field("scim_provider", "user_id")?;
     assert_eq!(stable_user_id.name, "user_id");
     assert!(!stable_user_id.required);
 
     let user_profile = context
         .db_schema
-        .table("scimUserProfile")
-        .ok_or("missing scimUserProfile table")?;
+        .table("scim_user_profile")
+        .ok_or("missing scim_user_profile table")?;
     assert_eq!(user_profile.name, "scim_user_profiles");
     assert_eq!(
         context
             .db_schema
-            .field("scimUserProfile", "attributes")?
+            .field("scim_user_profile", "attributes")?
             .field_type,
         DbFieldType::Json
     );
 
     let group_profile = context
         .db_schema
-        .table("scimGroupProfile")
-        .ok_or("missing scimGroupProfile table")?;
+        .table("scim_group_profile")
+        .ok_or("missing scim_group_profile table")?;
     assert_eq!(group_profile.name, "scim_group_profiles");
     assert_eq!(
         context
             .db_schema
-            .field("scimGroupProfile", "teamId")?
+            .field("scim_group_profile", "team_id")?
             .field_type,
         DbFieldType::String
     );

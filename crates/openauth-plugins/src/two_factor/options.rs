@@ -19,6 +19,7 @@ pub struct TwoFactorOtpMessage {
 #[derive(Clone)]
 pub struct TwoFactorOptions {
     pub issuer: Option<String>,
+    /// Physical database table name for two-factor secrets (`two_factors` by default).
     pub two_factor_table: String,
     pub totp: TotpOptions,
     pub otp: OtpOptions,
@@ -33,7 +34,7 @@ impl Default for TwoFactorOptions {
     fn default() -> Self {
         Self {
             issuer: None,
-            two_factor_table: "twoFactor".to_owned(),
+            two_factor_table: "two_factors".to_owned(),
             totp: TotpOptions::default(),
             otp: OtpOptions::default(),
             backup_codes: BackupCodeOptions::default(),

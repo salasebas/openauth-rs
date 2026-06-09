@@ -117,7 +117,7 @@ async fn token_route_returns_expired_token_and_deletes_record(
     let body: Value = serde_json::from_slice(response.body())?;
     assert_eq!(body["error"], "expired_token");
     assert_eq!(body["error_description"], "Device code has expired");
-    assert_eq!(adapter.len("deviceCode").await, 0);
+    assert_eq!(adapter.len("device_code").await, 0);
     Ok(())
 }
 
@@ -138,7 +138,7 @@ async fn token_route_exchanges_approved_code_for_bearer_token_and_scope(
     assert!(!string_field(&body, "access_token").is_empty());
     assert_eq!(body["token_type"], "Bearer");
     assert_eq!(body["scope"], "read write");
-    assert_eq!(adapter.len("deviceCode").await, 0);
+    assert_eq!(adapter.len("device_code").await, 0);
     assert_eq!(adapter.len("session").await, 2);
     Ok(())
 }
@@ -162,7 +162,7 @@ async fn token_route_rejects_reused_approved_device_code() -> Result<(), Box<dyn
     let body: Value = serde_json::from_slice(second.body())?;
     assert_eq!(body["error"], "invalid_grant");
     assert_eq!(body["error_description"], "Invalid device code");
-    assert_eq!(adapter.len("deviceCode").await, 0);
+    assert_eq!(adapter.len("device_code").await, 0);
     assert_eq!(adapter.len("session").await, 2);
     Ok(())
 }
@@ -217,7 +217,7 @@ async fn token_route_allows_only_one_concurrent_approved_exchange(
         "unexpected rejection description: {}",
         body["error_description"]
     );
-    assert_eq!(adapter.len("deviceCode").await, 0);
+    assert_eq!(adapter.len("device_code").await, 0);
     assert_eq!(adapter.len("session").await, 2);
     Ok(())
 }
@@ -264,7 +264,7 @@ async fn token_route_returns_access_denied_after_denial() -> Result<(), Box<dyn 
     let body: Value = serde_json::from_slice(response.body())?;
     assert_eq!(body["error"], "access_denied");
     assert_eq!(body["error_description"], "Access denied");
-    assert_eq!(adapter.len("deviceCode").await, 0);
+    assert_eq!(adapter.len("device_code").await, 0);
     Ok(())
 }
 

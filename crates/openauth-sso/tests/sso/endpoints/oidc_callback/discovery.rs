@@ -217,13 +217,13 @@ async fn oidc_callback_redirects_stable_discovery_error_code(
     config.jwks_endpoint = None;
     adapter
         .update(
-            Update::new("ssoProvider")
+            Update::new("sso_provider")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String("stable-error-okta".to_owned()),
                 ))
                 .data(
-                    "oidcConfig",
+                    "oidc_config",
                     DbValue::String(serde_json::to_string(&config)?),
                 ),
         )
@@ -345,13 +345,13 @@ async fn oidc_callback_discovers_missing_jwks_even_when_userinfo_endpoint_exists
     callback_config.jwks_endpoint = None;
     adapter
         .update(
-            Update::new("ssoProvider")
+            Update::new("sso_provider")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String("missing-jwks-okta".to_owned()),
                 ))
                 .data(
-                    "oidcConfig",
+                    "oidc_config",
                     DbValue::String(serde_json::to_string(&callback_config)?),
                 ),
         )
@@ -432,13 +432,13 @@ async fn oidc_callback_redirects_discovery_error_when_jwks_missing_and_discovery
     callback_config.jwks_endpoint = None;
     adapter
         .update(
-            Update::new("ssoProvider")
+            Update::new("sso_provider")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String("bad-discovery-jwks-okta".to_owned()),
                 ))
                 .data(
-                    "oidcConfig",
+                    "oidc_config",
                     DbValue::String(serde_json::to_string(&callback_config)?),
                 ),
         )

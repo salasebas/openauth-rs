@@ -17,7 +17,7 @@ pub(crate) fn jwks_schema(options: &JwtSchemaOptions) -> PluginSchemaContributio
         "public_key".to_owned(),
         field(
             options,
-            "publicKey",
+            "public_key",
             DbField::new("public_key", DbFieldType::String),
         ),
     );
@@ -25,7 +25,7 @@ pub(crate) fn jwks_schema(options: &JwtSchemaOptions) -> PluginSchemaContributio
         "private_key".to_owned(),
         field(
             options,
-            "privateKey",
+            "private_key",
             DbField::new("private_key", DbFieldType::String),
         ),
     );
@@ -33,7 +33,7 @@ pub(crate) fn jwks_schema(options: &JwtSchemaOptions) -> PluginSchemaContributio
         "created_at".to_owned(),
         field(
             options,
-            "createdAt",
+            "created_at",
             DbField::new("created_at", DbFieldType::Timestamp),
         ),
     );
@@ -41,7 +41,7 @@ pub(crate) fn jwks_schema(options: &JwtSchemaOptions) -> PluginSchemaContributio
         "expires_at".to_owned(),
         field(
             options,
-            "expiresAt",
+            "expires_at",
             DbField::new("expires_at", DbFieldType::Timestamp).optional(),
         ),
     );

@@ -199,17 +199,17 @@ async fn provider_store_accepts_json_config_values_from_adapters(
     let adapter = openauth_core::db::MemoryAdapter::new();
     adapter
         .create(
-            Create::new("ssoProvider")
+            Create::new("sso_provider")
                 .data("id", DbValue::String("provider_1".to_owned()))
                 .data("issuer", DbValue::String("https://idp.example.com".to_owned()))
-                .data("providerId", DbValue::String("okta".to_owned()))
-                .data("userId", DbValue::String("user_1".to_owned()))
-                .data("organizationId", DbValue::Null)
+                .data("provider_id", DbValue::String("okta".to_owned()))
+                .data("user_id", DbValue::String("user_1".to_owned()))
+                .data("organization_id", DbValue::Null)
                 .data("domain", DbValue::String("example.com".to_owned()))
-                .data("domainVerified", DbValue::Boolean(false))
-                .data("createdAt", DbValue::Timestamp(time::OffsetDateTime::now_utc()))
+                .data("domain_verified", DbValue::Boolean(false))
+                .data("created_at", DbValue::Timestamp(time::OffsetDateTime::now_utc()))
                 .data(
-                    "oidcConfig",
+                    "oidc_config",
                     DbValue::Json(serde_json::json!({
                         "issuer": "https://idp.example.com",
                         "pkce": true,
@@ -223,7 +223,7 @@ async fn provider_store_accepts_json_config_values_from_adapters(
                         "overrideUserInfo": false
                     })),
                 )
-                .data("samlConfig", DbValue::Null)
+                .data("saml_config", DbValue::Null)
                 .force_allow_id(),
         )
         .await?;

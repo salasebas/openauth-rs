@@ -442,7 +442,7 @@ async fn two_factor_methods(
 ) -> Result<Vec<&'static str>, OpenAuthError> {
     let mut methods = Vec::new();
     if !options.totp.disabled
-        && TwoFactorStore::new(adapter, &options.two_factor_table)
+        && TwoFactorStore::new(adapter)
             .find_by_user(user_id)
             .await?
             .is_some_and(|record| record.verified != Some(false))

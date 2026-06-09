@@ -24,7 +24,7 @@ async fn approve_route_marks_pending_device_code_as_approved(
         record.get("status"),
         Some(&DbValue::String("approved".to_owned()))
     );
-    assert_eq!(record.get("userId"), Some(&DbValue::String(user_id)));
+    assert_eq!(record.get("user_id"), Some(&DbValue::String(user_id)));
     Ok(())
 }
 
@@ -52,7 +52,7 @@ async fn deny_route_marks_pending_device_code_as_denied() -> Result<(), Box<dyn 
         record.get("status"),
         Some(&DbValue::String("denied".to_owned()))
     );
-    assert_eq!(record.get("userId"), Some(&DbValue::String(user_id)));
+    assert_eq!(record.get("user_id"), Some(&DbValue::String(user_id)));
     Ok(())
 }
 

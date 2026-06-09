@@ -79,7 +79,7 @@ async fn domain_verification_uses_secondary_storage_when_configured(
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(
-        adapter.records("ssoProvider").await[0].get("domainVerified"),
+        adapter.records("sso_provider").await[0].get("domain_verified"),
         Some(&DbValue::Boolean(true))
     );
 

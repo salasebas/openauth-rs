@@ -86,10 +86,9 @@ pub(super) fn verify_totp_endpoint(
                     Ok(flow) => flow,
                     Err(error) => return flow_error_response(error),
                 };
-                let Some(record) =
-                    TwoFactorStore::new(flow.adapter.as_ref(), &options.two_factor_table)
-                        .find_by_user(&flow.user.id)
-                        .await?
+                let Some(record) = TwoFactorStore::new(flow.adapter.as_ref())
+                    .find_by_user(&flow.user.id)
+                    .await?
                 else {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -120,7 +119,7 @@ pub(super) fn verify_totp_endpoint(
                 if record.verified != Some(true) {
                     update_user_two_factor_enabled(flow.adapter.as_ref(), &flow.user.id, true)
                         .await?;
-                    TwoFactorStore::new(flow.adapter.as_ref(), &options.two_factor_table)
+                    TwoFactorStore::new(flow.adapter.as_ref())
                         .mark_verified(&record.id)
                         .await?;
                 }

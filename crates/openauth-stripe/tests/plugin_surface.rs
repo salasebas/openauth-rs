@@ -207,7 +207,7 @@ fn plugin_merges_custom_subscription_table_when_enabled() {
     assert_eq!(table.name, "custom_subscriptions");
     assert_eq!(table.order, Some(99));
     assert!(table.fields.contains_key("plan"));
-    assert!(table.fields.contains_key("stripeCustomerId"));
+    assert!(table.fields.contains_key("stripe_customer_id"));
     assert_eq!(
         table
             .fields

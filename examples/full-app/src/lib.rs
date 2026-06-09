@@ -19,12 +19,14 @@ use openauth::db::{
     auth_schema, AuthSchemaOptions, Count, DbAdapter, DbRecord, DbValue, DeleteMany, FindMany,
     RateLimitStorage,
 };
+use openauth::plugin::AuthPlugin;
 use openauth::rate_limit::GovernorMemoryRateLimitStore;
 use openauth::{
     AdvancedOptions, EmailPasswordOptions, EndpointInfo, HybridRateLimitOptions, OpenAuth,
     OpenAuthError, OpenAuthOptions, RateLimitOptions, RateLimitRule, RateLimitStore,
 };
 use openauth_axum::OpenAuthAxumExt;
+use openauth_core::context::create_auth_context_with_adapter;
 use openauth_fred::FredOpenAuthStores;
 use openauth_redis::RedisRateLimitStore;
 use openauth_sqlx::{
@@ -34,6 +36,8 @@ use openauth_sqlx::{
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 
+mod seed;
+
 const AUTH_BASE_PATH: &str = "/api/axum/auth";
 const PROFILE_AUTH_PATH_PREFIX: &str = "/api/example/auth/";
 const DEFAULT_SECRET: &str = "openauth-example-dev-secret-at-least-32-chars";
@@ -41,13 +45,6 @@ const RATE_LIMIT_WINDOW_HEADER: &str = "x-openauth-example-rate-window";
 const RATE_LIMIT_MAX_HEADER: &str = "x-openauth-example-rate-max";
 const RATE_LIMIT_ENABLED_HEADER: &str = "x-openauth-example-rate-enabled";
 const PREFERENCES_KEY: &str = "openauth:full-app:preferences";
-const SQL_AUTH_TABLES: &[&str] = &[
-    "rate_limits",
-    "verifications",
-    "sessions",
-    "accounts",
-    "users",
-];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -507,6 +504,11 @@ struct DbQuery {
     db: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReferenceQuery {
+    theme: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExamplePreferences {
@@ -637,6 +639,131 @@ pub async fn build_app(config: ExampleConfig) -> Result<Router, ExampleError> {
     }
 }
 
+fn example_plugins(
+    adapter: Arc<dyn openauth::db::DbAdapter>,
+) -> Result<Vec<AuthPlugin>, ExampleError> {
+    use openauth::passkey::{passkey, PasskeyOptions};
+    use openauth::plugins::{
+        admin::{admin, AdminOptions},
+        anonymous::{anonymous, AnonymousOptions},
+        api_key::api_key,
+        bearer::bearer,
+        custom_session::custom_session,
+        device_authorization::device_authorization,
+        email_otp::{email_otp, EmailOtpOptions},
+        haveibeenpwned::{have_i_been_pwned_with_options, HaveIBeenPwnedOptions},
+        jwt::jwt,
+        last_login_method::{last_login_method, LastLoginMethodOptions},
+        magic_link::{magic_link, MagicLinkOptions},
+        multi_session::multi_session,
+        oauth_proxy::oauth_proxy_default,
+        one_tap::{one_tap, OneTapOptions},
+        one_time_token::one_time_token,
+        open_api::{open_api, OpenApiOptions},
+        organization::organization,
+        phone_number::{phone_number, PhoneNumberOptions},
+        siwe::{siwe, SiweOptions},
+        two_factor::{two_factor, TwoFactorOptions},
+        username::username,
+    };
+    use openauth::scim::{scim, ScimOptions};
+    use openauth::sso::{sso, SsoOptions};
+    use openauth::stripe::{
+        stripe, OrganizationStripeOptions, StripeClient, StripeOptions, SubscriptionOptions,
+    };
+    use openauth_oauth_provider::{oauth_provider, McpOptions, OAuthProviderOptions};
+    use std::future;
+
+    Ok(vec![
+        admin(AdminOptions::default()),
+        anonymous(AnonymousOptions::default()),
+        api_key(),
+        bearer(),
+        // CAPTCHA is omitted: its `UNKNOWN_ERROR` code conflicts with `passkey`.
+        custom_session(|input| Box::pin(future::ready(Ok(input.session)))),
+        device_authorization(),
+        email_otp(adapter.clone(), EmailOtpOptions::default()),
+        // `generic-oauth` is omitted: its `SESSION_REQUIRED` code conflicts with `passkey`.
+        have_i_been_pwned_with_options(HaveIBeenPwnedOptions {
+            enabled: false,
+            ..HaveIBeenPwnedOptions::default()
+        }),
+        jwt().map_err(ExampleError::from)?,
+        last_login_method(LastLoginMethodOptions::default()),
+        magic_link(MagicLinkOptions::new(|_email| {
+            Box::pin(future::ready(Ok(())))
+        })),
+        oauth_provider(OAuthProviderOptions {
+            login_page: "/".to_owned(),
+            consent_page: "/".to_owned(),
+            disable_jwt_plugin: true,
+            allow_dynamic_client_registration: true,
+            mcp: Some(McpOptions::default()),
+            ..OAuthProviderOptions::default()
+        })
+        .map_err(|error| ExampleError::InvalidConfig(error.to_string()))?
+        .into_auth_plugin(),
+        multi_session(),
+        oauth_proxy_default(),
+        one_tap(OneTapOptions::default()),
+        one_time_token(),
+        open_api(OpenApiOptions::default()),
+        organization(),
+        phone_number(adapter.clone(), PhoneNumberOptions::default()),
+        siwe(SiweOptions::new(
+            "localhost",
+            || async { Ok("openauth-example-nonce".to_owned()) },
+            |_args| async { Ok(true) },
+        ))
+        .map_err(ExampleError::from)?,
+        two_factor(TwoFactorOptions::default()),
+        username(),
+        passkey(PasskeyOptions::default()),
+        sso(SsoOptions::default()),
+        scim(ScimOptions::default()),
+        stripe(
+            StripeOptions::new(StripeClient::new("sk_test"), "whsec_openauth_example_dev")
+                .subscription(SubscriptionOptions {
+                    enabled: true,
+                    plans: Arc::new(Vec::new()),
+                    get_plans: None,
+                    require_email_verification: false,
+                    authorize_reference: None,
+                    on_subscription_complete: None,
+                    on_subscription_created: None,
+                    on_subscription_update: None,
+                    on_subscription_cancel: None,
+                    on_subscription_deleted: None,
+                    get_checkout_session_params: None,
+                })
+                .organization(OrganizationStripeOptions::enabled()),
+        ),
+    ])
+}
+
+fn example_db_schema(
+    adapter: Arc<dyn openauth::db::DbAdapter>,
+) -> Result<openauth::db::DbSchema, ExampleError> {
+    Ok(
+        create_auth_context_with_adapter(example_open_auth_options(adapter.clone())?, adapter)?
+            .db_schema,
+    )
+}
+
+fn example_open_auth_options(
+    adapter: Arc<dyn openauth::db::DbAdapter>,
+) -> Result<OpenAuthOptions, ExampleError> {
+    let mut options = OpenAuthOptions::new()
+        .secret(DEFAULT_SECRET.to_owned())
+        .email_password(EmailPasswordOptions::new().enabled(true))
+        .plugins(example_plugins(adapter)?);
+    #[cfg(debug_assertions)]
+    {
+        options = openauth_core::test_utils::apply_fast_password_defaults(options);
+    }
+    Ok(options)
+}
+
 async fn build_auth<A>(
     config: ExampleConfig,
     auth_base_path: String,
@@ -647,6 +774,7 @@ async fn build_auth<A>(
 where
     A: openauth::db::DbAdapter + 'static,
 {
+    let adapter = Arc::new(adapter);
     let rate_limit = match config.rate_limit {
         RateLimitBackend::Memory => rate_limit_defaults(&config, RateLimitOptions::memory())
             .custom_store_arc(memory_rate_limit_store as Arc<dyn RateLimitStore>),
@@ -674,11 +802,10 @@ where
         }
     };
 
-    let options = OpenAuthOptions::new()
+    let options = example_open_auth_options(adapter.clone())?
         .base_url(auth_base_url_for_path(&config.base_url, &auth_base_path)?)
         .base_path(auth_base_path)
         .secret(config.secret.clone())
-        .email_password(EmailPasswordOptions::new().enabled(true))
         .rate_limit(rate_limit)
         .advanced(AdvancedOptions::builder().cookie_prefix(cookie_prefix(config.db)));
     let options = match config.rate_limit {
@@ -690,12 +817,10 @@ where
         }
         _ => options,
     };
-    #[cfg(debug_assertions)]
-    let options = openauth_core::test_utils::apply_fast_password_defaults(options);
 
     OpenAuth::builder()
         .options(options)
-        .adapter(adapter)
+        .adapter_arc(adapter)
         .build()
         .map_err(ExampleError::from)
 }
@@ -706,6 +831,7 @@ fn rate_limit_defaults(config: &ExampleConfig, options: RateLimitOptions) -> Rat
         .enabled(config.rate_limit_enabled)
         .window(config.rate_limit_window)
         .max(config.rate_limit_max)
+        .missing_ip_policy(openauth::options::MissingIpPolicy::SharedBucket)
         .custom_rule("/sign-in/*", rule.clone())
         .custom_rule("/sign-up/*", rule)
 }
@@ -829,6 +955,7 @@ fn static_app_with_data(
         .route("/api/example/runtime", get(runtime_json))
         .route("/api/example/endpoints", get(endpoints_json))
         .route("/api/example/openapi.json", get(openapi_json))
+        .route("/api/example/reference", get(openapi_reference_page))
         .route("/api/example/services", get(services_json))
         .route(
             "/api/example/preferences",
@@ -837,6 +964,7 @@ fn static_app_with_data(
         .route("/api/example/tables", get(tables_json))
         .route("/api/example/table", get(table_rows_json))
         .route("/api/example/database/drop", post(drop_database))
+        .route("/api/example/database/seed", post(seed_database))
         .route("/api/example/auth/{db}/{rate}", any(dynamic_auth_handler))
         .route(
             "/api/example/auth/{db}/{rate}/{*path}",
@@ -867,6 +995,129 @@ async fn endpoints_json(State(state): State<AppState>) -> Json<Vec<EndpointView>
 
 async fn openapi_json(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(state.openapi)
+}
+
+const SCALAR_API_REFERENCE_VERSION: &str = "1.59.0";
+
+async fn openapi_reference_page(Query(query): Query<ReferenceQuery>) -> Html<String> {
+    Html(openapi_scalar_page_html(
+        query.theme.as_deref().unwrap_or("system"),
+    ))
+}
+
+fn openapi_scalar_page_html(theme_pref: &str) -> String {
+    let theme_pref = escape_js_string(match theme_pref {
+        "light" | "dark" => theme_pref,
+        _ => "system",
+    });
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenAuth API Reference</title>
+  <style>
+    html, body {{
+      margin: 0;
+      min-height: 100dvh;
+    }}
+    body.docs-page {{
+      display: flex;
+      flex-direction: column;
+    }}
+    .docs-topbar {{
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-bottom: 1px solid color-mix(in oklch, CanvasText 12%, transparent);
+      background: Canvas;
+      color: CanvasText;
+    }}
+    .docs-back {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid color-mix(in oklch, CanvasText 14%, transparent);
+      color: inherit;
+      font: 500 13px/1.2 system-ui, sans-serif;
+      text-decoration: none;
+    }}
+    .docs-back:hover {{
+      background: color-mix(in oklch, CanvasText 6%, transparent);
+    }}
+    .docs-back svg {{
+      width: 16px;
+      height: 16px;
+      flex: none;
+    }}
+    .docs-topbar-label {{
+      font: 600 13px/1.2 system-ui, sans-serif;
+      color: color-mix(in oklch, CanvasText 72%, transparent);
+    }}
+    #scalar-api-reference {{
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+    }}
+  </style>
+</head>
+<body class="docs-page">
+  <header class="docs-topbar">
+    <a class="docs-back" href='/#openapi' title="Back to OpenAuth example">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M9.5 3.5 5 8l4.5 4.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>Back to app</span>
+    </a>
+    <span class="docs-topbar-label">API reference</span>
+  </header>
+  <div id="scalar-api-reference"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@{scalar_version}"></script>
+  <script>
+    function resolveScalarTheme(pref) {{
+      if (pref === "light") return "default";
+      if (pref === "dark") return "kepler";
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "kepler" : "default";
+    }}
+    Scalar.createApiReference(document.getElementById("scalar-api-reference"), {{
+      url: "/api/example/openapi.json",
+      theme: resolveScalarTheme("{theme_pref}"),
+      metaData: {{
+        title: "OpenAuth API",
+        description: "Interactive OpenAPI reference for this example instance"
+      }},
+      layout: "modern",
+      showSidebar: true
+    }});
+  </script>
+</body>
+</html>"#,
+        theme_pref = theme_pref,
+        scalar_version = SCALAR_API_REFERENCE_VERSION,
+    )
+}
+
+fn escape_js_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                escaped.push_str(&format!("\\u{:04x}", character as u32));
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 async fn services_json(State(state): State<AppState>) -> Json<Vec<ServiceStatus>> {
@@ -941,6 +1192,20 @@ async fn drop_database(State(state): State<AppState>, Query(query): Query<DbQuer
         Err(error) => return json_error(StatusCode::BAD_REQUEST, &error.to_string()),
     };
     match drop_database_for_db(&state, db).await {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(error) => json_error(StatusCode::BAD_GATEWAY, &error.to_string()),
+    }
+}
+
+async fn seed_database(State(state): State<AppState>, Query(query): Query<DbQuery>) -> Response {
+    if let Some(rejection) = control_plane_guard(&state) {
+        return rejection;
+    }
+    let db = match parse_db_query(query.db.as_deref()) {
+        Ok(db) => db,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, &error.to_string()),
+    };
+    match seed_database_for_db(&state, db).await {
         Ok(outcome) => Json(outcome).into_response(),
         Err(error) => json_error(StatusCode::BAD_GATEWAY, &error.to_string()),
     }
@@ -1161,6 +1426,44 @@ async fn table_rows_for_db(
     }
 }
 
+async fn seed_database_for_db(
+    state: &AppState,
+    db: DbBackend,
+) -> Result<serde_json::Value, ExampleError> {
+    let schema = viewer_schema();
+    let password_hash = seed::seed_password_hash()?;
+    let summary = match db {
+        DbBackend::Memory => {
+            seed::seed_database(&state.memory_adapter, &schema, &password_hash).await?
+        }
+        DbBackend::Sqlite | DbBackend::Postgres | DbBackend::Mysql => {
+            let mut config = state.config.clone();
+            config.db = db;
+            config.database_url = config.database_url_for(db)?;
+            ensure_sqlite_parent(&config)?;
+            let adapter = state
+                .viewer_adapter_cache
+                .get_or_connect(db, &config.database_url)
+                .await?;
+            adapter.run_migrations(&schema).await?;
+            seed::seed_database(adapter.as_ref(), &schema, &password_hash).await?
+        }
+    };
+    state.profile_cache.invalidate_db(db).await;
+    Ok(serde_json::json!({
+        "db": db,
+        "seeded": true,
+        "tables_seeded": summary.tables_seeded,
+        "rows_inserted": summary.rows_inserted,
+        "tables": summary.tables,
+        "demo_user": {
+            "email": "seed@example.com",
+            "password": "password123456",
+            "id": "seed_user_demo",
+        },
+    }))
+}
+
 async fn drop_database_for_db(
     state: &AppState,
     db: DbBackend,
@@ -1174,7 +1477,7 @@ async fn drop_database_for_db(
         DbBackend::Memory => {
             let deleted = drop_adapter_records(&state.memory_adapter).await?;
             invalidate_db_caches(state, db).await;
-            Ok(serde_json::json!({ "db": db, "deleted": deleted, "reset_schema": false }))
+            Ok(serde_json::json!({ "db": db, "deleted": deleted, "reset_schema": true }))
         }
         DbBackend::Sqlite => {
             reset_sqlite_schema(&config).await?;
@@ -1204,7 +1507,12 @@ async fn reset_sqlite_schema(config: &ExampleConfig) -> Result<(), ExampleError>
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&pool)
         .await?;
-    for table in SQL_AUTH_TABLES {
+    let tables = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .fetch_all(&pool)
+    .await?;
+    for table in tables {
         sqlx::query(&format!("DROP TABLE IF EXISTS \"{table}\""))
             .execute(&pool)
             .await?;
@@ -1218,7 +1526,12 @@ async fn reset_sqlite_schema(config: &ExampleConfig) -> Result<(), ExampleError>
 
 async fn reset_postgres_schema(config: &ExampleConfig) -> Result<(), ExampleError> {
     let pool = sqlx::PgPool::connect(&config.database_url).await?;
-    for table in SQL_AUTH_TABLES {
+    let tables = sqlx::query_scalar::<_, String>(
+        "SELECT tablename FROM pg_tables WHERE schemaname = current_schema()",
+    )
+    .fetch_all(&pool)
+    .await?;
+    for table in tables {
         sqlx::query(&format!("DROP TABLE IF EXISTS \"{table}\" CASCADE"))
             .execute(&pool)
             .await?;
@@ -1232,7 +1545,10 @@ async fn reset_mysql_schema(config: &ExampleConfig) -> Result<(), ExampleError> 
     sqlx::query("SET FOREIGN_KEY_CHECKS = 0")
         .execute(&pool)
         .await?;
-    for table in SQL_AUTH_TABLES {
+    let tables = sqlx::query_scalar::<_, String>("SHOW TABLES")
+        .fetch_all(&pool)
+        .await?;
+    for table in tables {
         sqlx::query(&format!("DROP TABLE IF EXISTS `{table}`"))
             .execute(&pool)
             .await?;
@@ -1362,9 +1678,10 @@ async fn drop_adapter_records<A>(adapter: &A) -> Result<u64, ExampleError>
 where
     A: DbAdapter,
 {
+    let schema = example_db_schema(Arc::new(openauth::MemoryAdapter::new()))?;
     let mut deleted = 0;
-    for table in ["rate_limit", "verification", "session", "account", "user"] {
-        match adapter.delete_many(DeleteMany::new(table)).await {
+    for (logical_name, _) in schema.tables() {
+        match adapter.delete_many(DeleteMany::new(logical_name)).await {
             Ok(count) => deleted += count,
             Err(OpenAuthError::TableNotFound { .. }) => {}
             Err(error) => return Err(error.into()),
@@ -1374,9 +1691,11 @@ where
 }
 
 fn viewer_schema() -> openauth::db::DbSchema {
-    auth_schema(AuthSchemaOptions {
-        rate_limit_storage: RateLimitStorage::Database,
-        ..AuthSchemaOptions::default()
+    example_db_schema(Arc::new(openauth::MemoryAdapter::new())).unwrap_or_else(|_| {
+        auth_schema(AuthSchemaOptions {
+            rate_limit_storage: RateLimitStorage::Database,
+            ..AuthSchemaOptions::default()
+        })
     })
 }
 
@@ -1593,6 +1912,9 @@ fn render_home(state: &AppState) -> String {
             )
         })
         .collect::<String>();
+    let openapi_json = escape_html(
+        &serde_json::to_string_pretty(&state.openapi).unwrap_or_else(|_| "{}".to_owned()),
+    );
     let services = state
         .services
         .iter()
@@ -1630,10 +1952,6 @@ fn render_home(state: &AppState) -> String {
             "fred-valkey",
         ],
     );
-    let openapi_json = escape_html(
-        &serde_json::to_string_pretty(&state.openapi).unwrap_or_else(|_| "{}".to_owned()),
-    );
-
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -1807,6 +2125,7 @@ fn render_home(state: &AppState) -> String {
           </div>
           <nav id="studio-tables" class="studio-tables"></nav>
           <button id="drop-database" class="danger" data-loading-text="Resetting..."><span class="button-label">Reset database schema</span><span class="spinner" aria-hidden="true"></span></button>
+          <button id="seed-database" data-loading-text="Seeding..."><span class="button-label">Seed database</span><span class="spinner" aria-hidden="true"></span></button>
         </aside>
         <section class="studio-main">
           <div class="studio-toolbar">
@@ -1845,8 +2164,9 @@ fn render_home(state: &AppState) -> String {
         <input class="search" id="endpoint-search" placeholder="Filter endpoints">
       </div>
       <div class="actions">
-        <a class="button" href="/api/example/openapi.json">Download OpenAPI JSON</a>
-        <a class="button ghost" href="/api/example/endpoints">Endpoint registry JSON</a>
+        <a class="button ghost" href="/api/example/openapi.json" download="openauth-openapi.json">Download spec</a>
+        <a class="button ghost" href="/api/example/endpoints" target="_blank" rel="noreferrer">Registry JSON</a>
+        <a class="button" id="openapi-docs-link" href="/api/example/reference" target="_blank" rel="noreferrer">Open API docs</a>
       </div>
       <div class="table-frame">
       <table class="endpoint-table">
@@ -1928,7 +2248,7 @@ fn render_home(state: &AppState) -> String {
         db_options = db_options,
         rate_limit_options = rate_limit_options,
         endpoint_rows = endpoint_rows,
-        openapi_json = openapi_json
+        openapi_json = openapi_json,
     )
 }
 
@@ -2150,7 +2470,9 @@ const STYLES: &str = r#"
 }
 
 * { box-sizing: border-box; }
-html { background: var(--bg); }
+html {
+  background: var(--bg);
+}
 body {
   margin: 0;
   background:
@@ -2472,15 +2794,18 @@ dialog::backdrop { background: oklch(0.08 0.006 255 / 0.62); backdrop-filter: bl
 .studio {
   display: grid;
   grid-template-columns: 292px minmax(0, 1fr);
-  height: min(800px, calc(100vh - 136px));
+  height: min(800px, calc(100dvh - 136px));
   min-height: 560px;
+  overflow: hidden;
   background: var(--studio-bg);
   color: var(--studio-text);
 }
 .studio-sidebar {
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
   gap: 12px;
+  min-height: 0;
+  overflow: hidden;
   padding: 18px;
   border-right: 1px solid var(--studio-line);
 }
@@ -2493,7 +2818,15 @@ dialog::backdrop { background: oklch(0.08 0.006 255 / 0.62); backdrop-filter: bl
   border-color: var(--studio-line);
 }
 .studio-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-.studio-tables { display: grid; align-content: start; gap: 4px; overflow: auto; min-height: 0; }
+.studio-tables {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .studio-table-button {
   justify-content: flex-start;
   width: 100%;
@@ -2508,8 +2841,10 @@ dialog::backdrop { background: oklch(0.08 0.006 255 / 0.62); backdrop-filter: bl
 .studio-main {
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   position: relative;
 }
 .studio-toolbar {
@@ -2545,10 +2880,11 @@ dialog::backdrop { background: oklch(0.08 0.006 255 / 0.62); backdrop-filter: bl
 }
 .columns-popover[hidden] { display: none; }
 .studio-table-wrap {
+  flex: 1;
   min-width: 0;
   min-height: 0;
-  max-height: 100%;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .studio-table {
   margin: 0;
@@ -2630,6 +2966,16 @@ function savedTheme() {
   return localStorage.getItem("openauth-example-theme") || "system";
 }
 
+function openApiDocsUrl(theme = savedTheme()) {
+  const selected = ["system", "dark", "light"].includes(theme) ? theme : "system";
+  return `/api/example/reference?theme=${encodeURIComponent(selected)}`;
+}
+
+function updateOpenApiDocsLink() {
+  const link = document.getElementById("openapi-docs-link");
+  if (link) link.href = openApiDocsUrl();
+}
+
 function applyTheme(theme) {
   const selected = ["system", "dark", "light"].includes(theme) ? theme : "system";
   if (selected === "system") {
@@ -2639,6 +2985,7 @@ function applyTheme(theme) {
   }
   if (themeSelect) themeSelect.value = selected;
   localStorage.setItem("openauth-example-theme", selected);
+  updateOpenApiDocsLink();
 }
 
 applyTheme(savedTheme());
@@ -2741,14 +3088,34 @@ function hydrateSettingsForm() {
 
 hydrateSettingsForm();
 
-document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
-    document.querySelectorAll(".panel").forEach((item) => item.classList.remove("active"));
-    tab.classList.add("active");
-    document.getElementById(tab.dataset.tab).classList.add("active");
+const TAB_IDS = ["overview", "auth", "sessions", "storage", "rate-limit", "database", "openapi", "settings"];
+
+function tabFromHash() {
+  const hash = location.hash.replace(/^#\/?/, "");
+  return TAB_IDS.includes(hash) ? hash : "overview";
+}
+
+function setActiveTab(tabId, options = {}) {
+  document.querySelectorAll(".tab").forEach((item) => {
+    item.classList.toggle("active", item.dataset.tab === tabId);
   });
+  document.querySelectorAll(".panel").forEach((item) => {
+    item.classList.toggle("active", item.id === tabId);
+  });
+  if (options.updateHash !== false) {
+    const nextHash = `#${tabId}`;
+    if (location.hash !== nextHash) {
+      history.replaceState(null, "", `${location.pathname}${location.search}${nextHash}`);
+    }
+  }
+}
+
+document.querySelectorAll(".tab").forEach((tab) => {
+  tab.addEventListener("click", () => setActiveTab(tab.dataset.tab));
 });
+
+window.addEventListener("hashchange", () => setActiveTab(tabFromHash(), { updateHash: false }));
+setActiveTab(tabFromHash(), { updateHash: false });
 
 function setLoading(button, loading) {
   if (!button) return;
@@ -2928,6 +3295,8 @@ document.getElementById("endpoint-search")?.addEventListener("input", (event) =>
   });
 });
 
+updateOpenApiDocsLink();
+
 async function loadStudioTables() {
   if (!studioTables || !studioDb) return;
   const db = studioDb.value || dbSelect?.value || "sqlite";
@@ -3068,6 +3437,15 @@ dropDialog?.addEventListener("close", async () => {
   });
 });
 
+document.getElementById("seed-database")?.addEventListener("click", async (event) => {
+  await withLoading(event.currentTarget, "settings-output", async () => {
+    const result = await exampleJson(`/api/example/database/seed?db=${encodeURIComponent(studioDb?.value || "sqlite")}`, { method: "POST" });
+    await loadStudioTables();
+    await loadStudioRows();
+    return result;
+  });
+});
+
 void loadStudioTables();
 "#;
 
@@ -3152,6 +3530,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires redis; fred + full plugin stack needs a pre-migrated adapter"]
     async fn fred_profiles_wire_secondary_storage_with_rate_limit() -> Result<(), ExampleError> {
         let config = ExampleConfig {
             host: "127.0.0.1".to_owned(),
@@ -3422,6 +3801,25 @@ mod tests {
         ));
 
         let _ = std::fs::remove_file(sqlite_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seed_populates_memory_tables() -> Result<(), ExampleError> {
+        let adapter = openauth::MemoryAdapter::new();
+        let schema = viewer_schema();
+        let password_hash = seed::seed_password_hash()?;
+        let summary = seed::seed_database(&adapter, &schema, &password_hash).await?;
+        assert!(
+            summary.tables_seeded >= 20,
+            "expected broad plugin coverage, got {} tables",
+            summary.tables_seeded
+        );
+        let users = adapter
+            .count(openauth::db::Count::new("user"))
+            .await
+            .map_err(ExampleError::from)?;
+        assert!(users >= 1);
         Ok(())
     }
 

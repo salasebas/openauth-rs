@@ -25,11 +25,27 @@ fn schema_contributes_device_code_table() -> Result<(), Box<dyn std::error::Erro
 
     let table = context
         .db_schema
-        .table("deviceCode")
+        .table("device_code")
         .ok_or("missing table")?;
     assert_eq!(table.name, "device_codes");
-    assert!(table.field("deviceCode").is_some_and(|field| field.unique));
-    assert!(table.field("userCode").is_some_and(|field| field.unique));
+    assert!(table.field("device_code").is_some_and(|field| field.unique));
+    assert!(table.field("user_code").is_some_and(|field| field.unique));
+    assert_eq!(
+        table.field("device_code").map(|field| field.name.as_str()),
+        Some("device_code")
+    );
+    assert_eq!(
+        table.field("user_code").map(|field| field.name.as_str()),
+        Some("user_code")
+    );
+    assert_eq!(
+        table.field("user_id").map(|field| field.name.as_str()),
+        Some("user_id")
+    );
+    assert_eq!(
+        table.field("expires_at").map(|field| field.name.as_str()),
+        Some("expires_at")
+    );
     Ok(())
 }
 
@@ -43,8 +59,8 @@ fn schema_options_customize_physical_table_and_field_names(
                 DeviceAuthorizationOptions::default().schema(
                     openauth_plugins::device_authorization::DeviceAuthorizationSchemaOptions::new()
                         .table_name("oauth_device_codes")
-                        .field_name("deviceCode", "device_code")
-                        .field_name("userCode", "user_code"),
+                        .field_name("device_code", "device_code")
+                        .field_name("user_code", "user_code"),
                 ),
             )],
             secret: Some(secret().to_owned()),
@@ -56,15 +72,15 @@ fn schema_options_customize_physical_table_and_field_names(
 
     let table = context
         .db_schema
-        .table("deviceCode")
+        .table("device_code")
         .ok_or("missing table")?;
     assert_eq!(table.name, "oauth_device_codes");
     assert_eq!(
-        table.field("deviceCode").map(|field| field.name.as_str()),
+        table.field("device_code").map(|field| field.name.as_str()),
         Some("device_code")
     );
     assert_eq!(
-        table.field("userCode").map(|field| field.name.as_str()),
+        table.field("user_code").map(|field| field.name.as_str()),
         Some("user_code")
     );
     Ok(())

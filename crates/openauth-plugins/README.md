@@ -8,15 +8,16 @@ Official server-side plugin modules for OpenAuth-RS.
 OpenAuth's Rust plugin contracts. Use it when you want optional auth behavior
 without pulling each feature into `openauth-core`.
 
-The deprecated upstream `oidc-provider` plugin is not implemented here. Use
-`openauth-oauth-provider` for OAuth 2.1 and OpenID Connect provider behavior.
+The deprecated upstream `oidc-provider` and MCP authorization-server plugins are
+not implemented here. Use `openauth-oauth-provider` for OAuth 2.1, OpenID
+Connect provider behavior, and MCP protected-resource metadata.
 
 ## What It Provides
 
 Current modules include access control, additional fields, admin, anonymous
 users, API keys, bearer sessions, CAPTCHA hooks, custom sessions, device
 authorization, email OTP, generic OAuth, Have I Been Pwned checks, JWT, last
-login method, magic links, MCP, multi-session, OAuth proxy, one-tap, one-time
+login method, magic links, multi-session, OAuth proxy, one-tap, one-time
 tokens, OpenAPI, organizations, phone number, SIWE, two-factor, and username.
 
 Some plugins are pure helpers. Many require an OpenAuth adapter because they
@@ -41,6 +42,18 @@ let auth = OpenAuth::builder()
 Use module-specific options when a plugin needs application callbacks such as
 email sending, OTP delivery, CAPTCHA verification, SIWE verification, or custom
 authorization policy.
+
+## Naming conventions
+
+- **Database logical names** (adapter queries, schema metadata): `snake_case`
+  (`device_code`, `wallet_address`, `two_factor`).
+- **HTTP JSON** (request/response bodies, OpenAPI): `camelCase` (`userId`,
+  `walletAddress`) for Better Auth parity.
+- **OAuth protocol endpoints** (device authorization, token grants): RFC-defined
+  `snake_case` (`device_code`, `expires_in`) — not converted to camelCase.
+
+Plugin options **metadata** JSON keeps camelCase keys (for example
+`schema.walletAddress` on SIWE).
 
 ## Operational Notes
 

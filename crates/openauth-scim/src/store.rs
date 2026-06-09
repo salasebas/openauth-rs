@@ -9,8 +9,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::schema::SCIM_PROVIDER_MODEL;
 
-const SCIM_PROVIDER_FIELDS: [&str; 5] =
-    ["id", "providerId", "scimToken", "organizationId", "userId"];
+const SCIM_PROVIDER_FIELDS: [&str; 5] = [
+    "id",
+    "provider_id",
+    "scim_token",
+    "organization_id",
+    "user_id",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,10 +54,10 @@ impl<'a> ScimProviderStore<'a> {
             .create(
                 Create::new(SCIM_PROVIDER_MODEL)
                     .data("id", DbValue::String(generate_random_string(32)))
-                    .data("providerId", DbValue::String(input.provider_id))
-                    .data("scimToken", DbValue::String(input.scim_token))
-                    .data("organizationId", optional_string(input.organization_id))
-                    .data("userId", optional_string(input.user_id))
+                    .data("provider_id", DbValue::String(input.provider_id))
+                    .data("scim_token", DbValue::String(input.scim_token))
+                    .data("organization_id", optional_string(input.organization_id))
+                    .data("user_id", optional_string(input.user_id))
                     .select(SCIM_PROVIDER_FIELDS)
                     .force_allow_id(),
             )
@@ -77,7 +82,7 @@ impl<'a> ScimProviderStore<'a> {
         self.adapter
             .find_many(
                 FindMany::new(SCIM_PROVIDER_MODEL)
-                    .where_clause(Where::new("userId", DbValue::String(user_id.to_owned())))
+                    .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned())))
                     .select(SCIM_PROVIDER_FIELDS),
             )
             .await?
@@ -109,7 +114,7 @@ impl<'a> ScimProviderStore<'a> {
             .find_one(
                 FindOne::new(SCIM_PROVIDER_MODEL)
                     .where_clause(Where::new(
-                        "organizationId",
+                        "organization_id",
                         DbValue::String(organization_id.to_owned()),
                     ))
                     .select(SCIM_PROVIDER_FIELDS),
@@ -148,9 +153,9 @@ impl<'a> ScimProviderStore<'a> {
             .update(
                 Update::new(SCIM_PROVIDER_MODEL)
                     .where_clause(provider_id_where(&input.provider_id))
-                    .data("scimToken", DbValue::String(input.scim_token))
-                    .data("organizationId", optional_string(input.organization_id))
-                    .data("userId", optional_string(input.user_id)),
+                    .data("scim_token", DbValue::String(input.scim_token))
+                    .data("organization_id", optional_string(input.organization_id))
+                    .data("user_id", optional_string(input.user_id)),
             )
             .await?;
         self.find_by_provider_id(&input.provider_id)
@@ -165,7 +170,7 @@ impl<'a> ScimProviderStore<'a> {
 }
 
 fn provider_id_where(provider_id: &str) -> Where {
-    Where::new("providerId", DbValue::String(provider_id.to_owned()))
+    Where::new("provider_id", DbValue::String(provider_id.to_owned()))
 }
 
 fn optional_string(value: Option<String>) -> DbValue {
@@ -175,10 +180,10 @@ fn optional_string(value: Option<String>) -> DbValue {
 fn record_from_db(record: DbRecord) -> Result<ScimProviderRecord, OpenAuthError> {
     Ok(ScimProviderRecord {
         id: required_string(&record, "id")?.to_owned(),
-        provider_id: required_string(&record, "providerId")?.to_owned(),
-        scim_token: required_string(&record, "scimToken")?.to_owned(),
-        organization_id: optional_string_field(&record, "organizationId")?,
-        user_id: optional_string_field(&record, "userId")?,
+        provider_id: required_string(&record, "provider_id")?.to_owned(),
+        scim_token: required_string(&record, "scim_token")?.to_owned(),
+        organization_id: optional_string_field(&record, "organization_id")?,
+        user_id: optional_string_field(&record, "user_id")?,
     })
 }
 

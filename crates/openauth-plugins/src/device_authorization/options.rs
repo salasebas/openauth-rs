@@ -97,17 +97,19 @@ impl DeviceAuthorizationSchemaFields {
     fn set(&mut self, logical_name: String, physical_name: String) {
         match logical_name.as_str() {
             "id" => self.id = Some(physical_name),
-            "deviceCode" => self.device_code = Some(physical_name),
-            "userCode" => self.user_code = Some(physical_name),
-            "userId" => self.user_id = Some(physical_name),
-            "expiresAt" => self.expires_at = Some(physical_name),
+            "device_code" | "deviceCode" => self.device_code = Some(physical_name),
+            "user_code" | "userCode" => self.user_code = Some(physical_name),
+            "user_id" | "userId" => self.user_id = Some(physical_name),
+            "expires_at" | "expiresAt" => self.expires_at = Some(physical_name),
             "status" => self.status = Some(physical_name),
-            "lastPolledAt" => self.last_polled_at = Some(physical_name),
-            "pollingInterval" => self.polling_interval = Some(physical_name),
-            "clientId" => self.client_id = Some(physical_name),
+            "last_polled_at" | "lastPolledAt" => self.last_polled_at = Some(physical_name),
+            "polling_interval" | "pollingInterval" => {
+                self.polling_interval = Some(physical_name);
+            }
+            "client_id" | "clientId" => self.client_id = Some(physical_name),
             "scope" => self.scope = Some(physical_name),
-            "createdAt" => self.created_at = Some(physical_name),
-            "updatedAt" => self.updated_at = Some(physical_name),
+            "created_at" | "createdAt" => self.created_at = Some(physical_name),
+            "updated_at" | "updatedAt" => self.updated_at = Some(physical_name),
             _ => {}
         }
     }

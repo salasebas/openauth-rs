@@ -509,13 +509,13 @@ async fn assert_scim_tables_queryable(
     adapter: &dyn DbAdapter,
 ) -> Result<(), Box<dyn std::error::Error>> {
     adapter
-        .find_many(FindMany::new("scimProvider").select(["id"]))
+        .find_many(FindMany::new("scim_provider").select(["id"]))
         .await?;
     adapter
-        .find_many(FindMany::new("scimUserProfile").select(["id"]))
+        .find_many(FindMany::new("scim_user_profile").select(["id"]))
         .await?;
     adapter
-        .find_many(FindMany::new("scimGroupProfile").select(["id"]))
+        .find_many(FindMany::new("scim_group_profile").select(["id"]))
         .await?;
     Ok(())
 }
@@ -543,17 +543,17 @@ where
     assert_eq!(found.organization_id, created.organization_id);
     let provider_record = adapter
         .find_one(
-            FindOne::new("scimProvider")
+            FindOne::new("scim_provider")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String(provider_id.clone()),
                 ))
-                .select(["id", "providerId", "scimToken", "organizationId"]),
+                .select(["id", "provider_id", "scim_token", "organization_id"]),
         )
         .await?
         .ok_or("provider row should exist")?;
     assert!(matches!(
-        provider_record.get("scimToken"),
+        provider_record.get("scim_token"),
         Some(DbValue::String(token)) if token == &format!("token-{provider_id}")
     ));
 
@@ -581,9 +581,9 @@ where
         .await?;
     let in_results = adapter
         .find_many(
-            FindMany::new("scimProvider").where_clause(
+            FindMany::new("scim_provider").where_clause(
                 Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::StringArray(vec![provider_id.clone(), second_provider_id.clone()]),
                 )
                 .operator(WhereOperator::In),

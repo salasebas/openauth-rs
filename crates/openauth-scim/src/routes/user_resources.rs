@@ -297,21 +297,21 @@ async fn scim_user_profiles_by_user(
     }
     let records = adapter
         .find_many(
-            FindMany::new("scimUserProfile")
+            FindMany::new("scim_user_profile")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String(provider_id.to_owned()),
                 ))
                 .where_clause(
-                    Where::new("userId", DbValue::StringArray(user_ids.to_vec()))
+                    Where::new("user_id", DbValue::StringArray(user_ids.to_vec()))
                         .operator(WhereOperator::In),
                 )
-                .select(["userId", "attributes", "version"]),
+                .select(["user_id", "attributes", "version"]),
         )
         .await?;
     let mut profiles = std::collections::BTreeMap::new();
     for record in records {
-        let Some(user_id) = optional_string(&record, "userId")? else {
+        let Some(user_id) = optional_string(&record, "user_id")? else {
             continue;
         };
         let attributes = optional_json(&record, "attributes")?
@@ -583,14 +583,14 @@ pub(super) async fn touch_scim_user_profile_version(
     let now = OffsetDateTime::now_utc();
     adapter
         .update(
-            Update::new("scimUserProfile")
+            Update::new("scim_user_profile")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String(provider_id.to_owned()),
                 ))
-                .where_clause(Where::new("userId", DbValue::String(user_id.to_owned())))
+                .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned())))
                 .data("version", DbValue::String(resource_version(now)))
-                .data("updatedAt", DbValue::Timestamp(now)),
+                .data("updated_at", DbValue::Timestamp(now)),
         )
         .await?;
     Ok(())
@@ -620,24 +620,26 @@ pub(super) async fn touch_scim_user_profile_versions_for_organization_group_memb
     }
     let profiles = match adapter
         .find_many(
-            FindMany::new("scimUserProfile")
+            FindMany::new("scim_user_profile")
                 .where_clause(
-                    Where::new("userId", DbValue::StringArray(user_ids))
+                    Where::new("user_id", DbValue::StringArray(user_ids))
                         .operator(WhereOperator::In),
                 )
-                .select(["providerId", "userId"]),
+                .select(["provider_id", "user_id"]),
         )
         .await
     {
         Ok(profiles) => profiles,
-        Err(OpenAuthError::TableNotFound { table }) if table == "scimUserProfile" => return Ok(()),
+        Err(OpenAuthError::TableNotFound { table }) if table == "scim_user_profile" => {
+            return Ok(())
+        }
         Err(error) => return Err(error),
     };
     for profile in profiles {
-        let Some(provider_id) = optional_string(&profile, "providerId")? else {
+        let Some(provider_id) = optional_string(&profile, "provider_id")? else {
             continue;
         };
-        let Some(user_id) = optional_string(&profile, "userId")? else {
+        let Some(user_id) = optional_string(&profile, "user_id")? else {
             continue;
         };
         if !org_provider_ids.contains(&provider_id) {
@@ -658,53 +660,53 @@ pub(super) async fn upsert_scim_user_profile(
     let now = OffsetDateTime::now_utc();
     if adapter
         .find_one(
-            FindOne::new("scimUserProfile")
+            FindOne::new("scim_user_profile")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String(provider_id.to_owned()),
                 ))
-                .where_clause(Where::new("userId", DbValue::String(user_id.to_owned()))),
+                .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned()))),
         )
         .await?
         .is_some()
     {
         adapter
             .update(
-                Update::new("scimUserProfile")
+                Update::new("scim_user_profile")
                     .where_clause(Where::new(
-                        "providerId",
+                        "provider_id",
                         DbValue::String(provider_id.to_owned()),
                     ))
-                    .where_clause(Where::new("userId", DbValue::String(user_id.to_owned())))
+                    .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned())))
                     .data(
-                        "externalId",
+                        "external_id",
                         external_id
                             .map(|value| DbValue::String(value.to_owned()))
                             .unwrap_or(DbValue::Null),
                     )
                     .data("attributes", DbValue::Json(attributes))
                     .data("version", DbValue::String(resource_version(now)))
-                    .data("updatedAt", DbValue::Timestamp(now)),
+                    .data("updated_at", DbValue::Timestamp(now)),
             )
             .await?;
         return Ok(());
     }
     adapter
         .create(
-            Create::new("scimUserProfile")
+            Create::new("scim_user_profile")
                 .data("id", DbValue::String(generate_random_string(32)))
-                .data("providerId", DbValue::String(provider_id.to_owned()))
-                .data("userId", DbValue::String(user_id.to_owned()))
+                .data("provider_id", DbValue::String(provider_id.to_owned()))
+                .data("user_id", DbValue::String(user_id.to_owned()))
                 .data(
-                    "externalId",
+                    "external_id",
                     external_id
                         .map(|value| DbValue::String(value.to_owned()))
                         .unwrap_or(DbValue::Null),
                 )
                 .data("attributes", DbValue::Json(attributes))
                 .data("version", DbValue::String(resource_version(now)))
-                .data("createdAt", DbValue::Timestamp(now))
-                .data("updatedAt", DbValue::Timestamp(now))
+                .data("created_at", DbValue::Timestamp(now))
+                .data("updated_at", DbValue::Timestamp(now))
                 .force_allow_id(),
         )
         .await?;
@@ -719,12 +721,12 @@ pub(super) async fn merge_scim_user_profile(
 ) -> Result<(), OpenAuthError> {
     let Some(record) = adapter
         .find_one(
-            FindOne::new("scimUserProfile")
+            FindOne::new("scim_user_profile")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String(provider_id.to_owned()),
                 ))
-                .where_clause(Where::new("userId", DbValue::String(user_id.to_owned())))
+                .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned())))
                 .select(["attributes", "version"]),
         )
         .await?
@@ -775,12 +777,12 @@ pub(super) async fn merge_scim_user_profile_patch(
 ) -> Result<(), OpenAuthError> {
     let mut attributes = adapter
         .find_one(
-            FindOne::new("scimUserProfile")
+            FindOne::new("scim_user_profile")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String(provider_id.to_owned()),
                 ))
-                .where_clause(Where::new("userId", DbValue::String(user_id.to_owned())))
+                .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned())))
                 .select(["attributes"]),
         )
         .await?
@@ -802,27 +804,27 @@ pub(super) async fn merge_scim_user_profile_patch(
     let now = OffsetDateTime::now_utc();
     if adapter
         .find_one(
-            FindOne::new("scimUserProfile")
+            FindOne::new("scim_user_profile")
                 .where_clause(Where::new(
-                    "providerId",
+                    "provider_id",
                     DbValue::String(provider_id.to_owned()),
                 ))
-                .where_clause(Where::new("userId", DbValue::String(user_id.to_owned()))),
+                .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned()))),
         )
         .await?
         .is_some()
     {
         adapter
             .update(
-                Update::new("scimUserProfile")
+                Update::new("scim_user_profile")
                     .where_clause(Where::new(
-                        "providerId",
+                        "provider_id",
                         DbValue::String(provider_id.to_owned()),
                     ))
-                    .where_clause(Where::new("userId", DbValue::String(user_id.to_owned())))
+                    .where_clause(Where::new("user_id", DbValue::String(user_id.to_owned())))
                     .data("attributes", DbValue::Json(attributes))
                     .data("version", DbValue::String(resource_version(now)))
-                    .data("updatedAt", DbValue::Timestamp(now)),
+                    .data("updated_at", DbValue::Timestamp(now)),
             )
             .await?;
         return Ok(());
@@ -1049,8 +1051,8 @@ pub(super) async fn delete_scim_user(
             Box::pin(async move {
                 transaction
                     .delete_many(
-                        DeleteMany::new("scimUserProfile")
-                            .where_clause(Where::new("userId", DbValue::String(user_id.clone()))),
+                        DeleteMany::new("scim_user_profile")
+                            .where_clause(Where::new("user_id", DbValue::String(user_id.clone()))),
                     )
                     .await?;
                 transaction
@@ -1098,10 +1100,10 @@ async fn unlink_scim_user(
             Box::pin(async move {
                 transaction
                     .delete_many(
-                        DeleteMany::new("scimUserProfile")
-                            .where_clause(Where::new("userId", DbValue::String(user_id.clone())))
+                        DeleteMany::new("scim_user_profile")
+                            .where_clause(Where::new("user_id", DbValue::String(user_id.clone())))
                             .where_clause(Where::new(
-                                "providerId",
+                                "provider_id",
                                 DbValue::String(provider_id.clone()),
                             )),
                     )
