@@ -295,6 +295,44 @@ async fn consume_verification_including_expired_is_single_use_under_concurrency(
 }
 
 #[tokio::test]
+async fn compare_and_update_verification_value_is_single_winner_under_concurrency(
+) -> Result<(), OpenAuthError> {
+    let adapter = MemoryAdapter::new();
+    let store = DbVerificationStore::new(&adapter);
+    let expires_at = OffsetDateTime::now_utc() + Duration::minutes(10);
+    let verification = store
+        .create_verification(CreateVerificationInput::new(
+            "magic-link:race",
+            r#"{"email":"ada@example.com","attempt":0}"#,
+            expires_at,
+        ))
+        .await?;
+
+    let store_a = store.clone();
+    let store_b = store.clone();
+    let (first, second) = tokio::join!(
+        store_a.compare_and_update_verification_value(
+            "magic-link:race",
+            &verification.id,
+            &verification.value,
+            r#"{"email":"ada@example.com","attempt":1}"#.to_owned(),
+        ),
+        store_b.compare_and_update_verification_value(
+            "magic-link:race",
+            &verification.id,
+            &verification.value,
+            r#"{"email":"ada@example.com","attempt":1}"#.to_owned(),
+        ),
+    );
+    let winners = [first?, second?].into_iter().flatten().count();
+    assert_eq!(
+        winners, 1,
+        "parallel compare-and-update attempts must update the verification at most once"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn db_verification_store_take_verification_is_single_use() -> Result<(), OpenAuthError> {
     let adapter = InMemoryVerificationAdapter::default();
     let now = OffsetDateTime::now_utc();

@@ -21,6 +21,9 @@ All notable changes to `openauth-plugins` are documented in this file.
 
 ### Fixed
 
+- Magic-link verification now reserves allowed attempts with a compare-and-swap
+  update, so concurrent `/magic-link/verify` requests cannot both mint sessions
+  when `allowed_attempts` is limited.
 - Phone password-reset and verify OTPs are now consumed atomically before their
   side effects, so concurrent requests with the same code cannot both succeed.
 - Two-factor enable with `skip_verification_on_enable` and disable now rotate
