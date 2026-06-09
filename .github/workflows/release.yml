@@ -69,24 +69,30 @@ jobs:
             openauth-cli
           )
 
+          crates_io_user_agent="openauth-rs-release (https://github.com/sebasxsala/openauth-rs)"
+
           crate_version_exists() {
             local crate="$1"
             local status
 
-            status="$(curl --silent --output /dev/null --write-out "%{http_code}" "https://crates.io/api/v1/crates/${crate}/${version}")"
+            status="$(curl --silent --output /dev/null --write-out "%{http_code}" \
+              -H "User-Agent: ${crates_io_user_agent}" \
+              "https://crates.io/api/v1/crates/${crate}/${version}")"
             [ "$status" = "200" ]
           }
 
           wait_for_crate_version() {
             local crate="$1"
+            local max_attempts=24
+            local sleep_seconds=10
 
-            for attempt in {1..40}; do
+            for attempt in $(seq 1 "$max_attempts"); do
               if crate_version_exists "$crate"; then
                 return 0
               fi
 
-              echo "Waiting for ${crate} ${version} to be available on crates.io (${attempt}/40)"
-              sleep 15
+              echo "Waiting for ${crate} ${version} to be available on crates.io (${attempt}/${max_attempts})"
+              sleep "$sleep_seconds"
             done
 
             echo "${crate} ${version} was not visible on crates.io after publishing"
