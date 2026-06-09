@@ -53,6 +53,30 @@ auth.run_migrations().await?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+## Plugins
+
+Enable the `plugins` feature to re-export `openauth-plugins`, then register
+official plugins on the builder:
+
+```rust
+use openauth::OpenAuth;
+use openauth_plugins::prelude::*;
+
+let auth = OpenAuth::builder()
+    .secret("secret-a-at-least-32-chars-long!!")
+    .plugin(admin())
+    .plugins(vec![bearer(), jwt()?])
+    .build()?;
+# let _ = auth;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+- `.plugin(x)` appends one plugin.
+- `.plugins(vec![...])` appends a batch (like chaining `.plugin`).
+
+When configuring [`OpenAuthOptions`](https://docs.rs/openauth-core/latest/openauth_core/options/struct.OpenAuthOptions.html)
+directly, `.plugins(vec![...])` replaces the entire plugin list instead.
+
 ## Feature Flags
 
 - `i18n`: re-export `openauth-i18n`.

@@ -721,29 +721,7 @@ fn example_plugins(
     adapter: Arc<dyn openauth::db::DbAdapter>,
 ) -> Result<Vec<AuthPlugin>, ExampleError> {
     use openauth::passkey::{passkey, PasskeyOptions};
-    use openauth::plugins::{
-        admin::{admin, AdminOptions},
-        anonymous::{anonymous, AnonymousOptions},
-        api_key::api_key,
-        bearer::bearer,
-        custom_session::custom_session,
-        device_authorization::device_authorization,
-        email_otp::{email_otp, EmailOtpOptions},
-        haveibeenpwned::{have_i_been_pwned_with_options, HaveIBeenPwnedOptions},
-        jwt::jwt,
-        last_login_method::{last_login_method, LastLoginMethodOptions},
-        magic_link::{magic_link, MagicLinkOptions},
-        multi_session::multi_session,
-        oauth_proxy::oauth_proxy_default,
-        one_tap::{one_tap, OneTapOptions},
-        one_time_token::one_time_token,
-        open_api::{open_api, OpenApiOptions},
-        organization::organization,
-        phone_number::{phone_number, PhoneNumberOptions},
-        siwe::{siwe, SiweOptions},
-        two_factor::{two_factor, TwoFactorOptions},
-        username::username,
-    };
+    use openauth::plugins::prelude::*;
     use openauth::scim::{scim, ScimOptions};
     use openauth::sso::{sso, SsoOptions};
     use openauth::stripe::{
@@ -753,22 +731,22 @@ fn example_plugins(
     use std::future;
 
     Ok(vec![
-        admin(AdminOptions::default()),
-        anonymous(AnonymousOptions::default()),
+        admin(),
+        anonymous(),
         api_key(),
         bearer(),
         // CAPTCHA is omitted: its `UNKNOWN_ERROR` code conflicts with `passkey`.
         custom_session(|input| Box::pin(future::ready(Ok(input.session)))),
         device_authorization(),
-        email_otp(adapter.clone(), EmailOtpOptions::default()),
+        email_otp_with(EmailOtpOptions::default()),
         // `generic-oauth` is omitted: its `SESSION_REQUIRED` code conflicts with `passkey`.
-        have_i_been_pwned_with_options(HaveIBeenPwnedOptions {
+        have_i_been_pwned_with(HaveIBeenPwnedOptions {
             enabled: false,
             ..HaveIBeenPwnedOptions::default()
         }),
         jwt().map_err(ExampleError::from)?,
-        last_login_method(LastLoginMethodOptions::default()),
-        magic_link(MagicLinkOptions::new(|_email| {
+        last_login_method(),
+        magic_link_with(MagicLinkOptions::new(|_email| {
             Box::pin(future::ready(Ok(())))
         })),
         oauth_provider(OAuthProviderOptions {
@@ -782,19 +760,19 @@ fn example_plugins(
         .map_err(|error| ExampleError::InvalidConfig(error.to_string()))?
         .into_auth_plugin(),
         multi_session(),
-        oauth_proxy_default(),
-        one_tap(OneTapOptions::default()),
+        oauth_proxy(),
+        one_tap(),
         one_time_token(),
-        open_api(OpenApiOptions::default()),
+        open_api(),
         organization(),
-        phone_number(adapter.clone(), PhoneNumberOptions::default()),
-        siwe(SiweOptions::new(
+        phone_number_with(PhoneNumberOptions::default()),
+        siwe_with(SiweOptions::new(
             "localhost",
             || async { Ok("openauth-example-nonce".to_owned()) },
             |_args| async { Ok(true) },
         ))
         .map_err(ExampleError::from)?,
-        two_factor(TwoFactorOptions::default()),
+        two_factor(),
         username(),
         passkey(PasskeyOptions::default()),
         sso(SsoOptions::default()),
