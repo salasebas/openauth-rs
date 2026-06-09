@@ -5,7 +5,8 @@ use axum::body::{to_bytes, Body};
 use axum::extract::ConnectInfo;
 use axum::http::Request;
 use http_body_util::LengthLimitError;
-use openauth::{ApiRequest, RequestClientIp};
+use openauth::api::ApiRequest;
+use openauth::rate_limit::RequestClientIp;
 
 use crate::error::{bad_request_response, payload_too_large_response};
 use crate::OpenAuthAxumOptions;

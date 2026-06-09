@@ -2,15 +2,16 @@
 
 use axum::body::{to_bytes, Body};
 use axum::http::{header, HeaderValue, Method, Request};
-use openauth::db::DbValue;
-use openauth::{
-    ApiResponse, AsyncAuthEndpoint, AuthContext, AuthEndpointOptions, MemoryAdapter, OpenAuthError,
+use openauth::api::{create_auth_endpoint, ApiResponse, AsyncAuthEndpoint, AuthEndpointOptions};
+use openauth::context::AuthContext;
+use openauth::db::{DbValue, MemoryAdapter};
+use openauth::error::OpenAuthError;
+use openauth::oauth::oauth2::{
+    OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions, SocialAuthorizationCodeRequest,
+    SocialAuthorizationUrlRequest, SocialIdTokenRequest, SocialOAuthProvider, SocialProviderFuture,
 };
-use openauth::{
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, OpenAuth, OpenAuthOptions, ProviderOptions,
-    SocialAuthorizationCodeRequest, SocialAuthorizationUrlRequest, SocialIdTokenRequest,
-    SocialOAuthProvider, SocialProviderFuture,
-};
+use openauth::options::OpenAuthOptions;
+use openauth::OpenAuth;
 use serde_json::Value;
 use url::Url;
 
@@ -27,35 +28,40 @@ fn with_test_defaults(options: OpenAuthOptions) -> OpenAuthOptions {
     openauth_core::test_utils::with_integration_test_defaults(options)
 }
 
-pub fn auth_with_options(options: OpenAuthOptions) -> Result<OpenAuth, openauth::OpenAuthError> {
+pub async fn auth_with_options(
+    options: OpenAuthOptions,
+) -> Result<OpenAuth, openauth::error::OpenAuthError> {
     OpenAuth::builder()
         .options(with_test_defaults(options))
         .secret(SECRET)
         .build()
+        .await
 }
 
-pub fn auth_with_adapter(
+pub async fn auth_with_adapter(
     adapter: MemoryAdapter,
     options: OpenAuthOptions,
-) -> Result<OpenAuth, openauth::OpenAuthError> {
+) -> Result<OpenAuth, openauth::error::OpenAuthError> {
     OpenAuth::builder()
         .options(with_test_defaults(options))
         .secret(SECRET)
         .adapter(adapter)
         .build()
+        .await
 }
 
-pub fn auth_with_async_endpoint(
+pub async fn auth_with_async_endpoint(
     endpoint: AsyncAuthEndpoint,
-) -> Result<OpenAuth, openauth::OpenAuthError> {
+) -> Result<OpenAuth, openauth::error::OpenAuthError> {
     OpenAuth::builder()
         .secret(SECRET)
         .async_endpoint(endpoint)
         .build()
+        .await
 }
 
 pub fn custom_endpoint(path: &'static str) -> AsyncAuthEndpoint {
-    openauth::create_auth_endpoint(
+    create_auth_endpoint(
         path,
         Method::GET,
         AuthEndpointOptions::new(),
@@ -70,7 +76,7 @@ pub fn custom_endpoint(path: &'static str) -> AsyncAuthEndpoint {
 }
 
 pub fn request_extension_endpoint(path: &'static str) -> AsyncAuthEndpoint {
-    openauth::create_auth_endpoint(
+    create_auth_endpoint(
         path,
         Method::GET,
         AuthEndpointOptions::new(),
@@ -90,7 +96,7 @@ pub fn request_extension_endpoint(path: &'static str) -> AsyncAuthEndpoint {
 }
 
 pub fn response_contract_endpoint(path: &'static str) -> AsyncAuthEndpoint {
-    openauth::create_auth_endpoint(
+    create_auth_endpoint(
         path,
         Method::GET,
         AuthEndpointOptions::new(),
@@ -124,7 +130,7 @@ pub fn response_contract_endpoint(path: &'static str) -> AsyncAuthEndpoint {
 }
 
 pub fn empty_response_endpoint(path: &'static str) -> AsyncAuthEndpoint {
-    openauth::create_auth_endpoint(
+    create_auth_endpoint(
         path,
         Method::GET,
         AuthEndpointOptions::new(),
@@ -139,7 +145,7 @@ pub fn empty_response_endpoint(path: &'static str) -> AsyncAuthEndpoint {
 }
 
 pub fn failing_endpoint(path: &'static str) -> AsyncAuthEndpoint {
-    openauth::create_auth_endpoint(
+    create_auth_endpoint(
         path,
         Method::GET,
         AuthEndpointOptions::new(),

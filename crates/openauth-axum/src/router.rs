@@ -6,12 +6,12 @@ use axum::http::{header, HeaderMap, Request, Uri};
 use axum::response::IntoResponse;
 use axum::routing::any;
 use axum::Router;
-use openauth::{
-    auth::oauth::OAuthBaseUrlOverride,
-    utils::host::is_loopback_host,
-    utils::url::{is_valid_forwarded_host, is_valid_forwarded_proto},
-    OpenAuth, OpenAuthError, RequestBaseUrl,
-};
+use openauth::api::RequestBaseUrl;
+use openauth::auth::oauth::OAuthBaseUrlOverride;
+use openauth::error::OpenAuthError;
+use openauth::utils::host::is_loopback_host;
+use openauth::utils::url::{is_valid_forwarded_host, is_valid_forwarded_proto};
+use openauth::OpenAuth;
 
 use crate::error::{internal_error_response, OpenAuthAxumError};
 use crate::request::to_api_request;
@@ -30,68 +30,40 @@ pub trait OpenAuthAxumExt {
     fn into_router(self) -> Result<Router, OpenAuthAxumError>;
 
     /// Mount OpenAuth with adapter-specific options.
-    fn into_router_with_options(
-        self,
-        options: OpenAuthAxumOptions,
-    ) -> Result<Router, OpenAuthAxumError>;
+    fn into_router_with(self, options: OpenAuthAxumOptions) -> Result<Router, OpenAuthAxumError>;
 
     /// Return unmounted OpenAuth routes for callers that want to nest manually.
     fn into_routes(self) -> Router;
 
     /// Return unmounted OpenAuth routes with adapter-specific options.
-    fn into_routes_with_options(self, options: OpenAuthAxumOptions) -> Router;
+    fn into_routes_with(self, options: OpenAuthAxumOptions) -> Router;
 }
 
 impl OpenAuthAxumExt for OpenAuth {
     fn into_router(self) -> Result<Router, OpenAuthAxumError> {
-        router(self)
+        self.into_router_with(OpenAuthAxumOptions::default())
     }
 
-    fn into_router_with_options(
-        self,
-        options: OpenAuthAxumOptions,
-    ) -> Result<Router, OpenAuthAxumError> {
-        router_with_options(self, options)
+    fn into_router_with(self, options: OpenAuthAxumOptions) -> Result<Router, OpenAuthAxumError> {
+        mount_router(self, options)
     }
 
     fn into_routes(self) -> Router {
-        routes(self)
+        self.into_routes_with(OpenAuthAxumOptions::default())
     }
 
-    fn into_routes_with_options(self, options: OpenAuthAxumOptions) -> Router {
-        routes_with_options(self, options)
+    fn into_routes_with(self, options: OpenAuthAxumOptions) -> Router {
+        routes_from_shared(Arc::new(self), options)
     }
 }
 
-/// Mount OpenAuth at `auth.context().base_path`.
-pub fn router(auth: OpenAuth) -> Result<Router, OpenAuthAxumError> {
-    router_with_options(auth, OpenAuthAxumOptions::default())
-}
-
-/// Mount OpenAuth at `auth.context().base_path` with adapter-specific options.
-pub fn router_with_options(
-    auth: OpenAuth,
-    options: OpenAuthAxumOptions,
-) -> Result<Router, OpenAuthAxumError> {
+fn mount_router(auth: OpenAuth, options: OpenAuthAxumOptions) -> Result<Router, OpenAuthAxumError> {
     validate_base_url_matches_base_path(&auth)?;
     let base_path = normalize_base_path(&auth.context().base_path)?;
     if base_path == "/" {
-        return Ok(routes_with_options(auth, options));
+        return Ok(routes_from_shared(Arc::new(auth), options));
     }
-    Ok(Router::new().nest(&base_path, routes_with_options(auth, options)))
-}
-
-/// Build unmounted OpenAuth catch-all routes.
-///
-/// Use this when composing with an existing Axum router manually. The returned
-/// router should be nested at the same path as `OpenAuthOptions.base_path`.
-pub fn routes(auth: OpenAuth) -> Router {
-    routes_with_options(auth, OpenAuthAxumOptions::default())
-}
-
-/// Build unmounted OpenAuth catch-all routes with adapter-specific options.
-pub fn routes_with_options(auth: OpenAuth, options: OpenAuthAxumOptions) -> Router {
-    routes_from_shared(Arc::new(auth), options)
+    Ok(Router::new().nest(&base_path, routes_from_shared(Arc::new(auth), options)))
 }
 
 fn routes_from_shared(auth: Arc<OpenAuth>, options: OpenAuthAxumOptions) -> Router {
@@ -103,25 +75,11 @@ fn routes_from_shared(auth: Arc<OpenAuth>, options: OpenAuthAxumOptions) -> Rout
 
 /// Handle a single Axum request through OpenAuth.
 pub async fn handle(auth: &OpenAuth, request: Request<Body>) -> axum::response::Response {
-    handle_ref(auth, request).await
+    handle_with_options(auth, OpenAuthAxumOptions::default(), request).await
 }
 
 /// Handle a single Axum request through OpenAuth with adapter-specific options.
 pub async fn handle_with_options(
-    auth: &OpenAuth,
-    options: OpenAuthAxumOptions,
-    request: Request<Body>,
-) -> axum::response::Response {
-    handle_ref_with_options(auth, options, request).await
-}
-
-/// Handle a single Axum request through a borrowed OpenAuth instance.
-pub async fn handle_ref(auth: &OpenAuth, request: Request<Body>) -> axum::response::Response {
-    handle_ref_with_options(auth, OpenAuthAxumOptions::default(), request).await
-}
-
-/// Handle a single Axum request through a borrowed OpenAuth instance with options.
-pub async fn handle_ref_with_options(
     auth: &OpenAuth,
     options: OpenAuthAxumOptions,
     request: Request<Body>,
@@ -145,7 +103,7 @@ async fn route_handler(
     State(state): State<OpenAuthAxumState>,
     request: Request<Body>,
 ) -> impl IntoResponse {
-    handle_ref_with_options(state.auth.as_ref(), state.options, request).await
+    handle_with_options(state.auth.as_ref(), state.options, request).await
 }
 
 fn validate_base_url_matches_base_path(auth: &OpenAuth) -> Result<(), OpenAuthAxumError> {
@@ -195,7 +153,7 @@ fn normalize_base_path(base_path: &str) -> Result<String, OpenAuthAxumError> {
 
 fn maybe_insert_base_url(
     auth: &OpenAuth,
-    request: &mut openauth::ApiRequest,
+    request: &mut openauth::api::ApiRequest,
     options: OpenAuthAxumOptions,
 ) {
     if !options.infer_base_url_from_request
@@ -380,24 +338,26 @@ mod tests {
         assert_eq!(base.as_deref(), Some("http://127.0.0.1:3000/api/auth"));
     }
 
-    #[test]
-    fn validate_base_url_accepts_matching_pathname() -> Result<(), OpenAuthError> {
+    #[tokio::test]
+    async fn validate_base_url_accepts_matching_pathname() -> Result<(), OpenAuthError> {
         let auth = OpenAuth::builder()
             .secret(SECRET)
             .base_path("/api/auth")
             .base_url("http://localhost:3000/api/auth/")
-            .build()?;
+            .build()
+            .await?;
         assert!(validate_base_url_matches_base_path(&auth).is_ok());
         Ok(())
     }
 
-    #[test]
-    fn validate_base_url_rejects_mismatched_pathname() -> Result<(), OpenAuthError> {
+    #[tokio::test]
+    async fn validate_base_url_rejects_mismatched_pathname() -> Result<(), OpenAuthError> {
         let auth = OpenAuth::builder()
             .secret(SECRET)
             .base_path("/api/auth")
             .base_url("http://localhost:3000/wrong")
-            .build()?;
+            .build()
+            .await?;
         assert!(matches!(
             validate_base_url_matches_base_path(&auth),
             Err(OpenAuthAxumError::InconsistentBaseUrlPath { .. })
@@ -405,13 +365,14 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn validate_base_url_rejects_invalid_absolute_url() -> Result<(), OpenAuthError> {
+    #[tokio::test]
+    async fn validate_base_url_rejects_invalid_absolute_url() -> Result<(), OpenAuthError> {
         let auth = OpenAuth::builder()
             .secret(SECRET)
             .base_path("/api/auth")
             .base_url("not-a-url")
-            .build()?;
+            .build()
+            .await?;
         assert!(matches!(
             validate_base_url_matches_base_path(&auth),
             Err(OpenAuthAxumError::InvalidBaseUrl(_))
@@ -419,9 +380,9 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn axum_state_clones_only_the_shared_auth_pointer() -> Result<(), OpenAuthError> {
-        let auth = Arc::new(OpenAuth::builder().secret(SECRET).build()?);
+    #[tokio::test]
+    async fn axum_state_clones_only_the_shared_auth_pointer() -> Result<(), OpenAuthError> {
+        let auth = Arc::new(OpenAuth::builder().secret(SECRET).build().await?);
         let state = OpenAuthAxumState {
             auth: Arc::clone(&auth),
             options: OpenAuthAxumOptions::default(),

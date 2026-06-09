@@ -29,9 +29,9 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| `betterAuth()` / options builder | ✅ | `OpenAuth::builder()`, `OpenAuthBuilder`, `open_auth*` helpers (`src/auth.rs`) |
+| `betterAuth()` / options builder | ✅ | `OpenAuth::builder()`, `OpenAuthBuilder` (`src/auth.rs`); async `build()` |
 | `auth.handler(Request)` | ✅ | `OpenAuth::handler` / `handler_async` delegate to `AuthRouter` |
-| Core type re-exports | ✅ | `lib.rs` mirrors upstream `index.ts` server exports from `@better-auth/core` + runtime |
+| App-dev import surface | ✅ | `openauth::prelude`; module paths for library-author APIs (`api`, `db`, `plugin`, …) |
 | Feature-gated plugins | ✅ | `plugins`, `passkey`, `sso`, `scim`, `stripe`, `i18n`, `telemetry` features |
 | Feature-gated enterprise | ⚠️ | `oidc`, `saml`, `saml-signed` — SAML remains experimental |
 | SQL / Postgres adapters | ✅ | `sqlx-*`, `tokio-postgres`, `deadpool-postgres` re-exports |

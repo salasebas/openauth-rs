@@ -4,26 +4,31 @@ Main application crate for OpenAuth-RS.
 
 ## What It Is
 
-`openauth` is the crate most applications should start with. It re-exports the
-core builder, options, HTTP handler, database contracts, plugin contracts, and
-selected integration crates behind feature flags.
+`openauth` is the crate most applications should start with. Use [`prelude`](crate::prelude)
+for the app-dev surface, then reach into focused modules (`openauth::db`, `openauth::plugin`,
+`openauth::api`, …) when you extend adapters, plugins, or endpoints.
 
-Depend on lower-level crates directly when you are building adapters, plugins,
-or very small binaries that do not need the umbrella surface.
+Depend on `openauth-core` directly only for adapter/plugin internals or very small binaries
+that do not need the umbrella crate.
 
 ## Quick Start
 
 ```rust
-use openauth::{EmailPasswordOptions, OpenAuth, RateLimitOptions};
+use openauth::prelude::*;
 
-let auth = OpenAuth::builder()
-    .secret("secret-a-at-least-32-chars-long!!")
-    .base_url("https://app.example.com/api/auth")
-    .email_password(EmailPasswordOptions::new().enabled(true))
-    .rate_limit(RateLimitOptions::memory().enabled(true).window(60).max(100))
-    .build()?;
-# let _ = auth;
-# Ok::<(), Box<dyn std::error::Error>>(())
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let auth = OpenAuth::builder()
+        .secret("secret-a-at-least-32-chars-long!!")
+        .base_url("https://app.example.com/api/auth")
+        .email_password(EmailPasswordOptions::new().enabled(true))
+        .rate_limit(RateLimitOptions::memory().enabled(true).window(60).max(100))
+        .build()
+        .await?;
+
+    # let _ = auth;
+    Ok(())
+}
 ```
 
 Attach an adapter when you need durable users, sessions, accounts, plugin data,
@@ -33,24 +38,38 @@ or migrations. Enable the matching SQLx dialect on the `openauth` crate
 ```toml
 [dependencies]
 openauth = { version = "0.1.0", features = ["sqlx-sqlite"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ```rust
-use openauth::{EmailPasswordOptions, OpenAuth};
+use openauth::prelude::*;
 use openauth::sqlx::SqliteAdapter;
 use sqlx::sqlite::SqlitePoolOptions;
 
-let pool = SqlitePoolOptions::new().connect("sqlite://openauth.db").await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let pool = SqlitePoolOptions::new().connect("sqlite://openauth.db").await?;
 
-let auth = OpenAuth::builder()
-    .secret("secret-a-at-least-32-chars-long!!")
-    .base_url("https://app.example.com/api/auth")
-    .email_password(EmailPasswordOptions::new().enabled(true))
-    .adapter(SqliteAdapter::new(pool))
-    .build()?;
+    let auth = OpenAuth::builder()
+        .secret("secret-a-at-least-32-chars-long!!")
+        .base_url("https://app.example.com/api/auth")
+        .email_password(EmailPasswordOptions::new().enabled(true))
+        .adapter(SqliteAdapter::new(pool))
+        .build()
+        .await?;
 
-auth.run_migrations().await?;
-# Ok::<(), Box<dyn std::error::Error>>(())
+    auth.run_migrations().await?;
+    Ok(())
+}
+```
+
+Mount into Axum with [`openauth-axum`](../openauth-axum/README.md):
+
+```rust
+use openauth::prelude::*;
+use openauth_axum::OpenAuthAxumExt;
+
+let app = auth.into_router()?;
 ```
 
 ## Feature Flags
@@ -67,11 +86,9 @@ auth.run_migrations().await?;
   [`openauth-telemetry`](../openauth-telemetry/README.md) (`create_telemetry`,
   `get_telemetry_auth_config`, `TelemetryContext`, `TelemetryEvent`,
   `TelemetryPublisher`, `TelemetryTestHooks`, `CustomTrackFn`) and wire the
-  publisher during async initialization (`OpenAuthBuilder::build_async`,
-  `open_auth_*_async`). This feature also enables `openauth-telemetry/oauth` so
-  social-provider config snapshots match Better Auth parity. Async constructors
-  are available without this feature; see the linked crate docs for sink setup
-  and enablement precedence.
+  publisher during [`OpenAuthBuilder::build`](crate::OpenAuthBuilder::build).
+  This feature also enables `openauth-telemetry/oauth` so social-provider config
+  snapshots match Better Auth parity.
 - `sqlx-sqlite`, `sqlx-postgres`, `sqlx-mysql`: SQLx adapters.
 - `tokio-postgres` and `deadpool-postgres`: Postgres adapters.
 

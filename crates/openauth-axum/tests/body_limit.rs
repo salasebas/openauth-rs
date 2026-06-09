@@ -4,17 +4,17 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, Response, StatusCode};
 use axum::middleware::{self, Next};
 use common::*;
-use openauth::{MemoryAdapter, OpenAuthOptions};
-use openauth_axum::{router_with_options, OpenAuthAxumOptions};
+use openauth::db::MemoryAdapter;
+use openauth::options::OpenAuthOptions;
+use openauth_axum::{OpenAuthAxumExt, OpenAuthAxumOptions};
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn configurable_body_limit_rejects_oversized_requests(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router_with_options(
-        auth_with_options(OpenAuthOptions::default())?,
-        OpenAuthAxumOptions::default().body_limit(8),
-    )?;
+    let app = auth_with_options(OpenAuthOptions::default())
+        .await?
+        .into_router_with(OpenAuthAxumOptions::default().body_limit(8))?;
 
     let response = app
         .oneshot(json_request(
@@ -41,10 +41,9 @@ async fn configurable_body_limit_rejects_oversized_requests(
 #[tokio::test]
 async fn configurable_body_limit_allows_requests_within_limit(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router_with_options(
-        auth_with_options(OpenAuthOptions::default())?,
-        OpenAuthAxumOptions::default().body_limit(1024),
-    )?;
+    let app = auth_with_options(OpenAuthOptions::default())
+        .await?
+        .into_router_with(OpenAuthAxumOptions::default().body_limit(1024))?;
 
     let response = app
         .oneshot(json_request(
@@ -62,11 +61,10 @@ async fn configurable_body_limit_allows_requests_within_limit(
 #[tokio::test]
 async fn body_consuming_middleware_before_auth_routes_returns_stable_json_error(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router_with_options(
-        auth_with_adapter(MemoryAdapter::new(), OpenAuthOptions::default())?,
-        OpenAuthAxumOptions::default(),
-    )?
-    .layer(middleware::from_fn(drain_body_before_auth));
+    let app = auth_with_adapter(MemoryAdapter::new(), OpenAuthOptions::default())
+        .await?
+        .into_router_with(OpenAuthAxumOptions::default())?
+        .layer(middleware::from_fn(drain_body_before_auth));
 
     let response = app
         .oneshot(json_request(

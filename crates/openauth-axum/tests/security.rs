@@ -3,17 +3,20 @@ mod common;
 use axum::extract::ConnectInfo;
 use axum::http::{header, Method, StatusCode};
 use common::*;
-use openauth::{AdvancedOptions, IpAddressOptions, MemoryAdapter, OpenAuthOptions, RateLimitRule};
-use openauth_axum::{router, router_with_options, OpenAuthAxumOptions};
+use openauth::db::MemoryAdapter;
+use openauth::options::{AdvancedOptions, IpAddressOptions, OpenAuthOptions, RateLimitRule};
+use openauth_axum::{OpenAuthAxumExt, OpenAuthAxumOptions};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn csrf_origin_checks_are_preserved_over_axum() -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().base_url("https://app.example.com/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let rejected = app
         .clone()
@@ -48,14 +51,16 @@ async fn csrf_origin_checks_are_preserved_over_axum() -> Result<(), Box<dyn std:
 
 #[tokio::test]
 async fn core_rate_limit_runs_without_axum_middleware() -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().rate_limit(
-            openauth::RateLimitOptions::new()
+            openauth::options::RateLimitOptions::new()
                 .enabled(true)
                 .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
         ),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     for attempt in 0..2 {
         let response = app
@@ -75,14 +80,16 @@ async fn core_rate_limit_runs_without_axum_middleware() -> Result<(), Box<dyn st
 #[tokio::test]
 async fn axum_rate_limit_uses_connect_info_without_ip_headers(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().production(true).rate_limit(
-            openauth::RateLimitOptions::new()
+            openauth::options::RateLimitOptions::new()
                 .enabled(true)
                 .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
         ),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let first = app
         .clone()
@@ -109,14 +116,16 @@ async fn axum_rate_limit_uses_connect_info_without_ip_headers(
 #[tokio::test]
 async fn axum_rate_limit_ignores_spoofed_forwarded_for_by_default(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().production(true).rate_limit(
-            openauth::RateLimitOptions::new()
+            openauth::options::RateLimitOptions::new()
                 .enabled(true)
                 .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
         ),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let first = app
         .clone()
@@ -145,7 +154,7 @@ async fn axum_rate_limit_ignores_spoofed_forwarded_for_by_default(
 #[tokio::test]
 async fn axum_rate_limit_uses_forwarded_for_when_proxy_headers_are_configured(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default()
             .production(true)
@@ -154,11 +163,13 @@ async fn axum_rate_limit_uses_forwarded_for_when_proxy_headers_are_configured(
                     .ip_address(IpAddressOptions::new().headers(["x-forwarded-for"])),
             )
             .rate_limit(
-                openauth::RateLimitOptions::new()
+                openauth::options::RateLimitOptions::new()
                     .enabled(true)
                     .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
             ),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let first = app
         .clone()
@@ -186,17 +197,16 @@ async fn axum_rate_limit_uses_forwarded_for_when_proxy_headers_are_configured(
 
 #[tokio::test]
 async fn axum_connect_info_ip_can_be_disabled() -> Result<(), Box<dyn std::error::Error>> {
-    let app = router_with_options(
-        auth_with_adapter(
-            MemoryAdapter::new(),
-            OpenAuthOptions::default().production(true).rate_limit(
-                openauth::RateLimitOptions::new()
-                    .enabled(true)
-                    .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
-            ),
-        )?,
-        OpenAuthAxumOptions::new().use_connect_info_for_ip(false),
-    )?;
+    let app = auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default().production(true).rate_limit(
+            openauth::options::RateLimitOptions::new()
+                .enabled(true)
+                .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
+        ),
+    )
+    .await?
+    .into_router_with(OpenAuthAxumOptions::new().use_connect_info_for_ip(false))?;
 
     // ConnectInfo is present but ignored; without a trusted IP header production
     // rate limiting fails closed instead of silently bypassing the limit.

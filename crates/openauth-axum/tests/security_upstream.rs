@@ -2,17 +2,20 @@ mod common;
 
 use axum::http::{header, Method, StatusCode};
 use common::*;
-use openauth::{MemoryAdapter, OpenAuthOptions};
-use openauth_axum::router;
+use openauth::db::MemoryAdapter;
+use openauth::options::OpenAuthOptions;
+use openauth_axum::OpenAuthAxumExt;
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn fetch_metadata_blocks_cross_site_navigation_without_cookies(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(
@@ -42,10 +45,12 @@ async fn fetch_metadata_blocks_cross_site_navigation_without_cookies(
 
 #[tokio::test]
 async fn fetch_metadata_allows_same_origin_navigation() -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(
@@ -74,10 +79,12 @@ async fn fetch_metadata_allows_same_origin_navigation() -> Result<(), Box<dyn st
 #[tokio::test]
 async fn fetch_metadata_allows_same_origin_cors_requests() -> Result<(), Box<dyn std::error::Error>>
 {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(
@@ -104,10 +111,12 @@ async fn fetch_metadata_allows_same_origin_cors_requests() -> Result<(), Box<dyn
 #[tokio::test]
 async fn fetch_metadata_with_cookies_uses_origin_validation(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(
@@ -136,10 +145,12 @@ async fn fetch_metadata_with_cookies_uses_origin_validation(
 #[tokio::test]
 async fn form_urlencoded_sign_up_and_sign_in_work_over_axum(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let sign_up = app
         .clone()
@@ -179,10 +190,12 @@ async fn form_urlencoded_sign_up_and_sign_in_work_over_axum(
 #[tokio::test]
 async fn form_urlencoded_cross_site_navigation_is_blocked() -> Result<(), Box<dyn std::error::Error>>
 {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(
@@ -218,10 +231,12 @@ async fn form_urlencoded_cross_site_navigation_is_blocked() -> Result<(), Box<dy
 #[tokio::test]
 async fn form_urlencoded_same_site_navigation_from_trusted_origin_is_allowed(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(
@@ -255,10 +270,12 @@ async fn form_urlencoded_same_site_navigation_from_trusted_origin_is_allowed(
 #[tokio::test]
 async fn callback_and_redirect_urls_are_validated_from_body_and_query(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let body_rejection = app
         .clone()

@@ -4,7 +4,7 @@ use openauth::db::{
     Create, DbAdapter, DbFieldType, DbRecord, DbSchema, DbTable, DbValue, Delete,
     TransactionCallback, Where,
 };
-use openauth::OpenAuthError;
+use openauth::error::OpenAuthError;
 use serde::Serialize;
 use time::{Duration, OffsetDateTime};
 

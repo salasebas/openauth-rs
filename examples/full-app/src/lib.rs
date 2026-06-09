@@ -15,16 +15,19 @@ use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
+use openauth::api::EndpointInfo;
 use openauth::db::{
     auth_schema, AuthSchemaOptions, Count, DbAdapter, DbRecord, DbSchema, DbValue, DeleteMany,
     FindMany, RateLimitStorage,
 };
+use openauth::error::OpenAuthError;
+use openauth::options::{
+    AdvancedOptions, EmailPasswordOptions, HybridRateLimitOptions, OpenAuthOptions,
+    RateLimitOptions, RateLimitRule, RateLimitStore,
+};
 use openauth::plugin::AuthPlugin;
 use openauth::rate_limit::GovernorMemoryRateLimitStore;
-use openauth::{
-    AdvancedOptions, EmailPasswordOptions, EndpointInfo, HybridRateLimitOptions, OpenAuth,
-    OpenAuthError, OpenAuthOptions, RateLimitOptions, RateLimitRule, RateLimitStore,
-};
+use openauth::OpenAuth;
 use openauth_axum::OpenAuthAxumExt;
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_deadpool_postgres::{DeadpoolPostgresAdapter, DeadpoolPostgresRateLimitStore};
@@ -945,6 +948,7 @@ where
         .options(options)
         .adapter_arc(adapter)
         .build()
+        .await
         .map_err(ExampleError::from)
 }
 

@@ -17,4 +17,12 @@ fn readme_sql_adapter_example_uses_umbrella_sqlx_reexport() {
         contents.contains("features = [\"sqlx-sqlite\"]"),
         "expected sqlx-sqlite feature documented alongside the adapter example"
     );
+    assert!(
+        contents.contains("openauth::prelude"),
+        "expected prelude import in openauth README quick start"
+    );
+    assert!(
+        contents.contains(".build()\n        .await?"),
+        "expected async build in openauth README quick start"
+    );
 }

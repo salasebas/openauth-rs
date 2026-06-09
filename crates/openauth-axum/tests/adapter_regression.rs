@@ -6,13 +6,14 @@ use std::time::Duration;
 use axum::extract::ConnectInfo;
 use axum::http::{header, Method, StatusCode};
 use common::*;
-use openauth::{
-    auth::oauth::OAuthBaseUrlOverride, AuthPlugin, MemoryAdapter, OpenAuth, OpenAuthError,
-    OpenAuthOptions, PluginRequestAction, RateLimitRule, RequestClientIp, TrustedOriginOptions,
-};
-use openauth_axum::{
-    handle_ref_with_options, router, router_with_options, routes_with_options, OpenAuthAxumOptions,
-};
+use openauth::auth::oauth::OAuthBaseUrlOverride;
+use openauth::db::MemoryAdapter;
+use openauth::error::OpenAuthError;
+use openauth::options::{OpenAuthOptions, RateLimitRule, TrustedOriginOptions};
+use openauth::plugin::{AuthPlugin, PluginRequestAction};
+use openauth::rate_limit::RequestClientIp;
+use openauth::OpenAuth;
+use openauth_axum::{handle_with_options, OpenAuthAxumExt, OpenAuthAxumOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
@@ -20,10 +21,9 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn routes_accepts_stripped_paths_on_unmounted_router(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = routes_with_options(
-        auth_with_options(OpenAuthOptions::default())?,
-        OpenAuthAxumOptions::default(),
-    );
+    let app = auth_with_options(OpenAuthOptions::default())
+        .await?
+        .into_routes_with(OpenAuthAxumOptions::default());
 
     let response = app.oneshot(request(Method::GET, "/ok", "", None)?).await?;
 
@@ -35,11 +35,13 @@ async fn routes_accepts_stripped_paths_on_unmounted_router(
 #[tokio::test]
 async fn disabled_paths_are_enforced_through_axum_router() -> Result<(), Box<dyn std::error::Error>>
 {
-    let app = router(auth_with_options(
+    let app = auth_with_options(
         OpenAuthOptions::default()
             .base_url("http://localhost:3000/api/auth")
             .disabled_path("/sign-in/email"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(json_request(
@@ -67,11 +69,13 @@ async fn on_request_plugin_can_short_circuit_before_core_handler(
                 message: error.to_string(),
             })
     });
-    let app = router(auth_with_options(
+    let app = auth_with_options(
         OpenAuthOptions::default()
             .base_url("http://localhost:3000/api/auth")
             .plugin(plugin),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(request(Method::GET, "/api/auth/ok", "", None)?)
@@ -92,11 +96,13 @@ async fn on_request_plugin_runs_before_core_handler() -> Result<(), Box<dyn std:
             Ok(PluginRequestAction::Continue(request))
         })
         .with_endpoint(custom_endpoint("/plugin/request-ext"));
-    let app = router(auth_with_options(
+    let app = auth_with_options(
         OpenAuthOptions::default()
             .base_url("http://localhost:3000/api/auth")
             .plugin(plugin),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(request(
@@ -117,14 +123,15 @@ async fn inbound_request_extensions_reach_core_handler() -> Result<(), Box<dyn s
     let auth = OpenAuth::builder()
         .secret(SECRET)
         .async_endpoint(request_extension_endpoint("/request-ext"))
-        .build()?;
+        .build()
+        .await?;
 
     let mut request = request(Method::GET, "/api/auth/request-ext", "", None)?;
     request
         .extensions_mut()
         .insert(RequestExtensionMarker("inbound"));
 
-    let response = handle_ref_with_options(&auth, OpenAuthAxumOptions::default(), request).await;
+    let response = handle_with_options(&auth, OpenAuthAxumOptions::default(), request).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body_text(response).await?, "request=inbound");
@@ -137,7 +144,8 @@ async fn handle_with_options_preserves_response_contract() -> Result<(), Box<dyn
     let auth = OpenAuth::builder()
         .secret(SECRET)
         .async_endpoint(response_contract_endpoint("/contract"))
-        .build()?;
+        .build()
+        .await?;
 
     let response = openauth_axum::handle_with_options(
         &auth,
@@ -159,17 +167,16 @@ async fn handle_with_options_preserves_response_contract() -> Result<(), Box<dyn
 #[tokio::test]
 async fn pre_set_request_client_ip_is_not_overwritten_by_connect_info(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router_with_options(
-        auth_with_adapter(
-            MemoryAdapter::new(),
-            OpenAuthOptions::default().production(true).rate_limit(
-                openauth::RateLimitOptions::new()
-                    .enabled(true)
-                    .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
-            ),
-        )?,
-        OpenAuthAxumOptions::default(),
-    )?;
+    let app = auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default().production(true).rate_limit(
+            openauth::options::RateLimitOptions::new()
+                .enabled(true)
+                .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
+        ),
+    )
+    .await?
+    .into_router_with(OpenAuthAxumOptions::default())?;
 
     let pinned = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
     let mut first = request(Method::GET, "/api/auth/ok", "", None)?;
@@ -191,17 +198,16 @@ async fn pre_set_request_client_ip_is_not_overwritten_by_connect_info(
 #[tokio::test]
 async fn base_url_inference_skips_when_oauth_override_is_present(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router_with_options(
-        auth_with_adapter(
-            MemoryAdapter::new(),
-            OpenAuthOptions::default()
-                .trusted_origins(TrustedOriginOptions::Static(vec![
-                    "https://configured.example.com".to_owned(),
-                ]))
-                .social_provider(FakeProvider::new("github")),
-        )?,
-        OpenAuthAxumOptions::new().infer_base_url_from_request(true),
-    )?;
+    let app = auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default()
+            .trusted_origins(TrustedOriginOptions::Static(vec![
+                "https://configured.example.com".to_owned(),
+            ]))
+            .social_provider(FakeProvider::new("github")),
+    )
+    .await?
+    .into_router_with(OpenAuthAxumOptions::new().infer_base_url_from_request(true))?;
 
     let mut request = json_request(
         Method::POST,
@@ -212,9 +218,11 @@ async fn base_url_inference_skips_when_oauth_override_is_present(
     request.extensions_mut().insert(OAuthBaseUrlOverride(
         "https://configured.example.com/api/auth".to_owned(),
     ));
-    request.extensions_mut().insert(openauth::RequestBaseUrl(
-        "https://configured.example.com/api/auth".to_owned(),
-    ));
+    request
+        .extensions_mut()
+        .insert(openauth::api::RequestBaseUrl(
+            "https://configured.example.com/api/auth".to_owned(),
+        ));
     request.headers_mut().insert(
         header::HOST,
         header::HeaderValue::from_static("evil.example.com"),
@@ -234,17 +242,16 @@ async fn base_url_inference_skips_when_oauth_override_is_present(
 #[tokio::test]
 async fn social_sign_in_infers_from_absolute_request_uri() -> Result<(), Box<dyn std::error::Error>>
 {
-    let app = router_with_options(
-        auth_with_adapter(
-            MemoryAdapter::new(),
-            OpenAuthOptions::default()
-                .trusted_origins(TrustedOriginOptions::Static(vec![
-                    "https://app.example.com".to_owned(),
-                ]))
-                .social_provider(FakeProvider::new("github")),
-        )?,
-        OpenAuthAxumOptions::new().infer_base_url_from_request(true),
-    )?;
+    let app = auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default()
+            .trusted_origins(TrustedOriginOptions::Static(vec![
+                "https://app.example.com".to_owned(),
+            ]))
+            .social_provider(FakeProvider::new("github")),
+    )
+    .await?
+    .into_router_with(OpenAuthAxumOptions::new().infer_base_url_from_request(true))?;
 
     let response = app
         .oneshot(json_request(
@@ -268,17 +275,16 @@ async fn social_sign_in_infers_from_absolute_request_uri() -> Result<(), Box<dyn
 #[tokio::test]
 async fn tcp_listener_connect_info_enables_rate_limit_without_manual_injection(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router_with_options(
-        auth_with_adapter(
-            MemoryAdapter::new(),
-            OpenAuthOptions::default().production(true).rate_limit(
-                openauth::RateLimitOptions::new()
-                    .enabled(true)
-                    .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
-            ),
-        )?,
-        OpenAuthAxumOptions::default(),
-    )?;
+    let app = auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default().production(true).rate_limit(
+            openauth::options::RateLimitOptions::new()
+                .enabled(true)
+                .custom_rule("/ok", RateLimitRule { window: 60, max: 1 }),
+        ),
+    )
+    .await?
+    .into_router_with(OpenAuthAxumOptions::default())?;
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;

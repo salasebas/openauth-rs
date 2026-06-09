@@ -2,16 +2,17 @@ mod common;
 
 use axum::http::{header, Method, StatusCode};
 use common::*;
-use openauth::{MemoryAdapter, OpenAuth, OpenAuthOptions};
-use openauth_axum::router;
+use openauth::db::MemoryAdapter;
+use openauth::options::OpenAuthOptions;
+use openauth::OpenAuth;
+use openauth_axum::OpenAuthAxumExt;
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn invalid_json_body_returns_stable_json_error() -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
-        MemoryAdapter::new(),
-        OpenAuthOptions::default(),
-    )?)?;
+    let app = auth_with_adapter(MemoryAdapter::new(), OpenAuthOptions::default())
+        .await?
+        .into_router()?;
 
     let response = app
         .oneshot(json_request(
@@ -35,10 +36,9 @@ async fn invalid_json_body_returns_stable_json_error() -> Result<(), Box<dyn std
 #[tokio::test]
 async fn unsupported_content_type_returns_415_json_error() -> Result<(), Box<dyn std::error::Error>>
 {
-    let app = router(auth_with_adapter(
-        MemoryAdapter::new(),
-        OpenAuthOptions::default(),
-    )?)?;
+    let app = auth_with_adapter(MemoryAdapter::new(), OpenAuthOptions::default())
+        .await?
+        .into_router()?;
 
     let response = app
         .oneshot(
@@ -60,14 +60,14 @@ async fn unsupported_content_type_returns_415_json_error() -> Result<(), Box<dyn
 
 #[tokio::test]
 async fn internal_endpoint_errors_are_sanitized() -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(
-        OpenAuth::builder()
-            .secret(SECRET)
-            .production(true)
-            .rate_limit(openauth::RateLimitOptions::new().enabled(false))
-            .async_endpoint(failing_endpoint("/fail"))
-            .build()?,
-    )?;
+    let app = OpenAuth::builder()
+        .secret(SECRET)
+        .production(true)
+        .rate_limit(openauth::options::RateLimitOptions::new().enabled(false))
+        .async_endpoint(failing_endpoint("/fail"))
+        .build()
+        .await?
+        .into_router()?;
 
     let response = app
         .oneshot(request(Method::GET, "/api/auth/fail", "", None)?)

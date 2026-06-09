@@ -2,21 +2,24 @@ mod common;
 
 use axum::http::{header, Method, StatusCode};
 use common::*;
+use openauth::db::MemoryAdapter;
 use openauth::db::{Create, DbAdapter, DbRecord, DbValue};
-use openauth::{MemoryAdapter, OpenAuthOptions};
-use openauth_axum::router;
+use openauth::options::OpenAuthOptions;
+use openauth_axum::OpenAuthAxumExt;
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn account_list_unlink_and_token_routes_work_over_axum(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = MemoryAdapter::new();
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         adapter.clone(),
         OpenAuthOptions::default()
             .base_url("http://localhost:3000/api/auth")
             .social_provider(FakeProvider::new("github")),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let sign_up = app
         .clone()

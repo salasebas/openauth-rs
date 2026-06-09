@@ -19,17 +19,32 @@ adopters and contributors, not as a frozen production interface.
 ## Basic Usage
 
 ```rust
-use openauth::{open_auth, OpenAuthOptions};
+use openauth::prelude::*;
 
-let auth = open_auth(
-    OpenAuthOptions::new()
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let auth = OpenAuth::builder()
         .secret("secret-a-at-least-32-chars-long!!")
-        .base_url("https://app.example.com/api/auth"),
-)?;
+        .base_url("https://app.example.com/api/auth")
+        .build()
+        .await?;
+
+    Ok(())
+}
 ```
 
-Most applications will combine the top-level `openauth` crate with a web
-adapter, a database adapter, and whichever plugins or provider crates they need.
+Mount into Axum with [`openauth-axum`](crates/openauth-axum/README.md):
+
+```rust
+use openauth_axum::OpenAuthAxumExt;
+
+let app = auth.into_router()?;
+```
+
+Most applications combine the top-level `openauth` crate with a web adapter, a
+database adapter, and whichever plugins or provider crates they need. Import
+`openauth::prelude::*` for the app-dev surface; reach into modules such as
+`openauth::db` or `openauth::plugin` when extending adapters or plugins.
 
 ## Package Guide
 

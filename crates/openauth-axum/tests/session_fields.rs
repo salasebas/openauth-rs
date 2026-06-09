@@ -3,15 +3,16 @@ mod common;
 use axum::http::{header, Method, StatusCode};
 use common::*;
 use openauth::db::DbFieldType;
-use openauth::{MemoryAdapter, OpenAuthOptions, SessionAdditionalField, SessionOptions};
-use openauth_axum::router;
+use openauth::db::MemoryAdapter;
+use openauth::options::{OpenAuthOptions, SessionAdditionalField, SessionOptions};
+use openauth_axum::OpenAuthAxumExt;
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn update_session_additional_fields_work_over_axum() -> Result<(), Box<dyn std::error::Error>>
 {
     let adapter = MemoryAdapter::new();
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         adapter,
         OpenAuthOptions::default()
             .base_url("http://localhost:3000/api/auth")
@@ -19,7 +20,9 @@ async fn update_session_additional_fields_work_over_axum() -> Result<(), Box<dyn
                 SessionOptions::default()
                     .additional_field("theme", SessionAdditionalField::new(DbFieldType::String)),
             ),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let sign_up = app
         .clone()

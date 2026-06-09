@@ -38,26 +38,6 @@ impl OpenAuthAxumOptions {
         self.trust_proxy_headers_for_base_url = enabled;
         self
     }
-
-    #[must_use]
-    pub fn request_body_limit(&self) -> usize {
-        self.body_limit
-    }
-
-    #[must_use]
-    pub fn connect_info_for_ip_enabled(&self) -> bool {
-        self.use_connect_info_for_ip
-    }
-
-    #[must_use]
-    pub fn base_url_inference_enabled(&self) -> bool {
-        self.infer_base_url_from_request
-    }
-
-    #[must_use]
-    pub fn trusted_proxy_headers_for_base_url_enabled(&self) -> bool {
-        self.trust_proxy_headers_for_base_url
-    }
 }
 
 impl Default for OpenAuthAxumOptions {

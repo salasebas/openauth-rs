@@ -27,10 +27,10 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| `auth.handler(Request)` pass-through | ✅ | `handle_ref` → `auth.handler_async` (`src/router.rs`) |
-| Catch-all mount under `base_path` | ✅ | `Router::nest` + `any()`; `/` and empty `base_path` supported |
+| `auth.handler(Request)` pass-through | ✅ | `handle` / `handle_with_options` → `auth.handler_async` (`src/router.rs`) |
+| Catch-all mount under `base_path` | ✅ | `OpenAuthAxumExt::into_router` nests `any()` routes; `/` and empty `base_path` supported |
 | Per-method handler maps (Next/Solid) | 🎯 | Single `any()` catch-all; same routes, different Axum idiom |
-| `svelteKitHandler` / `isAuthPath` middleware | ➖ | SvelteKit-only app middleware; Axum uses explicit `router` / `nest` at `base_path` |
+| `svelteKitHandler` / `isAuthPath` middleware | ➖ | SvelteKit-only app middleware; Axum uses `into_router` / manual `into_routes` nest |
 | Headers / status / body / `Set-Cookie` | ✅ | Multi-value headers and extensions preserved (`http_contract.rs`) |
 | Request body collection + limit | 🎯 | 10 MiB default; JSON `413 PAYLOAD_TOO_LARGE` (`body_limit.rs`) |
 | `ConnectInfo` client IP | ✅ | Injected as `RequestClientIp`; spoofed `x-forwarded-for` ignored by default |

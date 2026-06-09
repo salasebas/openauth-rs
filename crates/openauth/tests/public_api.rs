@@ -1,25 +1,34 @@
 use http::{header, Method, Request, StatusCode};
+use openauth::api::{
+    core_auth_async_endpoints, create_auth_endpoint, ApiErrorResponse, ApiRequest, ApiResponse,
+    AsyncAuthEndpoint, AuthEndpoint, AuthEndpointOptions, BodyField, BodySchema, EndpointKind,
+    JsonSchemaType, OpenApiOperation, PathParams,
+};
+#[cfg(feature = "telemetry")]
+use openauth::context::ContextTelemetryEvent;
 use openauth::db::DbAdapter;
-use openauth::{
-    core_auth_async_endpoints, create_auth_endpoint, open_auth, open_auth_with_adapter,
-    open_auth_with_endpoints, AdvancedOptions, ApiErrorResponse, ApiRequest, ApiResponse,
-    AsyncAuthEndpoint, AuthEndpoint, AuthEndpointOptions, AuthPlugin, BodyField, BodySchema,
-    ChangeEmailOptions, CookieCacheOptions, CookieCacheStrategy, DeleteUserOptions,
-    EmailVerificationOptions, EndpointKind, HookedAdapter, JsonSchemaType, MemoryAdapter,
-    OpenApiOperation, OpenAuth, OpenAuthBuilder, OpenAuthError, OpenAuthOptions, PathParams,
-    PluginAfterHookAction, PluginBeforeHookAction, PluginDatabaseAfterInput,
+use openauth::db::{HookedAdapter, MemoryAdapter};
+use openauth::error::OpenAuthError;
+use openauth::oauth::oauth2::{ProviderOptions, SocialOAuthProvider};
+use openauth::options::{
+    AdvancedOptions, ChangeEmailOptions, CookieCacheOptions, CookieCacheStrategy,
+    DeleteUserOptions, EmailVerificationOptions, HybridRateLimitOptions, OpenAuthOptions,
+    RateLimitConsumeInput, RateLimitDecision, RateLimitFuture, RateLimitOptions, RateLimitRule,
+    RateLimitStorageOption, RateLimitStore, SessionAdditionalField, SessionOptions,
+    TrustedOriginOptions, UserOptions, VerificationEmail,
+};
+use openauth::plugin::{
+    AuthPlugin, PluginAfterHookAction, PluginBeforeHookAction, PluginDatabaseAfterInput,
     PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook,
     PluginDatabaseHookContext, PluginDatabaseOperation, PluginEndpoint, PluginEndpointHooks,
     PluginErrorCode, PluginHookMatcher, PluginInitOutput, PluginMigration, PluginRateLimitRule,
-    PluginRequestAction, PluginSchemaContribution, ProviderOptions, RateLimitConsumeInput,
-    RateLimitDecision, RateLimitFuture, RateLimitOptions, RateLimitStorageOption, RateLimitStore,
-    SessionAdditionalField, SessionAuth, SessionOptions, SignOutResult, SocialOAuthProvider,
-    TrustedOriginOptions, UpdateUserInput, UserOptions, VerificationEmail,
+    PluginRequestAction, PluginSchemaContribution,
 };
+use openauth::prelude::*;
+use openauth::user::UpdateUserInput;
 #[cfg(feature = "telemetry")]
-use openauth::{
-    ContextTelemetryEvent, CustomTrackFn, TelemetryContext, TelemetryOptions, TelemetryTestHooks,
-};
+use openauth::{CustomTrackFn, TelemetryContext, TelemetryTestHooks};
+use openauth_core::auth::session::{SessionAuth, SignOutResult};
 use serde_json::Value;
 use std::collections::BTreeMap;
 #[cfg(feature = "telemetry")]
@@ -43,6 +52,20 @@ fn mysql_url_from_env(value: Option<String>) -> String {
 }
 
 #[test]
+fn prelude_exports_app_dev_surface() {
+    fn _uses_prelude(
+        _auth: OpenAuth,
+        _builder: OpenAuthBuilder,
+        _error: OpenAuthError,
+        _options: OpenAuthOptions,
+        _adapter: MemoryAdapter,
+        _plugin: AuthPlugin,
+    ) {
+    }
+    let _ = _uses_prelude;
+}
+
+#[test]
 fn sql_test_urls_default_to_docker_compose_services_when_env_is_unset() {
     assert_eq!(postgres_url_from_env(None), DEFAULT_POSTGRES_URL);
     assert_eq!(mysql_url_from_env(None), DEFAULT_MYSQL_URL);
@@ -60,30 +83,13 @@ fn sql_test_urls_allow_env_overrides() {
     );
 }
 
-#[test]
-fn openauth_crate_exposes_product_initializer() -> Result<(), Box<dyn std::error::Error>> {
-    let auth = open_auth(OpenAuthOptions {
-        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
-        ..OpenAuthOptions::default()
-    })?;
-    let request = Request::builder()
-        .method(Method::GET)
-        .uri("http://localhost:3000/api/auth/ok")
-        .body(Vec::new())?;
-
-    let response = auth.handler(request)?;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.body(), b"OK");
-    Ok(())
-}
-
-#[test]
-fn openauth_builder_exposes_primary_initializer() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::test]
+async fn openauth_builder_exposes_primary_initializer() -> Result<(), Box<dyn std::error::Error>> {
     let auth = OpenAuth::builder()
         .secret("secret-a-at-least-32-chars-long!!")
         .rate_limit(RateLimitOptions::memory().enabled(false))
-        .build()?;
+        .build()
+        .await?;
 
     let response = auth.handler(
         Request::builder()
@@ -101,28 +107,8 @@ async fn async_init_without_telemetry_feature() -> Result<(), Box<dyn std::error
     let auth = OpenAuth::builder()
         .secret("secret-a-at-least-32-chars-long!!")
         .rate_limit(RateLimitOptions::memory().enabled(false))
-        .build_async()
+        .build()
         .await?;
-
-    let response = auth.handler(
-        Request::builder()
-            .method(Method::GET)
-            .uri("http://localhost:3000/api/auth/ok")
-            .body(Vec::new())?,
-    )?;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    Ok(())
-}
-
-#[tokio::test]
-async fn open_auth_async_initializer_without_telemetry_feature(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let auth = openauth::open_auth_async(OpenAuthOptions {
-        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
-        ..OpenAuthOptions::default()
-    })
-    .await?;
 
     let response = auth.handler(
         Request::builder()
@@ -163,7 +149,7 @@ async fn openauth_async_builder_wires_context_telemetry_publisher(
             }),
             ..TelemetryContext::default()
         })
-        .build_async()
+        .build()
         .await?;
 
     auth.context()
@@ -197,9 +183,9 @@ fn i18n_feature_reexports_i18n_crate() {
     assert_eq!(dictionary.get("CODE").map(String::as_str), Some("Message"));
 }
 
-#[test]
-fn openauth_builder_accepts_adapter_and_extra_endpoints() -> Result<(), Box<dyn std::error::Error>>
-{
+#[tokio::test]
+async fn openauth_builder_accepts_adapter_and_extra_endpoints(
+) -> Result<(), Box<dyn std::error::Error>> {
     let extra = AuthEndpoint {
         path: "/builder-custom".to_owned(),
         method: Method::GET,
@@ -209,7 +195,8 @@ fn openauth_builder_accepts_adapter_and_extra_endpoints() -> Result<(), Box<dyn 
         .secret("secret-a-at-least-32-chars-long!!")
         .adapter(MemoryAdapter::new())
         .endpoint(extra)
-        .build()?;
+        .build()
+        .await?;
 
     let response = auth.handler(
         Request::builder()
@@ -303,14 +290,14 @@ fn saml_feature_reexports_saml_crate() {
 fn option_builder_aliases_match_new_constructors() {
     let options = OpenAuthOptions::builder().rate_limit(
         RateLimitOptions::builder()
-            .custom_rule("/login", openauth::RateLimitRule::new(10, 2))
-            .hybrid(openauth::HybridRateLimitOptions::builder().set_enabled(true)),
+            .custom_rule("/login", RateLimitRule::new(10, 2))
+            .hybrid(HybridRateLimitOptions::builder().set_enabled(true)),
     );
 
     assert_eq!(options.rate_limit.custom_rules[0].path, "/login");
     assert_eq!(
         options.rate_limit.custom_rules[0].rule,
-        Some(openauth::RateLimitRule { window: 10, max: 2 })
+        Some(RateLimitRule { window: 10, max: 2 })
     );
     assert!(options.rate_limit.hybrid.enabled);
 }
@@ -321,7 +308,7 @@ fn rate_limit_builders_cover_distributed_and_hybrid_configuration() {
         .enabled(true)
         .window(30)
         .max(5)
-        .hybrid(openauth::HybridRateLimitOptions::enabled().local_multiplier(3));
+        .hybrid(HybridRateLimitOptions::enabled().local_multiplier(3));
     let secondary = RateLimitOptions::secondary_storage(TestRateLimitStore)
         .enabled(true)
         .window(60)
@@ -365,7 +352,8 @@ async fn openauth_builder_uses_sqlx_rate_limit_store_with_handler_async(
                 .window(60)
                 .max(1),
         )
-        .build()?;
+        .build()
+        .await?;
 
     let first = auth
         .handler_async(
@@ -395,7 +383,8 @@ async fn openauth_builder_initializes_memory_rate_limit_backend(
     let auth = OpenAuth::builder()
         .secret("secret-a-at-least-32-chars-long!!")
         .rate_limit(RateLimitOptions::memory().enabled(true).window(60).max(1))
-        .build()?;
+        .build()
+        .await?;
 
     let first = auth
         .handler_async(
@@ -430,7 +419,8 @@ async fn openauth_builder_initializes_secondary_rate_limit_backend(
                 .window(60)
                 .max(1),
         )
-        .build()?;
+        .build()
+        .await?;
 
     let response = auth
         .handler_async(
@@ -548,10 +538,13 @@ fn oauth_public_reexports_include_core_and_oauth_helpers() {
 
 #[tokio::test]
 async fn openauth_instance_exposes_async_handler() -> Result<(), Box<dyn std::error::Error>> {
-    let auth = open_auth(OpenAuthOptions {
-        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
-        ..OpenAuthOptions::default()
-    })?;
+    let auth = OpenAuth::builder()
+        .options(OpenAuthOptions {
+            secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+            ..OpenAuthOptions::default()
+        })
+        .build()
+        .await?;
     let request = Request::builder()
         .method(Method::GET)
         .uri("http://localhost:3000/api/auth/ok")
@@ -585,7 +578,7 @@ fn openauth_crate_reexports_core_contract_types() {
     let _plugin_init = PluginInitOutput::new().social_provider(provider);
     let _plugin_error = PluginErrorCode::new("PLUGIN_ERROR", "Plugin error");
     let _plugin_rate_rule =
-        PluginRateLimitRule::new("/plugin/*", openauth::RateLimitRule { window: 10, max: 1 });
+        PluginRateLimitRule::new("/plugin/*", RateLimitRule { window: 10, max: 1 });
     let _plugin_schema_type: Option<PluginSchemaContribution> = None;
     let _plugin_hooks = PluginEndpointHooks::default();
     let _plugin_matcher = PluginHookMatcher::path("/plugin/*");
@@ -621,7 +614,7 @@ fn openauth_crate_reexports_core_contract_types() {
     let _rate_limit = RateLimitOptions::default();
     let _rate_limit_input = RateLimitConsumeInput {
         key: "127.0.0.1|/test".to_owned(),
-        rule: openauth::RateLimitRule { window: 10, max: 1 },
+        rule: RateLimitRule { window: 10, max: 1 },
         now_ms: 1_700_000_000_000,
     };
     let _rate_limit_decision = RateLimitDecision {
@@ -680,14 +673,15 @@ async fn openauth_initializer_accepts_extra_endpoints_and_exposes_registry(
     let async_extra = AsyncAuthEndpoint::new("/async-custom", Method::GET, |_context, _request| {
         Box::pin(async move { openauth::api::response(StatusCode::OK, b"ASYNC CUSTOM".to_vec()) })
     });
-    let auth = open_auth_with_endpoints(
-        OpenAuthOptions {
+    let auth = OpenAuth::builder()
+        .options(OpenAuthOptions {
             secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
             ..OpenAuthOptions::default()
-        },
-        vec![extra],
-        vec![async_extra],
-    )?;
+        })
+        .endpoint(extra)
+        .async_endpoint(async_extra)
+        .build()
+        .await?;
 
     let registry = auth.endpoint_registry();
     assert!(registry
@@ -722,22 +716,23 @@ async fn openauth_initializer_accepts_extra_endpoints_and_exposes_registry(
     Ok(())
 }
 
-#[test]
-fn openauth_initializer_rejects_endpoint_conflicts() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::test]
+async fn openauth_initializer_rejects_endpoint_conflicts() -> Result<(), Box<dyn std::error::Error>>
+{
     let conflicting = AuthEndpoint {
         path: "/ok".to_owned(),
         method: Method::GET,
         handler: |_context, _request| openauth::api::response(StatusCode::OK, Vec::new()),
     };
 
-    let result = open_auth_with_endpoints(
-        OpenAuthOptions {
+    let result = OpenAuth::builder()
+        .options(OpenAuthOptions {
             secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
             ..OpenAuthOptions::default()
-        },
-        vec![conflicting],
-        Vec::new(),
-    );
+        })
+        .endpoint(conflicting)
+        .build()
+        .await;
 
     assert!(
         matches!(result, Err(OpenAuthError::Api(message)) if message.contains("endpoint conflict"))
@@ -748,7 +743,11 @@ fn openauth_initializer_rejects_endpoint_conflicts() -> Result<(), Box<dyn std::
 #[tokio::test]
 async fn openauth_with_adapter_supports_email_password_session_flow(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let auth = open_auth_with_adapter(test_options(), Arc::new(MemoryAdapter::new()))?;
+    let auth = OpenAuth::builder()
+        .options(test_options())
+        .adapter(MemoryAdapter::new())
+        .build()
+        .await?;
 
     let sign_up = auth
         .handler_async(json_request(
@@ -816,13 +815,14 @@ async fn openauth_with_adapter_runs_database_hooks_for_core_endpoints(
             ))
         }),
     );
-    let auth = open_auth_with_adapter(
-        OpenAuthOptions {
+    let auth = OpenAuth::builder()
+        .options(OpenAuthOptions {
             plugins: vec![plugin],
             ..test_options()
-        },
-        Arc::new(MemoryAdapter::new()),
-    )?;
+        })
+        .adapter(MemoryAdapter::new())
+        .build()
+        .await?;
 
     let sign_up = auth
         .handler_async(json_request(
@@ -851,13 +851,14 @@ async fn openauth_create_schema_uses_plugin_augmented_schema(
         "tenant_id",
         openauth::db::DbField::new("tenant_id", openauth::db::DbFieldType::String).optional(),
     ));
-    let auth = open_auth_with_adapter(
-        OpenAuthOptions {
+    let auth = OpenAuth::builder()
+        .options(OpenAuthOptions {
             plugins: vec![plugin],
             ..test_options()
-        },
-        Arc::new(adapter),
-    )?;
+        })
+        .adapter(adapter)
+        .build()
+        .await?;
 
     auth.create_schema(None).await?;
 
@@ -887,7 +888,8 @@ async fn openauth_create_schema_includes_database_rate_limit_table(
                 .window(60)
                 .max(1),
         )
-        .build()?;
+        .build()
+        .await?;
 
     auth.create_schema(None).await?;
 
@@ -918,13 +920,14 @@ async fn openauth_run_migrations_uses_plugin_augmented_schema_and_is_explicit(
         "workspace_id",
         openauth::db::DbField::new("workspace_id", openauth::db::DbFieldType::String).optional(),
     ));
-    let auth = open_auth_with_adapter(
-        OpenAuthOptions {
+    let auth = OpenAuth::builder()
+        .options(OpenAuthOptions {
             plugins: vec![plugin],
             ..test_options()
-        },
-        Arc::new(adapter),
-    )?;
+        })
+        .adapter(adapter)
+        .build()
+        .await?;
 
     assert!(captured_schema
         .lock()
@@ -961,13 +964,14 @@ async fn openauth_run_migrations_applies_sqlite_plugin_schema_and_http_flows(
                 .optional()
                 .indexed(),
         ));
-    let auth = open_auth_with_adapter(
-        OpenAuthOptions {
+    let auth = OpenAuth::builder()
+        .options(OpenAuthOptions {
             plugins: vec![plugin],
             ..test_options()
-        },
-        Arc::new(adapter),
-    )?;
+        })
+        .adapter(adapter)
+        .build()
+        .await?;
 
     auth.run_migrations().await?;
     let sign_up = auth
@@ -1033,13 +1037,14 @@ async fn openauth_run_migrations_applies_postgres_plugin_schema_and_http_flows(
                 .optional()
                 .indexed(),
         ));
-    let auth = open_auth_with_adapter(
-        OpenAuthOptions {
+    let auth = OpenAuth::builder()
+        .options(OpenAuthOptions {
             plugins: vec![plugin],
             ..test_options()
-        },
-        Arc::new(adapter),
-    )?;
+        })
+        .adapter(adapter)
+        .build()
+        .await?;
 
     auth.run_migrations().await?;
     let sign_up = auth
@@ -1102,13 +1107,14 @@ async fn openauth_run_migrations_applies_mysql_plugin_schema_and_http_flows(
                 .optional()
                 .indexed(),
         ));
-    let auth = open_auth_with_adapter(
-        OpenAuthOptions {
+    let auth = OpenAuth::builder()
+        .options(OpenAuthOptions {
             plugins: vec![plugin],
             ..test_options()
-        },
-        Arc::new(adapter),
-    )?;
+        })
+        .adapter(adapter)
+        .build()
+        .await?;
 
     auth.run_migrations().await?;
     let email = format!("mysql-plugin-{}@example.com", unique_sql_prefix());
@@ -1151,7 +1157,7 @@ async fn openauth_run_migrations_applies_mysql_plugin_schema_and_http_flows(
 #[tokio::test]
 async fn openauth_create_schema_without_adapter_returns_invalid_config(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let auth = open_auth(test_options())?;
+    let auth = OpenAuth::builder().options(test_options()).build().await?;
 
     let result = auth.create_schema(None).await;
 
@@ -1164,7 +1170,7 @@ async fn openauth_create_schema_without_adapter_returns_invalid_config(
 #[tokio::test]
 async fn openauth_run_migrations_without_adapter_returns_invalid_config(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let auth = open_auth(test_options())?;
+    let auth = OpenAuth::builder().options(test_options()).build().await?;
 
     let result = auth.run_migrations().await;
 
@@ -1177,7 +1183,11 @@ async fn openauth_run_migrations_without_adapter_returns_invalid_config(
 #[tokio::test]
 async fn openauth_with_adapter_supports_sign_in_and_session_revocation(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let auth = open_auth_with_adapter(test_options(), Arc::new(MemoryAdapter::new()))?;
+    let auth = OpenAuth::builder()
+        .options(test_options())
+        .adapter(MemoryAdapter::new())
+        .build()
+        .await?;
     let _ = auth
         .handler_async(json_request(
             Method::POST,
@@ -1232,8 +1242,8 @@ async fn openauth_with_adapter_supports_sign_in_and_session_revocation(
 #[tokio::test]
 async fn openauth_with_adapter_supports_update_session_fields(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let auth = open_auth_with_adapter(
-        OpenAuthOptions {
+    let auth = OpenAuth::builder()
+        .options(OpenAuthOptions {
             session: SessionOptions {
                 additional_fields: BTreeMap::from([(
                     "theme".to_owned(),
@@ -1242,9 +1252,10 @@ async fn openauth_with_adapter_supports_update_session_fields(
                 ..SessionOptions::default()
             },
             ..test_options()
-        },
-        Arc::new(MemoryAdapter::new()),
-    )?;
+        })
+        .adapter(MemoryAdapter::new())
+        .build()
+        .await?;
     let sign_up = auth
         .handler_async(json_request(
             Method::POST,
@@ -1284,7 +1295,11 @@ async fn openauth_with_adapter_supports_update_session_fields(
 #[tokio::test]
 async fn openauth_with_adapter_supports_bulk_and_other_session_revocation(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let auth = open_auth_with_adapter(test_options(), Arc::new(MemoryAdapter::new()))?;
+    let auth = OpenAuth::builder()
+        .options(test_options())
+        .adapter(MemoryAdapter::new())
+        .build()
+        .await?;
     let first = auth
         .handler_async(json_request(
             Method::POST,
@@ -1348,21 +1363,21 @@ async fn openauth_with_adapter_supports_bulk_and_other_session_revocation(
     Ok(())
 }
 
-#[test]
-fn openauth_with_adapter_rejects_core_endpoint_conflicts() -> Result<(), Box<dyn std::error::Error>>
-{
+#[tokio::test]
+async fn openauth_with_adapter_rejects_core_endpoint_conflicts(
+) -> Result<(), Box<dyn std::error::Error>> {
     let conflicting = AuthEndpoint {
         path: "/ok".to_owned(),
         method: Method::GET,
         handler: |_context, _request| openauth::api::response(StatusCode::OK, Vec::new()),
     };
 
-    let result = openauth::auth::open_auth_with_adapter_and_endpoints(
-        test_options(),
-        Arc::new(MemoryAdapter::new()),
-        vec![conflicting],
-        Vec::new(),
-    );
+    let result = OpenAuth::builder()
+        .options(test_options())
+        .adapter(MemoryAdapter::new())
+        .endpoint(conflicting)
+        .build()
+        .await;
 
     assert!(
         matches!(result, Err(OpenAuthError::Api(message)) if message.contains("endpoint conflict"))

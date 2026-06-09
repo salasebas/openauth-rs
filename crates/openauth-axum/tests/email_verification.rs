@@ -4,12 +4,14 @@ use std::sync::{Arc, Mutex};
 
 use axum::http::{Method, StatusCode};
 use common::*;
+use openauth::api::ApiRequest;
 use openauth::db::DbValue;
-use openauth::{
-    ApiRequest, EmailVerificationOptions, MemoryAdapter, OpenAuthError, OpenAuthOptions,
-    TrustedOriginOptions, VerificationEmail,
+use openauth::db::MemoryAdapter;
+use openauth::error::OpenAuthError;
+use openauth::options::{
+    EmailVerificationOptions, OpenAuthOptions, TrustedOriginOptions, VerificationEmail,
 };
-use openauth_axum::{router, router_with_options, OpenAuthAxumOptions};
+use openauth_axum::{OpenAuthAxumExt, OpenAuthAxumOptions};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -17,7 +19,7 @@ async fn email_verification_routes_work_over_axum() -> Result<(), Box<dyn std::e
     let adapter = MemoryAdapter::new();
     let captured_token = Arc::new(Mutex::new(None::<String>));
     let token_sink = Arc::clone(&captured_token);
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         adapter.clone(),
         OpenAuthOptions::default()
             .base_url("http://localhost:3000/api/auth")
@@ -30,7 +32,9 @@ async fn email_verification_routes_work_over_axum() -> Result<(), Box<dyn std::e
                     Ok(())
                 },
             )),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let sign_up = app
         .clone()
@@ -87,29 +91,28 @@ async fn email_verification_url_uses_inferred_base_url() -> Result<(), Box<dyn s
     let adapter = MemoryAdapter::new();
     let captured_url = Arc::new(Mutex::new(None::<String>));
     let url_sink = Arc::clone(&captured_url);
-    let app = router_with_options(
-        auth_with_adapter(
-            adapter,
-            OpenAuthOptions::default()
-                .trusted_origins(TrustedOriginOptions::Static(vec![
-                    "https://app.example.com".to_owned(),
-                ]))
-                .email_verification(
-                    EmailVerificationOptions::default()
-                        .send_verification_email(
-                            move |email: VerificationEmail, _request: Option<&ApiRequest>| {
-                                let mut url = url_sink.lock().map_err(|_| {
-                                    OpenAuthError::Api("url capture lock poisoned".to_owned())
-                                })?;
-                                *url = Some(email.url);
-                                Ok(())
-                            },
-                        )
-                        .send_on_sign_up(true),
-                ),
-        )?,
-        OpenAuthAxumOptions::new().infer_base_url_from_request(true),
-    )?;
+    let app = auth_with_adapter(
+        adapter,
+        OpenAuthOptions::default()
+            .trusted_origins(TrustedOriginOptions::Static(vec![
+                "https://app.example.com".to_owned(),
+            ]))
+            .email_verification(
+                EmailVerificationOptions::default()
+                    .send_verification_email(
+                        move |email: VerificationEmail, _request: Option<&ApiRequest>| {
+                            let mut url = url_sink.lock().map_err(|_| {
+                                OpenAuthError::Api("url capture lock poisoned".to_owned())
+                            })?;
+                            *url = Some(email.url);
+                            Ok(())
+                        },
+                    )
+                    .send_on_sign_up(true),
+            ),
+    )
+    .await?
+    .into_router_with(OpenAuthAxumOptions::new().infer_base_url_from_request(true))?;
 
     let sign_up = app
         .oneshot(

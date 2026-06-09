@@ -11,6 +11,23 @@ Versioning while the API is still pre-1.0.
 
 ### Added
 
+- `openauth`: `openauth::prelude` re-exports the recommended app-dev surface
+  (`OpenAuth`, common options, `MemoryAdapter`, `AuthPlugin`, …).
+- `openauth-axum`: `OpenAuthAxumExt::into_router_with` and
+  `OpenAuthAxumExt::into_routes_with` for adapter-specific mount options.
+
+### Changed
+
+- **Breaking:** `openauth` — `OpenAuthBuilder::build()` is now `async` and
+  initializes telemetry when the `telemetry` feature is enabled. Removed
+  `build_async`, all `open_auth*` free functions, `OpenAuth::router()`, and flat
+  root re-exports of `openauth-core` internals. Use `openauth::prelude` or module
+  paths (`openauth::api`, `openauth::options`, …).
+- **Breaking:** `openauth-axum` — mount through `OpenAuthAxumExt`
+  (`into_router`, `into_routes`, …). Removed `router`, `router_with_options`,
+  `routes`, `routes_with_options`, `handle_ref`, and `handle_ref_with_options`.
+  Custom wiring uses `handle` / `handle_with_options`.
+
 - `openauth-example-full-app`: `postgres-deadpool` adapter profile (`deadpool-postgres`
   over `tokio-postgres`) in the sidebar and database studio, sharing the same
   Postgres URL as `postgres-sqlx`.

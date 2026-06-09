@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use axum::Router;
 use openauth::db::MemoryAdapter;
-use openauth::AdvancedOptions;
+use openauth::options::AdvancedOptions;
 use openauth::OpenAuth;
 use openauth_axum::OpenAuthAxumExt;
 use openauth_stripe::options::{StripeOptions, StripePlan, SubscriptionOptions};
@@ -66,7 +66,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .plugin(plugin)
         .adapter(MemoryAdapter::new())
-        .build()?;
+        .build()
+        .await?;
 
     let app = Router::new().nest(AUTH_BASE_PATH, auth.into_routes());
 

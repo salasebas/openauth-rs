@@ -4,21 +4,20 @@ use std::sync::{Arc, Mutex};
 
 use axum::http::{header, Method, StatusCode};
 use common::*;
+use openauth::api::ApiRequest;
+use openauth::db::MemoryAdapter;
+use openauth::error::OpenAuthError;
 use openauth::options::PasswordResetEmail;
-use openauth::{
-    ApiRequest, MemoryAdapter, OpenAuthError, OpenAuthOptions, PasswordOptions,
-    TrustedOriginOptions,
-};
-use openauth_axum::{router, router_with_options, OpenAuthAxumOptions};
+use openauth::options::{OpenAuthOptions, PasswordOptions, TrustedOriginOptions};
+use openauth_axum::{OpenAuthAxumExt, OpenAuthAxumOptions};
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn password_reset_flow_works_over_axum() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = MemoryAdapter::new();
-    let app = router(auth_with_adapter(
-        adapter.clone(),
-        OpenAuthOptions::default(),
-    )?)?;
+    let app = auth_with_adapter(adapter.clone(), OpenAuthOptions::default())
+        .await?
+        .into_router()?;
 
     let sign_up = app
         .clone()
@@ -82,25 +81,24 @@ async fn password_reset_url_uses_inferred_base_url() -> Result<(), Box<dyn std::
     let adapter = MemoryAdapter::new();
     let captured_url = Arc::new(Mutex::new(None::<String>));
     let url_sink = Arc::clone(&captured_url);
-    let app = router_with_options(
-        auth_with_adapter(
-            adapter,
-            OpenAuthOptions::default()
-                .trusted_origins(TrustedOriginOptions::Static(vec![
-                    "https://app.example.com".to_owned(),
-                ]))
-                .password(PasswordOptions::default().send_reset_password(
-                    move |email: PasswordResetEmail, _request: Option<&ApiRequest>| {
-                        let mut url = url_sink.lock().map_err(|_| {
-                            OpenAuthError::Api("url capture lock poisoned".to_owned())
-                        })?;
-                        *url = Some(email.url);
-                        Ok(())
-                    },
-                )),
-        )?,
-        OpenAuthAxumOptions::new().infer_base_url_from_request(true),
-    )?;
+    let app = auth_with_adapter(
+        adapter,
+        OpenAuthOptions::default()
+            .trusted_origins(TrustedOriginOptions::Static(vec![
+                "https://app.example.com".to_owned(),
+            ]))
+            .password(PasswordOptions::default().send_reset_password(
+                move |email: PasswordResetEmail, _request: Option<&ApiRequest>| {
+                    let mut url = url_sink
+                        .lock()
+                        .map_err(|_| OpenAuthError::Api("url capture lock poisoned".to_owned()))?;
+                    *url = Some(email.url);
+                    Ok(())
+                },
+            )),
+    )
+    .await?
+    .into_router_with(OpenAuthAxumOptions::new().infer_base_url_from_request(true))?;
 
     let sign_up = app
         .clone()
@@ -145,7 +143,7 @@ async fn password_reset_url_does_not_infer_host_by_default(
     let adapter = MemoryAdapter::new();
     let captured_url = Arc::new(Mutex::new(None::<String>));
     let url_sink = Arc::clone(&captured_url);
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         adapter,
         OpenAuthOptions::default()
             .base_url("https://app.example.com/api/auth")
@@ -158,7 +156,9 @@ async fn password_reset_url_does_not_infer_host_by_default(
                     Ok(())
                 },
             )),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let sign_up = app
         .clone()

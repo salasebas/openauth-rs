@@ -2,18 +2,21 @@ mod common;
 
 use axum::http::{header, Method, StatusCode};
 use common::*;
-use openauth::{MemoryAdapter, OpenAuthOptions};
-use openauth_axum::router;
+use openauth::db::MemoryAdapter;
+use openauth::options::OpenAuthOptions;
+use openauth_axum::OpenAuthAxumExt;
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn email_password_session_lifecycle_works_over_axum() -> Result<(), Box<dyn std::error::Error>>
 {
     let adapter = MemoryAdapter::new();
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         adapter.clone(),
         OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let sign_up = app
         .clone()

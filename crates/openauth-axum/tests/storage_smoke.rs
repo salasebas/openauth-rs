@@ -2,17 +2,20 @@ mod common;
 
 use axum::http::{Method, StatusCode};
 use common::*;
-use openauth::{MemoryAdapter, OpenAuthOptions};
-use openauth_axum::router;
+use openauth::db::MemoryAdapter;
+use openauth::options::OpenAuthOptions;
+use openauth_axum::OpenAuthAxumExt;
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn memory_adapter_smoke_flow_runs_through_axum() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = MemoryAdapter::new();
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         adapter.clone(),
         OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(json_request(

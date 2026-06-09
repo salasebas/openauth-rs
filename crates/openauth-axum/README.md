@@ -10,34 +10,35 @@ routes under a path such as `/api/auth`.
 
 ## What It Provides
 
-- `router(auth)` and `router_with_options(auth, options)` for the common mount.
-- `routes(auth)` for applications that already own the mount path.
-- `handle_ref` and `handle_ref_with_options` for custom integration code.
-- Adapter-only options such as request body limits and Axum `ConnectInfo`
-  propagation.
-- Optional per-request base URL inference from `Host` or absolute request URIs
-  when `OpenAuthOptions::base_url` is not configured, plus explicit opt-in
-  support for trusted reverse proxy headers.
+- [`OpenAuthAxumExt`](crate::OpenAuthAxumExt) — `into_router`, `into_router_with`,
+  `into_routes`, and `into_routes_with` for mounting.
+- [`handle`](crate::handle) and [`handle_with_options`](crate::handle_with_options) —
+  escape hatches for custom wiring.
+- [`OpenAuthAxumOptions`](crate::OpenAuthAxumOptions) — request body limits, ConnectInfo
+  propagation, and optional base URL inference behind explicit proxy trust.
 - Request and response conversion that preserves headers, extensions, and HTTP
   metadata.
 
 ## Quick Start
 
 ```rust
-use openauth::OpenAuth;
-use openauth_axum::{router_with_options, OpenAuthAxumOptions};
+use openauth::prelude::*;
+use openauth_axum::OpenAuthAxumExt;
 
-let auth = OpenAuth::builder()
-    .secret("secret-a-at-least-32-chars-long!!")
-    .base_url("https://app.example.com/api/auth")
-    .build()?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let auth = OpenAuth::builder()
+        .secret("secret-a-at-least-32-chars-long!!")
+        .base_url("https://app.example.com/api/auth")
+        .build()
+        .await?;
 
-let app = router_with_options(
-    auth,
-    OpenAuthAxumOptions::new().body_limit(1024 * 1024),
-)?;
-# let _ = app;
-# Ok::<(), Box<dyn std::error::Error>>(())
+    auth.run_migrations().await?;
+
+    let app = auth.into_router_with(OpenAuthAxumOptions::new().body_limit(1024 * 1024))?;
+    # let _ = app;
+    Ok(())
+}
 ```
 
 When Axum is exposed directly to clients, run it with connection info so

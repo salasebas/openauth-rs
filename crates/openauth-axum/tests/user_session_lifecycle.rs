@@ -2,18 +2,21 @@ mod common;
 
 use axum::http::{header, Method, StatusCode};
 use common::*;
-use openauth::{DeleteUserOptions, MemoryAdapter, OpenAuthOptions, UserOptions};
-use openauth_axum::router;
+use openauth::db::MemoryAdapter;
+use openauth::options::{DeleteUserOptions, OpenAuthOptions, UserOptions};
+use openauth_axum::OpenAuthAxumExt;
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn session_and_user_management_routes_work_over_axum(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = MemoryAdapter::new();
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         adapter.clone(),
         OpenAuthOptions::default().base_url("http://localhost:3000/api/auth"),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let sign_up = app
         .clone()
@@ -139,12 +142,14 @@ async fn session_and_user_management_routes_work_over_axum(
 #[tokio::test]
 async fn delete_user_route_works_over_axum() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = MemoryAdapter::new();
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         adapter.clone(),
         OpenAuthOptions::default()
             .base_url("http://localhost:3000/api/auth")
             .user(UserOptions::default().delete_user(DeleteUserOptions::default().enabled(true))),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let sign_up = app
         .clone()

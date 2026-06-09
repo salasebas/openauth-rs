@@ -4,11 +4,24 @@ All notable changes to `openauth` are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-09
+
+### Added
+
+- `openauth::prelude` for the recommended app-dev import surface.
+
 ### Changed
 
 - **Breaking:** Email/password authentication is disabled by default. Enable it
   with `OpenAuthBuilder::email_password(EmailPasswordOptions::new().enabled(true))`.
-  `EmailPasswordOptions` is now re-exported from the `openauth` crate.
+- **Breaking:** `OpenAuthBuilder::build()` is now `async` and wires telemetry when
+  the `telemetry` feature is enabled. Removed `build_async` and all `open_auth*`
+  initializer free functions; use the builder instead.
+- **Breaking:** Removed flat root re-exports of `openauth-core` item types. Import
+  from `openauth::prelude` or focused modules (`openauth::api`, `openauth::db`,
+  `openauth::options`, `openauth::plugin`, …).
+- **Breaking:** Removed `OpenAuth::router()` from the public API. Use
+  `handler` / `handler_async`, or mount through `openauth-axum`.
 
 ### Fixed
 
@@ -17,8 +30,6 @@ All notable changes to `openauth` are documented in this file.
   `openauth-sqlx` dependency.
 - SQL/memory/Postgres adapter constructors apply `database_hooks` once instead of
   wrapping the inner adapter on every `new`.
-- `open_auth_async` / `OpenAuth::new_async` build without requiring the
-  `telemetry` feature.
 
 ## [0.1.0] - 2026-06-08
 

@@ -3,16 +3,18 @@ mod common;
 use axum::http::{Method, StatusCode};
 use axum::Router;
 use common::*;
-use openauth::{
-    AdvancedOptions, AuthPlugin, DeleteUserOptions, MemoryAdapter, OpenAuth, OpenAuthOptions,
-    UserOptions,
-};
-use openauth_axum::{router, OpenAuthAxumError, OpenAuthAxumExt};
+use openauth::db::MemoryAdapter;
+use openauth::options::{AdvancedOptions, DeleteUserOptions, OpenAuthOptions, UserOptions};
+use openauth::plugin::AuthPlugin;
+use openauth::OpenAuth;
+use openauth_axum::{OpenAuthAxumError, OpenAuthAxumExt};
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn ok_route_is_mounted_under_default_base_path() -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_options(OpenAuthOptions::default())?)?;
+    let app = auth_with_options(OpenAuthOptions::default())
+        .await?
+        .into_router()?;
 
     let response = app
         .oneshot(request(Method::GET, "/api/auth/ok", "", None)?)
@@ -25,7 +27,9 @@ async fn ok_route_is_mounted_under_default_base_path() -> Result<(), Box<dyn std
 
 #[tokio::test]
 async fn default_base_path_accepts_trailing_slash_root() -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_options(OpenAuthOptions::default())?)?;
+    let app = auth_with_options(OpenAuthOptions::default())
+        .await?
+        .into_router()?;
 
     let root_without_slash = app
         .clone()
@@ -43,9 +47,11 @@ async fn default_base_path_accepts_trailing_slash_root() -> Result<(), Box<dyn s
 #[tokio::test]
 async fn skip_trailing_slashes_reaches_core_routes_over_axum(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_options(
+    let app = auth_with_options(
         OpenAuthOptions::default().advanced(AdvancedOptions::new().skip_trailing_slashes(true)),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(request(Method::GET, "/api/auth/ok/", "", None)?)
@@ -61,7 +67,8 @@ async fn custom_base_path_mounts_all_auth_routes() -> Result<(), Box<dyn std::er
     let app = OpenAuth::builder()
         .secret(SECRET)
         .base_path("/auth")
-        .build()?
+        .build()
+        .await?
         .into_router()?;
 
     let response = app
@@ -77,7 +84,8 @@ async fn root_base_path_mounts_auth_routes_at_root() -> Result<(), Box<dyn std::
     let app = OpenAuth::builder()
         .secret(SECRET)
         .base_path("/")
-        .build()?
+        .build()
+        .await?
         .into_router()?;
 
     let response = app.oneshot(request(Method::GET, "/ok", "", None)?).await?;
@@ -91,7 +99,8 @@ async fn empty_base_path_mounts_auth_routes_at_root() -> Result<(), Box<dyn std:
     let app = OpenAuth::builder()
         .secret(SECRET)
         .base_path("")
-        .build()?
+        .build()
+        .await?
         .into_router()?;
 
     let response = app.oneshot(request(Method::GET, "/ok", "", None)?).await?;
@@ -106,7 +115,8 @@ async fn trailing_slash_base_path_is_mounted_without_panicking(
     let app = OpenAuth::builder()
         .secret(SECRET)
         .base_path("/api/auth/")
-        .build()?
+        .build()
+        .await?
         .into_router()?;
 
     let response = app
@@ -130,7 +140,8 @@ async fn invalid_base_paths_are_rejected_before_mounting() -> Result<(), Box<dyn
         let result = OpenAuth::builder()
             .secret(SECRET)
             .base_path(base_path)
-            .build()?
+            .build()
+            .await?
             .into_router();
         let Err(error) = result else {
             return Err(std::io::Error::other(format!("{base_path} should be rejected")).into());
@@ -149,7 +160,8 @@ async fn invalid_base_url_is_rejected_before_mounting() -> Result<(), Box<dyn st
         .secret(SECRET)
         .base_path("/api/auth")
         .base_url("not-a-url")
-        .build()?
+        .build()
+        .await?
         .into_router();
 
     let Err(error) = result else {
@@ -166,7 +178,8 @@ async fn inconsistent_base_url_path_is_rejected_before_mounting(
         .secret(SECRET)
         .base_path("/api/auth")
         .base_url("http://localhost:3000/wrong")
-        .build()?
+        .build()
+        .await?
         .into_router();
 
     let Err(error) = result else {
@@ -182,7 +195,9 @@ async fn inconsistent_base_url_path_is_rejected_before_mounting(
 #[tokio::test]
 async fn non_auth_paths_and_wrong_methods_return_not_found(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_options(OpenAuthOptions::default())?)?;
+    let app = auth_with_options(OpenAuthOptions::default())
+        .await?
+        .into_router()?;
 
     let outside = app
         .clone()
@@ -211,7 +226,7 @@ async fn non_auth_paths_and_wrong_methods_return_not_found(
 
 #[tokio::test]
 async fn into_routes_can_be_nested_manually() -> Result<(), Box<dyn std::error::Error>> {
-    let auth = auth_with_options(OpenAuthOptions::default())?;
+    let auth = auth_with_options(OpenAuthOptions::default()).await?;
     let app = Router::new().nest("/api/auth", auth.into_routes());
 
     let response = app
@@ -226,7 +241,9 @@ async fn into_routes_can_be_nested_manually() -> Result<(), Box<dyn std::error::
 #[tokio::test]
 async fn extra_async_endpoint_is_reachable_through_catch_all(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_async_endpoint(custom_endpoint("/plugin/custom"))?)?;
+    let app = auth_with_async_endpoint(custom_endpoint("/plugin/custom"))
+        .await?
+        .into_router()?;
 
     let response = app
         .oneshot(request(Method::GET, "/api/auth/plugin/custom", "", None)?)
@@ -241,9 +258,9 @@ async fn extra_async_endpoint_is_reachable_through_catch_all(
 async fn plugin_endpoint_is_reachable_through_catch_all() -> Result<(), Box<dyn std::error::Error>>
 {
     let plugin = AuthPlugin::new("route-plugin").with_endpoint(custom_endpoint("/plugin/hello"));
-    let app = router(auth_with_options(
-        OpenAuthOptions::default().plugin(plugin),
-    )?)?;
+    let app = auth_with_options(OpenAuthOptions::default().plugin(plugin))
+        .await?
+        .into_router()?;
 
     let response = app
         .oneshot(request(Method::GET, "/api/auth/plugin/hello", "", None)?)
@@ -262,13 +279,14 @@ async fn every_core_auth_route_is_mounted_through_axum() -> Result<(), Box<dyn s
             .base_url("http://localhost:3000/api/auth")
             .user(UserOptions::default().delete_user(DeleteUserOptions::default().enabled(true)))
             .social_provider(FakeProvider::new("github")),
-    )?;
+    )
+    .await?;
     let cases = auth
         .endpoint_registry()
         .into_iter()
         .map(RouteCase::from_endpoint)
         .collect::<Vec<_>>();
-    let app = router(auth)?;
+    let app = auth.into_router()?;
 
     for case in cases {
         let response = app
@@ -299,7 +317,7 @@ struct RouteCase {
 }
 
 impl RouteCase {
-    fn from_endpoint(endpoint: openauth::EndpointInfo) -> Self {
+    fn from_endpoint(endpoint: openauth::api::EndpointInfo) -> Self {
         let path = materialize_route_path(&endpoint.path);
         let path = match endpoint.path.as_str() {
             "/callback/:id" => format!("{path}?state=missing"),

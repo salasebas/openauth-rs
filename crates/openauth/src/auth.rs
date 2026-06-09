@@ -55,11 +55,6 @@ impl OpenAuth {
         &self.context
     }
 
-    /// Return the underlying router.
-    pub fn router(&self) -> &AuthRouter {
-        &self.router
-    }
-
     /// Return metadata for all registered endpoints.
     pub fn endpoint_registry(&self) -> Vec<EndpointInfo> {
         self.router.endpoint_registry()
@@ -287,79 +282,81 @@ impl OpenAuthBuilder {
 
     #[cfg(feature = "telemetry")]
     #[must_use]
-    /// Provide telemetry initialization context for [`Self::build_async`].
+    /// Provide telemetry initialization context for [`Self::build`].
     pub fn telemetry_context(mut self, context: TelemetryContext) -> Self {
         self.telemetry_context = Some(context);
         self
     }
 
     /// Build the configured [`OpenAuth`] instance.
-    pub fn build(self) -> Result<OpenAuth, OpenAuthError> {
+    ///
+    /// When the `telemetry` feature is enabled, this also initializes the
+    /// telemetry publisher before returning.
+    pub async fn build(self) -> Result<OpenAuth, OpenAuthError> {
         if let Some(adapter) = self.adapter {
-            open_auth_with_adapter_and_endpoints(
+            build_with_adapter(
                 self.options,
                 adapter,
                 self.extra_endpoints,
                 self.async_endpoints,
+                #[cfg(feature = "telemetry")]
+                self.telemetry_context,
             )
+            .await
         } else {
-            open_auth_with_endpoints(self.options, self.extra_endpoints, self.async_endpoints)
+            build_without_adapter(
+                self.options,
+                self.extra_endpoints,
+                self.async_endpoints,
+                #[cfg(feature = "telemetry")]
+                self.telemetry_context,
+            )
+            .await
         }
     }
+}
 
-    /// Build the configured [`OpenAuth`] instance.
-    ///
-    /// When the `telemetry` feature is enabled, this also initializes the
-    /// telemetry publisher before returning.
-    pub async fn build_async(self) -> Result<OpenAuth, OpenAuthError> {
+async fn build_without_adapter(
+    options: OpenAuthOptions,
+    extra_endpoints: Vec<AuthEndpoint>,
+    async_endpoints: Vec<AsyncAuthEndpoint>,
+    #[cfg(feature = "telemetry")] telemetry_context: Option<TelemetryContext>,
+) -> Result<OpenAuth, OpenAuthError> {
+    let context = create_auth_context(options.clone())?;
+    let context = {
         #[cfg(feature = "telemetry")]
         {
-            let telemetry_context = self.telemetry_context.unwrap_or_default();
-            if let Some(adapter) = self.adapter {
-                open_auth_with_adapter_and_endpoints_async(
-                    self.options,
-                    adapter,
-                    self.extra_endpoints,
-                    self.async_endpoints,
-                    telemetry_context,
-                )
-                .await
-            } else {
-                open_auth_with_endpoints_async(
-                    self.options,
-                    self.extra_endpoints,
-                    self.async_endpoints,
-                    telemetry_context,
-                )
-                .await
-            }
+            let mut context = context;
+            attach_telemetry(
+                &mut context,
+                &options,
+                telemetry_context.unwrap_or_default(),
+            )
+            .await;
+            context
         }
         #[cfg(not(feature = "telemetry"))]
         {
-            self.build()
+            context
         }
-    }
+    };
+    let mut endpoints = core_endpoints();
+    endpoints.extend(extra_endpoints);
+    let router = AuthRouter::with_async_endpoints(context.clone(), endpoints, async_endpoints)?;
+    Ok(OpenAuth {
+        router,
+        options,
+        context,
+        adapter: None,
+    })
 }
 
-/// Initialize OpenAuth with the default product endpoint set.
-pub fn open_auth(options: OpenAuthOptions) -> Result<OpenAuth, OpenAuthError> {
-    open_auth_with_endpoints(options, Vec::new(), Vec::new())
-}
-
-/// Initialize OpenAuth with the default product endpoint set backed by a database adapter.
-pub fn open_auth_with_adapter(
-    options: OpenAuthOptions,
-    adapter: Arc<dyn DbAdapter>,
-) -> Result<OpenAuth, OpenAuthError> {
-    open_auth_with_adapter_and_endpoints(options, adapter, Vec::new(), Vec::new())
-}
-
-/// Initialize OpenAuth with product endpoints, a database adapter, and extra endpoints.
-pub fn open_auth_with_adapter_and_endpoints(
+async fn build_with_adapter(
     options: OpenAuthOptions,
     adapter: Arc<dyn DbAdapter>,
     extra_endpoints: Vec<AuthEndpoint>,
     async_endpoints: Vec<AsyncAuthEndpoint>,
+    #[cfg(feature = "telemetry")] telemetry_context: Option<TelemetryContext>,
 ) -> Result<OpenAuth, OpenAuthError> {
     let context = create_auth_context(options.clone())?;
     let joined_adapter: Arc<dyn DbAdapter> = Arc::new(JoinAdapter::new(
@@ -369,6 +366,23 @@ pub fn open_auth_with_adapter_and_endpoints(
     ));
     let context = create_auth_context_with_adapter(options.clone(), Arc::clone(&joined_adapter))?;
     let adapter = context.adapter.clone().unwrap_or(joined_adapter);
+    let context = {
+        #[cfg(feature = "telemetry")]
+        {
+            let mut context = context;
+            attach_telemetry(
+                &mut context,
+                &options,
+                telemetry_context.unwrap_or_default(),
+            )
+            .await;
+            context
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            context
+        }
+    };
     let mut endpoints = core_endpoints();
     endpoints.extend(extra_endpoints);
     let mut product_async_endpoints = core_auth_async_endpoints(Arc::clone(&adapter));
@@ -380,134 +394,6 @@ pub fn open_auth_with_adapter_and_endpoints(
         options,
         context,
         adapter: Some(adapter),
-    })
-}
-
-/// Initialize OpenAuth with the default product endpoint set.
-pub async fn open_auth_async(options: OpenAuthOptions) -> Result<OpenAuth, OpenAuthError> {
-    #[cfg(feature = "telemetry")]
-    {
-        open_auth_with_endpoints_async(options, Vec::new(), Vec::new(), TelemetryContext::default())
-            .await
-    }
-    #[cfg(not(feature = "telemetry"))]
-    {
-        open_auth_with_endpoints(options, Vec::new(), Vec::new())
-    }
-}
-
-/// Initialize OpenAuth with product endpoints.
-#[cfg(feature = "telemetry")]
-pub async fn open_auth_with_endpoints_async(
-    options: OpenAuthOptions,
-    extra_endpoints: Vec<AuthEndpoint>,
-    async_endpoints: Vec<AsyncAuthEndpoint>,
-    telemetry_context: TelemetryContext,
-) -> Result<OpenAuth, OpenAuthError> {
-    let mut context = create_auth_context(options.clone())?;
-    attach_telemetry(&mut context, &options, telemetry_context).await;
-    let mut endpoints = core_endpoints();
-    endpoints.extend(extra_endpoints);
-    let router = AuthRouter::with_async_endpoints(context.clone(), endpoints, async_endpoints)?;
-    Ok(OpenAuth {
-        router,
-        options,
-        context,
-        adapter: None,
-    })
-}
-
-/// Initialize OpenAuth with product endpoints.
-#[cfg(not(feature = "telemetry"))]
-pub async fn open_auth_with_endpoints_async(
-    options: OpenAuthOptions,
-    extra_endpoints: Vec<AuthEndpoint>,
-    async_endpoints: Vec<AsyncAuthEndpoint>,
-) -> Result<OpenAuth, OpenAuthError> {
-    open_auth_with_endpoints(options, extra_endpoints, async_endpoints)
-}
-
-/// Initialize OpenAuth with a database adapter.
-pub async fn open_auth_with_adapter_async(
-    options: OpenAuthOptions,
-    adapter: Arc<dyn DbAdapter>,
-) -> Result<OpenAuth, OpenAuthError> {
-    #[cfg(feature = "telemetry")]
-    {
-        open_auth_with_adapter_and_endpoints_async(
-            options,
-            adapter,
-            Vec::new(),
-            Vec::new(),
-            TelemetryContext::default(),
-        )
-        .await
-    }
-    #[cfg(not(feature = "telemetry"))]
-    {
-        open_auth_with_adapter(options, adapter)
-    }
-}
-
-/// Initialize OpenAuth with product endpoints, a database adapter, and optional extra endpoints.
-#[cfg(feature = "telemetry")]
-pub async fn open_auth_with_adapter_and_endpoints_async(
-    options: OpenAuthOptions,
-    adapter: Arc<dyn DbAdapter>,
-    extra_endpoints: Vec<AuthEndpoint>,
-    async_endpoints: Vec<AsyncAuthEndpoint>,
-    telemetry_context: TelemetryContext,
-) -> Result<OpenAuth, OpenAuthError> {
-    let context = create_auth_context(options.clone())?;
-    let joined_adapter: Arc<dyn DbAdapter> = Arc::new(JoinAdapter::new(
-        context.db_schema.clone(),
-        adapter,
-        options.experimental.joins,
-    ));
-    let mut context =
-        create_auth_context_with_adapter(options.clone(), Arc::clone(&joined_adapter))?;
-    let adapter = context.adapter.clone().unwrap_or(joined_adapter);
-    attach_telemetry(&mut context, &options, telemetry_context).await;
-    let mut endpoints = core_endpoints();
-    endpoints.extend(extra_endpoints);
-    let mut product_async_endpoints = core_auth_async_endpoints(Arc::clone(&adapter));
-    product_async_endpoints.extend(async_endpoints);
-    let router =
-        AuthRouter::with_async_endpoints(context.clone(), endpoints, product_async_endpoints)?;
-    Ok(OpenAuth {
-        router,
-        options,
-        context,
-        adapter: Some(adapter),
-    })
-}
-
-/// Initialize OpenAuth with product endpoints, a database adapter, and optional extra endpoints.
-#[cfg(not(feature = "telemetry"))]
-pub async fn open_auth_with_adapter_and_endpoints_async(
-    options: OpenAuthOptions,
-    adapter: Arc<dyn DbAdapter>,
-    extra_endpoints: Vec<AuthEndpoint>,
-    async_endpoints: Vec<AsyncAuthEndpoint>,
-) -> Result<OpenAuth, OpenAuthError> {
-    open_auth_with_adapter_and_endpoints(options, adapter, extra_endpoints, async_endpoints)
-}
-
-/// Initialize OpenAuth with the default product endpoint set plus extra endpoints.
-pub fn open_auth_with_endpoints(
-    options: OpenAuthOptions,
-    extra_endpoints: Vec<AuthEndpoint>,
-    async_endpoints: Vec<AsyncAuthEndpoint>,
-) -> Result<OpenAuth, OpenAuthError> {
-    let context = create_auth_context(options.clone())?;
-    let mut endpoints = core_endpoints();
-    endpoints.extend(extra_endpoints);
-    let router = AuthRouter::with_async_endpoints(context.clone(), endpoints, async_endpoints)?;
-    Ok(OpenAuth {
-        router,
-        options,
-        context,
-        adapter: None,
     })
 }
 

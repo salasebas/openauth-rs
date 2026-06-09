@@ -1,6 +1,6 @@
 use axum::body::Body;
 use axum::http::{header, HeaderValue, Response, StatusCode};
-use openauth::ApiErrorResponse;
+use openauth::api::ApiErrorResponse;
 
 /// Errors returned while constructing an Axum router for OpenAuth.
 #[non_exhaustive]

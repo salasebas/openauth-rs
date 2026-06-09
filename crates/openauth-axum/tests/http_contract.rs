@@ -3,7 +3,7 @@ mod common;
 use axum::http::{header, Method, StatusCode, Version};
 use common::*;
 use openauth::OpenAuth;
-use openauth_axum::{handle_ref, router};
+use openauth_axum::{handle, OpenAuthAxumExt};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -12,9 +12,10 @@ async fn borrowed_handle_preserves_response_status_version_headers_body_and_quer
     let auth = OpenAuth::builder()
         .secret(SECRET)
         .async_endpoint(response_contract_endpoint("/contract"))
-        .build()?;
+        .build()
+        .await?;
 
-    let response = handle_ref(
+    let response = handle(
         &auth,
         request(Method::GET, "/api/auth/contract?next=%2Fhome", "", None)?,
     )
@@ -29,12 +30,12 @@ async fn borrowed_handle_preserves_response_status_version_headers_body_and_quer
 #[tokio::test]
 async fn axum_adapter_preserves_duplicate_response_headers(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(
-        OpenAuth::builder()
-            .secret(SECRET)
-            .async_endpoint(response_contract_endpoint("/contract"))
-            .build()?,
-    )?;
+    let app = OpenAuth::builder()
+        .secret(SECRET)
+        .async_endpoint(response_contract_endpoint("/contract"))
+        .build()
+        .await?
+        .into_router()?;
 
     let response = app
         .oneshot(request(Method::GET, "/api/auth/contract", "", None)?)
@@ -62,12 +63,12 @@ async fn axum_adapter_preserves_duplicate_response_headers(
 
 #[tokio::test]
 async fn axum_adapter_preserves_response_extensions() -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(
-        OpenAuth::builder()
-            .secret(SECRET)
-            .async_endpoint(response_contract_endpoint("/contract"))
-            .build()?,
-    )?;
+    let app = OpenAuth::builder()
+        .secret(SECRET)
+        .async_endpoint(response_contract_endpoint("/contract"))
+        .build()
+        .await?
+        .into_router()?;
 
     let response = app
         .oneshot(request(Method::GET, "/api/auth/contract", "", None)?)
@@ -82,12 +83,12 @@ async fn axum_adapter_preserves_response_extensions() -> Result<(), Box<dyn std:
 
 #[tokio::test]
 async fn axum_adapter_preserves_empty_response_bodies() -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(
-        OpenAuth::builder()
-            .secret(SECRET)
-            .async_endpoint(empty_response_endpoint("/empty"))
-            .build()?,
-    )?;
+    let app = OpenAuth::builder()
+        .secret(SECRET)
+        .async_endpoint(empty_response_endpoint("/empty"))
+        .build()
+        .await?
+        .into_router()?;
 
     let response = app
         .oneshot(request(Method::GET, "/api/auth/empty", "", None)?)

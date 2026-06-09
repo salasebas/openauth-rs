@@ -2,20 +2,23 @@ mod common;
 
 use axum::http::{header, Method, StatusCode};
 use common::*;
-use openauth::{MemoryAdapter, OpenAuthOptions, TrustedOriginOptions};
-use openauth_axum::{router, router_with_options, OpenAuthAxumOptions};
+use openauth::db::MemoryAdapter;
+use openauth::options::{OpenAuthOptions, TrustedOriginOptions};
+use openauth_axum::{OpenAuthAxumExt, OpenAuthAxumOptions};
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn social_sign_in_oauth2_and_callback_routes_work_over_axum(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = MemoryAdapter::new();
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         adapter.clone(),
         OpenAuthOptions::default()
             .base_url("http://localhost:3000/api/auth")
             .social_provider(FakeProvider::new("github")),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     for path in ["/api/auth/sign-in/social", "/api/auth/sign-in/oauth2"] {
         let sign_in = app
@@ -82,17 +85,16 @@ async fn social_sign_in_oauth2_and_callback_routes_work_over_axum(
 #[tokio::test]
 async fn social_sign_in_infers_base_url_from_host_when_unconfigured(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router_with_options(
-        auth_with_adapter(
-            MemoryAdapter::new(),
-            OpenAuthOptions::default()
-                .trusted_origins(TrustedOriginOptions::Static(vec![
-                    "https://app.example.com".to_owned(),
-                ]))
-                .social_provider(FakeProvider::new("github")),
-        )?,
-        OpenAuthAxumOptions::new().infer_base_url_from_request(true),
-    )?;
+    let app = auth_with_adapter(
+        MemoryAdapter::new(),
+        OpenAuthOptions::default()
+            .trusted_origins(TrustedOriginOptions::Static(vec![
+                "https://app.example.com".to_owned(),
+            ]))
+            .social_provider(FakeProvider::new("github")),
+    )
+    .await?
+    .into_router_with(OpenAuthAxumOptions::new().infer_base_url_from_request(true))?;
 
     let sign_in = app
         .oneshot(
@@ -119,10 +121,12 @@ async fn social_sign_in_infers_base_url_from_host_when_unconfigured(
 #[tokio::test]
 async fn social_sign_in_rejects_host_origin_callback_by_default(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let app = router(auth_with_adapter(
+    let app = auth_with_adapter(
         MemoryAdapter::new(),
         OpenAuthOptions::default().social_provider(FakeProvider::new("github")),
-    )?)?;
+    )
+    .await?
+    .into_router()?;
 
     let response = app
         .oneshot(
@@ -145,22 +149,18 @@ async fn social_sign_in_rejects_host_origin_callback_by_default(
 #[tokio::test]
 async fn social_sign_in_uses_trusted_proxy_headers_only_when_enabled(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let auth = || {
-        auth_with_adapter(
-            MemoryAdapter::new(),
-            OpenAuthOptions::default()
-                .trusted_origins(TrustedOriginOptions::Static(vec![
-                    "http://internal.localhost".to_owned(),
-                    "https://public.example.com".to_owned(),
-                ]))
-                .social_provider(FakeProvider::new("github")),
-        )
+    let auth_options = || {
+        OpenAuthOptions::default()
+            .trusted_origins(TrustedOriginOptions::Static(vec![
+                "http://internal.localhost".to_owned(),
+                "https://public.example.com".to_owned(),
+            ]))
+            .social_provider(FakeProvider::new("github"))
     };
 
-    let default_app = router_with_options(
-        auth()?,
-        OpenAuthAxumOptions::new().infer_base_url_from_request(true),
-    )?;
+    let default_app = auth_with_adapter(MemoryAdapter::new(), auth_options())
+        .await?
+        .into_router_with(OpenAuthAxumOptions::new().infer_base_url_from_request(true))?;
     let default_response = default_app
         .oneshot(
             json_request(
@@ -187,12 +187,13 @@ async fn social_sign_in_uses_trusted_proxy_headers_only_when_enabled(
         Some("http://internal.localhost/api/auth/callback/github".to_owned())
     );
 
-    let trusted_app = router_with_options(
-        auth()?,
-        OpenAuthAxumOptions::new()
-            .infer_base_url_from_request(true)
-            .trust_proxy_headers_for_base_url(true),
-    )?;
+    let trusted_app = auth_with_adapter(MemoryAdapter::new(), auth_options())
+        .await?
+        .into_router_with(
+            OpenAuthAxumOptions::new()
+                .infer_base_url_from_request(true)
+                .trust_proxy_headers_for_base_url(true),
+        )?;
     let trusted_response = trusted_app
         .oneshot(
             json_request(

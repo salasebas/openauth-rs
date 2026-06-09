@@ -2,11 +2,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use openauth::db::{Create, DbAdapter, DbValue, MemoryAdapter};
-use openauth::{
-    open_auth_with_adapter, open_auth_with_adapter_async, AdvancedOptions, ExperimentalOptions,
-    OpenAuthBuilder, OpenAuthError, OpenAuthOptions, PluginDatabaseBeforeAction,
-    PluginDatabaseBeforeInput, PluginDatabaseHook,
-};
+use openauth::error::OpenAuthError;
+use openauth::options::{AdvancedOptions, ExperimentalOptions, OpenAuthOptions};
+use openauth::plugin::{PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook};
+use openauth::OpenAuthBuilder;
 
 fn test_options(database_hooks: Vec<PluginDatabaseHook>) -> OpenAuthOptions {
     OpenAuthOptions {
@@ -75,26 +74,14 @@ fn assert_single_hook_execution(
 }
 
 #[tokio::test]
-async fn open_auth_with_adapter_runs_database_hooks_once_per_operation(
+async fn openauth_builder_runs_database_hooks_once_per_operation(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (hooks, before_count, after_count) = counting_create_hooks();
-    let auth = open_auth_with_adapter(test_options(hooks), Arc::new(MemoryAdapter::new()))?;
-    let adapter = auth
-        .context()
-        .adapter
-        .as_deref()
-        .ok_or("expected adapter-backed context")?;
-
-    run_counted_create(adapter).await?;
-    assert_single_hook_execution(&before_count, &after_count)
-}
-
-#[tokio::test]
-async fn open_auth_with_adapter_async_runs_database_hooks_once_per_operation(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (hooks, before_count, after_count) = counting_create_hooks();
-    let auth =
-        open_auth_with_adapter_async(test_options(hooks), Arc::new(MemoryAdapter::new())).await?;
+    let auth = OpenAuthBuilder::new()
+        .options(test_options(hooks))
+        .adapter(MemoryAdapter::new())
+        .build()
+        .await?;
     let adapter = auth
         .context()
         .adapter
@@ -112,7 +99,7 @@ async fn openauth_builder_runs_database_hooks_once_with_joins_enabled(
     let auth = OpenAuthBuilder::new()
         .options(test_options(hooks))
         .adapter(MemoryAdapter::new())
-        .build_async()
+        .build()
         .await?;
     let adapter = auth
         .context()
