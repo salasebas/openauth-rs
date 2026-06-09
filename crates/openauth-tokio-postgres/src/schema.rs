@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use openauth_core::db::{
     ensure_executable_migration_plan, execute_schema_migration_plan, plan_schema_migration,
     AdapterFuture, DbSchema, ForeignKey, OnDelete, SqlColumnSnapshot, SqlDialect, SqlExecutor,
@@ -67,26 +69,54 @@ pub async fn apply_migration_plan(
     execute_statements(client, plan).await
 }
 
+/// Loads the current database state with a fixed number of set-based catalog
+/// queries per schema qualifier, instead of several round trips per column.
+/// Per-column introspection through `information_schema` views (notably
+/// `constraint_column_usage`) costs ~100ms per query on Postgres, which made
+/// migration planning take tens of seconds for the full auth schema.
 async fn load_schema_snapshot(
     client: &Client,
     schema: &DbSchema,
 ) -> Result<SqlSchemaSnapshot, OpenAuthError> {
-    let mut snapshot = SqlSchemaSnapshot::default();
     let mut tables = schema.tables().collect::<Vec<_>>();
     tables.sort_by_key(|(_, table)| table.order.unwrap_or(u16::MAX));
 
+    let mut groups: Vec<(Option<&str>, Vec<String>)> = Vec::new();
     for (_, table) in &tables {
-        if table_exists(client, &table.name).await? {
+        let table_name = PostgresTableName::parse(&table.name)?;
+        match groups
+            .iter_mut()
+            .find(|(schema, _)| *schema == table_name.schema)
+        {
+            Some((_, names)) => names.push(table_name.name.to_owned()),
+            None => groups.push((table_name.schema, vec![table_name.name.to_owned()])),
+        }
+    }
+
+    let mut catalogs: HashMap<Option<&str>, SchemaCatalog> = HashMap::new();
+    for (schema_name, names) in &groups {
+        let catalog = SchemaCatalog::load(client, *schema_name, names).await?;
+        catalogs.insert(*schema_name, catalog);
+    }
+
+    let mut snapshot = SqlSchemaSnapshot::default();
+    for (_, table) in &tables {
+        let table_name = PostgresTableName::parse(&table.name)?;
+        let Some(catalog) = catalogs.get(&table_name.schema) else {
+            continue;
+        };
+
+        if catalog.tables.contains(table_name.name) {
             snapshot = snapshot.with_table(&table.name);
             for (_, field) in &table.fields {
-                if let Some(actual_type) = column_type(client, &table.name, &field.name).await? {
+                let key = (table_name.name.to_owned(), field.name.clone());
+                if let Some(actual_type) = catalog.column_types.get(&key) {
                     let mut column = SqlColumnSnapshot::new(&field.name, actual_type);
-                    if let Some(foreign_key) = foreign_key(client, &table.name, &field.name).await?
-                    {
+                    if let Some(foreign_key) = catalog.foreign_key(&table_name, &key) {
                         column = column.references(foreign_key);
                     }
                     snapshot = snapshot.with_column(&table.name, column);
-                    if unique_column_exists(client, &table.name, &field.name).await? {
+                    if catalog.unique_columns.contains(&key) {
                         snapshot = snapshot.with_unique_column(&table.name, &field.name);
                     }
                 }
@@ -97,7 +127,7 @@ async fn load_schema_snapshot(
             if field.index && !field.unique {
                 let index_name = SqlDialect::Postgres
                     .sanitize_identifier(&format!("idx_{}_{}", table.name, logical_name))?;
-                if index_exists(client, &table.name, &index_name).await? {
+                if catalog.indexes.contains(&index_name) {
                     snapshot = snapshot.with_index(&table.name, index_name);
                 }
             }
@@ -107,216 +137,152 @@ async fn load_schema_snapshot(
     Ok(snapshot)
 }
 
-async fn table_exists(client: &Client, table: &str) -> Result<bool, OpenAuthError> {
-    let table = PostgresTableName::parse(table)?;
-    let count = match table.schema {
-        Some(schema) => {
-            client
-                .query_one(
-                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2",
-                    &[&schema, &table.name],
-                )
-                .await
-        }
-        None => {
-            client
-                .query_one(
-                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1",
-                    &[&table.name],
-                )
-                .await
-        }
-    }
-    .map_err(postgres_error)?
-    .get::<_, i64>(0);
-    Ok(count > 0)
+#[derive(Debug, Default)]
+struct SchemaCatalog {
+    current_schema: String,
+    tables: HashSet<String>,
+    /// Keyed by `(table, column)`.
+    column_types: HashMap<(String, String), String>,
+    unique_columns: HashSet<(String, String)>,
+    /// First foreign key seen per `(table, column)`, as `(ref_schema, ref_table, ref_column, delete_rule)`.
+    foreign_keys: HashMap<(String, String), (String, String, String, OnDelete)>,
+    indexes: HashSet<String>,
 }
 
-async fn column_type(
-    client: &Client,
-    table: &str,
-    column: &str,
-) -> Result<Option<String>, OpenAuthError> {
-    let table = PostgresTableName::parse(table)?;
-    let row = match table.schema {
-        Some(schema) => {
-            client
-                .query_opt(
-                    "SELECT CASE WHEN data_type = 'ARRAY' THEN udt_name ELSE data_type END \
-                     FROM information_schema.columns \
-                     WHERE table_schema = $1 AND table_name = $2 AND column_name = $3",
-                    &[&schema, &table.name, &column],
-                )
-                .await
+impl SchemaCatalog {
+    async fn load(
+        client: &Client,
+        schema_name: Option<&str>,
+        table_names: &[String],
+    ) -> Result<Self, OpenAuthError> {
+        let mut catalog = Self::default();
+        let table_names = table_names.to_vec();
+
+        catalog.current_schema = client
+            .query_one("SELECT current_schema()", &[])
+            .await
+            .map_err(postgres_error)?
+            .get::<_, String>(0);
+
+        let table_rows = client
+            .query(
+                "SELECT table_name::text FROM information_schema.tables \
+                 WHERE table_schema = COALESCE($1, current_schema()) AND table_name = ANY($2)",
+                &[&schema_name, &table_names],
+            )
+            .await
+            .map_err(postgres_error)?;
+        catalog.tables = table_rows
+            .into_iter()
+            .map(|row| row.get::<_, String>(0))
+            .collect();
+
+        let column_rows = client
+            .query(
+                "SELECT table_name::text, column_name::text, \
+                        CASE WHEN data_type = 'ARRAY' THEN udt_name::text ELSE data_type::text END \
+                 FROM information_schema.columns \
+                 WHERE table_schema = COALESCE($1, current_schema()) AND table_name = ANY($2)",
+                &[&schema_name, &table_names],
+            )
+            .await
+            .map_err(postgres_error)?;
+        for row in column_rows {
+            catalog
+                .column_types
+                .insert((row.get(0), row.get(1)), row.get(2));
         }
-        None => {
-            client
-                .query_opt(
-                    "SELECT CASE WHEN data_type = 'ARRAY' THEN udt_name ELSE data_type END \
-                     FROM information_schema.columns \
-                     WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2",
-                    &[&table.name, &column],
-                )
-                .await
+
+        let unique_rows = client
+            .query(
+                "SELECT tbl.relname::text, attr.attname::text \
+                 FROM pg_constraint con \
+                 JOIN pg_class tbl ON tbl.oid = con.conrelid \
+                 JOIN pg_namespace ns ON ns.oid = tbl.relnamespace \
+                 JOIN pg_attribute attr \
+                   ON attr.attrelid = tbl.oid AND attr.attnum = ANY(con.conkey) \
+                 WHERE con.contype IN ('u', 'p') \
+                   AND ns.nspname = COALESCE($1, current_schema()) \
+                   AND tbl.relname = ANY($2)",
+                &[&schema_name, &table_names],
+            )
+            .await
+            .map_err(postgres_error)?;
+        catalog.unique_columns = unique_rows
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect();
+
+        let foreign_key_rows = client
+            .query(
+                "SELECT src.relname::text, src_attr.attname::text, \
+                        ref_ns.nspname::text, ref.relname::text, ref_attr.attname::text, \
+                        con.confdeltype::text \
+                 FROM pg_constraint con \
+                 JOIN pg_class src ON src.oid = con.conrelid \
+                 JOIN pg_namespace src_ns ON src_ns.oid = src.relnamespace \
+                 JOIN pg_class ref ON ref.oid = con.confrelid \
+                 JOIN pg_namespace ref_ns ON ref_ns.oid = ref.relnamespace \
+                 CROSS JOIN LATERAL unnest(con.conkey, con.confkey) AS cols(src_attnum, ref_attnum) \
+                 JOIN pg_attribute src_attr \
+                   ON src_attr.attrelid = src.oid AND src_attr.attnum = cols.src_attnum \
+                 JOIN pg_attribute ref_attr \
+                   ON ref_attr.attrelid = ref.oid AND ref_attr.attnum = cols.ref_attnum \
+                 WHERE con.contype = 'f' \
+                   AND src_ns.nspname = COALESCE($1, current_schema()) \
+                   AND src.relname = ANY($2)",
+                &[&schema_name, &table_names],
+            )
+            .await
+            .map_err(postgres_error)?;
+        for row in foreign_key_rows {
+            let delete_rule = parse_on_delete(&row.get::<_, String>(5));
+            catalog
+                .foreign_keys
+                .entry((row.get(0), row.get(1)))
+                .or_insert((row.get(2), row.get(3), row.get(4), delete_rule));
         }
+
+        let index_rows = client
+            .query(
+                "SELECT indexname::text FROM pg_indexes \
+                 WHERE schemaname = COALESCE($1, current_schema()) AND tablename = ANY($2)",
+                &[&schema_name, &table_names],
+            )
+            .await
+            .map_err(postgres_error)?;
+        catalog.indexes = index_rows
+            .into_iter()
+            .map(|row| row.get::<_, String>(0))
+            .collect();
+
+        Ok(catalog)
     }
-    .map_err(postgres_error)?;
-    Ok(row.map(|row| row.get::<_, String>(0)))
+
+    fn foreign_key(
+        &self,
+        table_name: &PostgresTableName<'_>,
+        key: &(String, String),
+    ) -> Option<ForeignKey> {
+        let (ref_schema, ref_table, ref_column, on_delete) = self.foreign_keys.get(key)?;
+        let target_table = if table_name.schema.is_none() && *ref_schema == self.current_schema {
+            ref_table.clone()
+        } else {
+            format!("{ref_schema}.{ref_table}")
+        };
+        Some(ForeignKey::new(target_table, ref_column, *on_delete))
+    }
 }
 
-async fn index_exists(client: &Client, table: &str, index: &str) -> Result<bool, OpenAuthError> {
-    let table = PostgresTableName::parse(table)?;
-    let count = match table.schema {
-        Some(schema) => {
-            client
-                .query_one(
-                    "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = $1 AND indexname = $2",
-                    &[&schema, &index],
-                )
-                .await
-        }
-        None => {
-            client
-                .query_one(
-                    "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1",
-                    &[&index],
-                )
-                .await
-        }
+/// Maps `pg_constraint.confdeltype` action codes to [`OnDelete`].
+fn parse_on_delete(value: &str) -> OnDelete {
+    match value {
+        "r" => OnDelete::Restrict,
+        "c" => OnDelete::Cascade,
+        "n" => OnDelete::SetNull,
+        "d" => OnDelete::SetDefault,
+        _ => OnDelete::NoAction,
     }
-    .map_err(postgres_error)?
-    .get::<_, i64>(0);
-    Ok(count > 0)
-}
-
-async fn unique_column_exists(
-    client: &Client,
-    table: &str,
-    column: &str,
-) -> Result<bool, OpenAuthError> {
-    let table = PostgresTableName::parse(table)?;
-    let count = match table.schema {
-        Some(schema) => {
-            client
-                .query_one(
-                    "SELECT COUNT(*) \
-                     FROM information_schema.table_constraints tc \
-                     JOIN information_schema.key_column_usage kcu \
-                       ON tc.constraint_schema = kcu.constraint_schema \
-                      AND tc.constraint_name = kcu.constraint_name \
-                      AND tc.table_name = kcu.table_name \
-                     WHERE tc.constraint_schema = $1 \
-                       AND tc.table_name = $2 \
-                       AND kcu.column_name = $3 \
-                       AND tc.constraint_type IN ('UNIQUE', 'PRIMARY KEY')",
-                    &[&schema, &table.name, &column],
-                )
-                .await
-        }
-        None => {
-            client
-                .query_one(
-                    "SELECT COUNT(*) \
-                     FROM information_schema.table_constraints tc \
-                     JOIN information_schema.key_column_usage kcu \
-                       ON tc.constraint_schema = kcu.constraint_schema \
-                      AND tc.constraint_name = kcu.constraint_name \
-                      AND tc.table_name = kcu.table_name \
-                     WHERE tc.constraint_schema = current_schema() \
-                       AND tc.table_name = $1 \
-                       AND kcu.column_name = $2 \
-                       AND tc.constraint_type IN ('UNIQUE', 'PRIMARY KEY')",
-                    &[&table.name, &column],
-                )
-                .await
-        }
-    }
-    .map_err(postgres_error)?
-    .get::<_, i64>(0);
-    Ok(count > 0)
-}
-
-async fn foreign_key(
-    client: &Client,
-    table: &str,
-    column: &str,
-) -> Result<Option<ForeignKey>, OpenAuthError> {
-    let table = PostgresTableName::parse(table)?;
-    let table_is_schema_qualified = table.schema.is_some();
-    let row = match table.schema {
-        Some(schema) => {
-            client
-                .query_opt(
-                    "SELECT current_schema(), ccu.table_schema, ccu.table_name, ccu.column_name, rc.delete_rule \
-                     FROM information_schema.table_constraints tc \
-                     JOIN information_schema.key_column_usage kcu \
-                       ON tc.constraint_schema = kcu.constraint_schema \
-                      AND tc.constraint_name = kcu.constraint_name \
-                      AND tc.table_name = kcu.table_name \
-                     JOIN information_schema.referential_constraints rc \
-                       ON tc.constraint_schema = rc.constraint_schema \
-                      AND tc.constraint_name = rc.constraint_name \
-                     JOIN information_schema.constraint_column_usage ccu \
-                       ON rc.unique_constraint_schema = ccu.constraint_schema \
-                      AND rc.unique_constraint_name = ccu.constraint_name \
-                     WHERE tc.constraint_schema = $1 \
-                       AND tc.table_name = $2 \
-                       AND kcu.column_name = $3 \
-                       AND tc.constraint_type = 'FOREIGN KEY'",
-                    &[&schema, &table.name, &column],
-                )
-                .await
-        }
-        None => {
-            client
-                .query_opt(
-                    "SELECT current_schema(), ccu.table_schema, ccu.table_name, ccu.column_name, rc.delete_rule \
-                     FROM information_schema.table_constraints tc \
-                     JOIN information_schema.key_column_usage kcu \
-                       ON tc.constraint_schema = kcu.constraint_schema \
-                      AND tc.constraint_name = kcu.constraint_name \
-                      AND tc.table_name = kcu.table_name \
-                     JOIN information_schema.referential_constraints rc \
-                       ON tc.constraint_schema = rc.constraint_schema \
-                      AND tc.constraint_name = rc.constraint_name \
-                     JOIN information_schema.constraint_column_usage ccu \
-                       ON rc.unique_constraint_schema = ccu.constraint_schema \
-                      AND rc.unique_constraint_name = ccu.constraint_name \
-                     WHERE tc.constraint_schema = current_schema() \
-                       AND tc.table_name = $1 \
-                       AND kcu.column_name = $2 \
-                       AND tc.constraint_type = 'FOREIGN KEY'",
-                    &[&table.name, &column],
-                )
-                .await
-        }
-    }
-    .map_err(postgres_error)?;
-
-    let Some(row) = row else {
-        return Ok(None);
-    };
-    let current_schema = row.get::<_, String>(0);
-    let foreign_schema = row.get::<_, String>(1);
-    let foreign_table = row.get::<_, String>(2);
-    let field = row.get::<_, String>(3);
-    let delete_rule = row.get::<_, String>(4);
-    let table = if !table_is_schema_qualified && foreign_schema == current_schema {
-        foreign_table
-    } else {
-        format!("{foreign_schema}.{foreign_table}")
-    };
-    Ok(Some(ForeignKey::new(
-        table,
-        field,
-        match delete_rule.as_str() {
-            "CASCADE" => OnDelete::Cascade,
-            "SET NULL" => OnDelete::SetNull,
-            "SET DEFAULT" => OnDelete::SetDefault,
-            "RESTRICT" => OnDelete::Restrict,
-            _ => OnDelete::NoAction,
-        },
-    )))
 }
 
 struct PostgresTableName<'a> {
