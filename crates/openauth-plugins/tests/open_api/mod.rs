@@ -16,7 +16,6 @@ use openauth_plugins::email_otp::{email_otp, EmailOtpOptions};
 use openauth_plugins::generic_oauth::{generic_oauth, GenericOAuthConfig, GenericOAuthOptions};
 use openauth_plugins::jwt::jwt;
 use openauth_plugins::magic_link::{magic_link, MagicLinkEmail, MagicLinkOptions};
-use openauth_plugins::mcp::{mcp, McpOptions};
 use openauth_plugins::multi_session::multi_session;
 use openauth_plugins::oauth_proxy::oauth_proxy_default;
 use openauth_plugins::one_tap::{one_tap, OneTapOptions};
@@ -206,11 +205,6 @@ async fn generated_schema_audits_all_server_plugin_endpoints(
         jwt()?,
         phone_number(adapter.clone(), PhoneNumberOptions::default()),
         email_otp(adapter.clone(), EmailOtpOptions::default()),
-        mcp(McpOptions {
-            login_page: "/login".to_owned(),
-            ..McpOptions::default()
-        })?
-        .into_auth_plugin(),
         two_factor(TwoFactorOptions::default()),
         oauth_proxy_default(),
         one_tap(OneTapOptions::default()),
@@ -260,7 +254,6 @@ async fn generated_schema_audits_all_server_plugin_endpoints(
         ("signInPhoneNumber", "phoneNumber", "string"),
         ("sendPhoneNumberOTP", "phoneNumber", "string"),
         ("verifyPhoneNumber", "phoneNumber", "string"),
-        ("registerMcpClient", "redirect_uris", "array"),
         ("getSiweNonce", "walletAddress", "string"),
         ("verifySiweMessage", "message", "string"),
     ] {

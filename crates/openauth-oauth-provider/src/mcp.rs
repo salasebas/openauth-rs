@@ -3,10 +3,13 @@ use openauth_core::context::AuthContext;
 use openauth_core::db::DbAdapter;
 use openauth_core::error::OpenAuthError;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
-use crate::options::ResolvedOAuthProviderOptions;
+use crate::options::{ResolvedMcpOptions, ResolvedOAuthProviderOptions};
 use crate::token::validate_access_token;
+
+#[cfg(feature = "mcp-client")]
+pub mod client;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpBearerToken {
@@ -43,10 +46,9 @@ pub fn protected_resource_metadata(
     options: &ResolvedOAuthProviderOptions,
     resource: &str,
 ) -> Result<Value, OpenAuthError> {
-    let parsed =
-        url::Url::parse(resource).map_err(|error| OpenAuthError::Api(error.to_string()))?;
+    url::Url::parse(resource).map_err(|error| OpenAuthError::Api(error.to_string()))?;
     Ok(json!({
-        "resource": parsed.as_str(),
+        "resource": resource,
         "authorization_servers": [context.base_url.as_str()],
         "scopes_supported": options.scopes,
         "grant_types_supported": options
@@ -56,6 +58,57 @@ pub fn protected_resource_metadata(
             .collect::<Vec<_>>(),
         "bearer_methods_supported": ["header"],
     }))
+}
+
+pub fn resolved_resource(context: &AuthContext, options: &ResolvedMcpOptions) -> String {
+    options
+        .resource
+        .clone()
+        .unwrap_or_else(|| origin_from_base_url(&context.base_url))
+}
+
+pub fn protected_resource_metadata_document(
+    context: &AuthContext,
+    options: &ResolvedOAuthProviderOptions,
+    mcp: &ResolvedMcpOptions,
+) -> Result<Value, OpenAuthError> {
+    let resource = resolved_resource(context, mcp);
+    let mut metadata = protected_resource_metadata(context, options, &resource)?;
+    merge_metadata_object(&mut metadata, &mcp.metadata.protected_resource);
+    Ok(metadata)
+}
+
+pub(crate) fn merge_authorization_server_metadata(
+    metadata: &mut Value,
+    mcp: Option<&ResolvedMcpOptions>,
+) {
+    if let Some(mcp) = mcp {
+        merge_metadata_object(metadata, &mcp.metadata.authorization_server);
+    }
+}
+
+fn merge_metadata_object(metadata: &mut Value, overrides: &Map<String, Value>) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    for (key, value) in overrides {
+        object.insert(key.clone(), value.clone());
+    }
+}
+
+fn origin_from_base_url(base_url: &str) -> String {
+    url::Url::parse(base_url)
+        .ok()
+        .and_then(|url| {
+            let scheme = url.scheme();
+            let host = url.host_str()?;
+            let port = url
+                .port()
+                .map(|port| format!(":{port}"))
+                .unwrap_or_default();
+            Some(format!("{scheme}://{host}{port}"))
+        })
+        .unwrap_or_else(|| base_url.trim_end_matches('/').to_owned())
 }
 
 pub async fn validate_bearer_token(

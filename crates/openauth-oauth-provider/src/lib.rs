@@ -37,13 +37,13 @@ pub use options::{
     ClientSecretVerifyInput, ClientSecretVerifyResolver, CustomAccessTokenClaimsInput,
     CustomAccessTokenClaimsResolver, CustomIdTokenClaimsInput, CustomIdTokenClaimsResolver,
     CustomTokenResponseFieldsInput, CustomTokenResponseFieldsResolver, CustomUserInfoClaimsInput,
-    CustomUserInfoClaimsResolver, GrantType, OAuthProviderConfigError, OAuthProviderOptions,
-    OAuthProviderPlugin, OAuthProviderRateLimit, OAuthProviderRateLimits, OAuthTokenPrefixes,
-    PromptRedirectInput, PromptRedirectResolver, PromptShouldRedirectResolver,
-    RefreshTokenFormatDecodeOutput, RefreshTokenFormatEncodeInput, RefreshTokenFormatter,
-    RequestUriResolver, RequestUriResolverInput, ResolvedOAuthProviderOptions, SecretStorage,
-    StringGeneratorResolver, TokenEndpointAuthMethod, TokenHashInput, TokenHashResolver,
-    TrustedClientCache,
+    CustomUserInfoClaimsResolver, GrantType, McpMetadataOverrides, McpOptions,
+    OAuthProviderConfigError, OAuthProviderOptions, OAuthProviderPlugin, OAuthProviderRateLimit,
+    OAuthProviderRateLimits, OAuthTokenPrefixes, PromptRedirectInput, PromptRedirectResolver,
+    PromptShouldRedirectResolver, RefreshTokenFormatDecodeOutput, RefreshTokenFormatEncodeInput,
+    RefreshTokenFormatter, RequestUriResolver, RequestUriResolverInput, ResolvedMcpOptions,
+    ResolvedOAuthProviderOptions, SecretStorage, StringGeneratorResolver, TokenEndpointAuthMethod,
+    TokenHashInput, TokenHashResolver, TrustedClientCache,
 };
 pub use schema::{
     oauth_provider_schema, OAUTH_ACCESS_TOKEN_MODEL, OAUTH_CLIENT_MODEL, OAUTH_CONSENT_MODEL,
@@ -53,6 +53,9 @@ pub use token::{
     create_client_credentials_token, decode_refresh_token, store_client_secret, store_token,
     verify_client_secret, TokenResponse,
 };
+
+#[cfg(feature = "mcp-client")]
+pub use mcp::client::{McpAuthClient, McpAuthClientOptions, McpSession};
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -206,6 +209,7 @@ fn resolve_options(
         return Err(OAuthProviderConfigError::RefreshTokenRequiresAuthorizationCode);
     }
 
+    let mcp = resolve_mcp_options(options.mcp)?;
     let store_client_secret =
         resolve_client_secret_storage(options.store_client_secret, options.disable_jwt_plugin)?;
     Ok(ResolvedOAuthProviderOptions {
@@ -268,7 +272,28 @@ fn resolve_options(
         jwks_path: options.jwks_path,
         valid_audiences: options.valid_audiences,
         rate_limits: options.rate_limits,
+        mcp,
     })
+}
+
+fn resolve_mcp_options(
+    options: Option<McpOptions>,
+) -> Result<Option<ResolvedMcpOptions>, OAuthProviderConfigError> {
+    options
+        .map(|options| {
+            if let Some(resource) = &options.resource {
+                let parsed = url::Url::parse(resource)
+                    .map_err(|_| OAuthProviderConfigError::InvalidMcpResource)?;
+                if !parsed.has_host() {
+                    return Err(OAuthProviderConfigError::InvalidMcpResource);
+                }
+            }
+            Ok(ResolvedMcpOptions {
+                resource: options.resource,
+                metadata: options.metadata,
+            })
+        })
+        .transpose()
 }
 
 fn non_empty_or_default<const N: usize>(values: Vec<String>, default: [&str; N]) -> Vec<String> {

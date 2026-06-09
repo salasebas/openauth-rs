@@ -7,6 +7,8 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::mcp::www_authenticate_for_resources;
+
 #[derive(Debug, Clone)]
 pub struct McpAuthClientOptions {
     pub auth_url: String,
@@ -46,7 +48,7 @@ struct CachedMetadata {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct McpSession {
-    pub record: Value,
+    pub claims: Value,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -85,20 +87,23 @@ impl McpAuthClient {
     }
 
     pub async fn verify_token(&self, token: &str) -> Result<Option<McpSession>, reqwest::Error> {
-        let response = self
+        let value = self
             .http_client
-            .get(format!("{}/mcp/get-session", self.auth_url))
-            .bearer_auth(token)
+            .post(format!("{}/oauth2/introspect", self.auth_url))
+            .form(&[("token", token)])
             .send()
+            .await?
+            .error_for_status()?
+            .json::<Value>()
             .await?;
-        if !response.status().is_success() {
+        if !value
+            .get("active")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
             return Ok(None);
         }
-        let value = response.json::<Value>().await?;
-        if value.is_null() || value.get("userId").is_none() {
-            return Ok(None);
-        }
-        Ok(Some(McpSession { record: value }))
+        Ok(Some(McpSession { claims: value }))
     }
 
     pub async fn discovery_metadata(&self) -> Result<Value, reqwest::Error> {
@@ -142,8 +147,10 @@ impl McpAuthClient {
     }
 
     pub fn www_authenticate(&self) -> String {
-        let base = self.resource.as_deref().unwrap_or(&self.auth_url);
-        format!("Bearer resource_metadata=\"{base}/.well-known/oauth-protected-resource\"")
+        let resource = self.resource.as_deref().unwrap_or(&self.auth_url);
+        www_authenticate_for_resources([resource]).unwrap_or_else(|_| {
+            format!("Bearer resource_metadata=\"{resource}/.well-known/oauth-protected-resource\"")
+        })
     }
 
     pub fn unauthorized_response(&self) -> Result<Response<Vec<u8>>, http::Error> {

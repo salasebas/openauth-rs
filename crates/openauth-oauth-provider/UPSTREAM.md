@@ -37,7 +37,7 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | Runtime validators | ✅ | Redirect URI safety, dangerous-scheme rejection, loopback HTTP allowance, Basic auth parsing, query preservation, and authorization-code verification parsing are covered. |
 | Options and hooks | ✅ | Scope validation, grant validation, pairwise secret length, prompt redirects, consent/client reference resolvers, client privileges, token hashing, custom claims, custom generators, token prefixes, scope expirations, and refresh formatting are covered. |
 | Rate-limit contributions | ✅ | Plugin contributes upstream-style defaults for token, authorize, introspect, revoke, register, and userinfo routes; management, consent, continue, and logout enforcement remains host-owned unless separately configured. |
-| MCP resource helpers | ⚠️ | Rust exposes authorization metadata, protected-resource metadata, bearer validation, and `WWW-Authenticate` helpers; host code still mounts resource endpoints/challenges. |
+| MCP profile | ✅ | `OAuthProviderOptions::mcp` registers protected-resource metadata, merges MCP authorization-server metadata overrides, and keeps all OAuth flows on `/oauth2/*`; resource-server helpers remain available behind `mcp-client`. |
 
 ## Test Coverage
 
@@ -55,7 +55,7 @@ cargo nextest run -p openauth-oauth-provider
 | Client registration and management | 17 | 45 | Rust covers DCR, unsafe redirect rejection, ownership, privileges, trusted-client cache, public prelogin, update validation, and rotate-secret constraints. |
 | Consent management | 7 | 6 | Rust covers consent accept/reject, narrowed scopes, owner enforcement, update/delete, and continue checks. |
 | Metadata, config, schema, rate limits | 13 | 15 | Rust covers defaults, config validation, schema shape, metadata, JWKS defaults, and plugin rate-limit contributions. |
-| Pairwise, logout, MCP | 6 | 29 | Rust covers pairwise subjects, registration constraints, RP-initiated logout, and MCP helper behavior. |
+| Pairwise, logout, MCP | 8 | 29 | Rust covers pairwise subjects, registration constraints, RP-initiated logout, MCP protected-resource metadata, and helper behavior. |
 | Runtime validators and utilities | Covered indirectly | 28 | Upstream has direct tests for URL validation, authorization-code verification parsing, query preservation, prompt deletion, and timestamp normalization; Rust covers most through endpoint tests. |
 
 ## Intentional Differences
@@ -78,7 +78,7 @@ cargo nextest run -p openauth-oauth-provider
 | OAUTH-PROVIDER-003 | Rate-limit enforcement is host-dependent | Medium | The plugin contributes rate-limit rules; enforcement depends on the host OpenAuth runtime honoring plugin rate limits. |
 | OAUTH-PROVIDER-004 | Trusted-client cache is in-process | Medium | Multi-instance deployments should not assume cross-node cache invalidation. |
 | OAUTH-PROVIDER-005 | Schema must be migrated before traffic | High | Enabling the plugin adds OAuth client, consent, access-token, and refresh-token tables. |
-| OAUTH-PROVIDER-006 | MCP helpers are library-level | Low | Rust exposes helper functions for MCP resource protection; host code must mount protected-resource metadata and challenge responses correctly. |
+| OAUTH-PROVIDER-006 | MCP resource-server enforcement is host-owned | Low | The auth server exposes MCP protected-resource metadata; resource servers still decide how to apply bearer validation and challenge responses. |
 | OAUTH-PROVIDER-007 | Client-update guardrail matrix | Medium | Rust tests cover immutable auth method, public-secret rotation, invalid scopes, and partial updates; add or keep focused tests for direct `public` / `client_secret` update payloads when changing client update behavior. |
 | OAUTH-PROVIDER-008 | No pushed authorization endpoint | Low | `request_uri` is supported through a host resolver callback; there is no first-party pushed authorization endpoint in this crate. |
 

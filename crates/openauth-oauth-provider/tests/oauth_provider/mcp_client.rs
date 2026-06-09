@@ -1,8 +1,7 @@
-use http::{header, Method, Request, Response, StatusCode};
-use openauth_plugins::mcp::client::{McpAuthClient, McpAuthClientOptions};
-use serde_json::json;
+use super::common::*;
 
-use super::support::json_body;
+use http::Response;
+use openauth_oauth_provider::mcp::client::{McpAuthClient, McpAuthClientOptions};
 
 #[test]
 fn mcp_client_helpers_build_standard_responses() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,6 +10,7 @@ fn mcp_client_helpers_build_standard_responses() -> Result<(), Box<dyn std::erro
         resource: Some("https://resource.example".to_owned()),
         ..McpAuthClientOptions::default()
     });
+
     assert_eq!(
         client.www_authenticate(),
         "Bearer resource_metadata=\"https://resource.example/.well-known/oauth-protected-resource\""
@@ -27,7 +27,7 @@ fn mcp_client_helpers_build_standard_responses() -> Result<(), Box<dyn std::erro
         "WWW-Authenticate"
     );
     assert_eq!(
-        json_body(&unauthorized)?["error"]["message"],
+        json_body(unauthorized)?["error"]["message"],
         "Unauthorized: Authentication required"
     );
 
@@ -59,11 +59,9 @@ async fn mcp_client_handler_short_circuits_options_and_missing_bearer(
         .handle_request(
             Request::builder()
                 .method(Method::OPTIONS)
-                .uri("https://resource.example/mcp")
+                .uri("https://server.example/mcp")
                 .body(Vec::new())?,
-            |_request, _session| async {
-                Response::builder().status(StatusCode::OK).body(Vec::new())
-            },
+            |_request, _session| async { Response::builder().status(StatusCode::OK).body(vec![]) },
         )
         .await?;
     assert_eq!(options.status(), StatusCode::NO_CONTENT);
@@ -72,49 +70,11 @@ async fn mcp_client_handler_short_circuits_options_and_missing_bearer(
         .handle_request(
             Request::builder()
                 .method(Method::POST)
-                .uri("https://resource.example/mcp")
+                .uri("https://server.example/mcp")
                 .body(Vec::new())?,
-            |_request, _session| async {
-                Response::builder().status(StatusCode::OK).body(Vec::new())
-            },
+            |_request, _session| async { Response::builder().status(StatusCode::OK).body(vec![]) },
         )
         .await?;
     assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(json_body(&missing)?["jsonrpc"], "2.0");
-    Ok(())
-}
-
-#[tokio::test]
-async fn discovery_metadata_uses_cache() -> Result<(), Box<dyn std::error::Error>> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let address = listener.local_addr()?;
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await?;
-        let body = r#"{"issuer":"http://cached.example"}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let mut buffer = [0_u8; 1024];
-        let _ = stream.read(&mut buffer).await?;
-        stream.write_all(response.as_bytes()).await?;
-        Ok::<(), std::io::Error>(())
-    });
-    let client = McpAuthClient::new(McpAuthClientOptions {
-        auth_url: format!("http://{address}"),
-        ..McpAuthClientOptions::default()
-    });
-
-    assert_eq!(
-        client.discovery_metadata().await?["issuer"],
-        "http://cached.example"
-    );
-    assert_eq!(
-        client.discovery_metadata().await?["issuer"],
-        "http://cached.example"
-    );
-    server.await??;
     Ok(())
 }

@@ -24,11 +24,17 @@ pub(super) fn metadata_endpoint(
                         well_known_metadata_response(&oidc_server_metadata(context, &options))
                     }
                     MetadataEndpointMode::OAuthAuthorizationServer => {
-                        if options.scopes.contains(&"openid".to_owned()) {
-                            well_known_metadata_response(&oidc_server_metadata(context, &options))
+                        let mut metadata = if options.scopes.contains(&"openid".to_owned()) {
+                            serde_json::to_value(oidc_server_metadata(context, &options))
                         } else {
-                            well_known_metadata_response(&auth_server_metadata(context, &options))
+                            serde_json::to_value(auth_server_metadata(context, &options))
                         }
+                        .map_err(|error| OpenAuthError::Api(error.to_string()))?;
+                        crate::mcp::merge_authorization_server_metadata(
+                            &mut metadata,
+                            options.mcp.as_ref(),
+                        );
+                        well_known_metadata_response(&metadata)
                     }
                 }
             })

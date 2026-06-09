@@ -23,8 +23,8 @@ pub use openauth_oauth_provider::{
     upsert_consent, ClientPrivilegeAction, ClientPrivilegesResolver, ClientReferenceResolver,
     ClientSecretHashResolver, ConsentGrantInput, CustomAccessTokenClaimsResolver,
     CustomIdTokenClaimsResolver, CustomTokenResponseFieldsResolver, CustomUserInfoClaimsResolver,
-    GrantType, OAuthProviderConfigError, OAuthProviderOptions, OAuthProviderRateLimit,
-    OAuthProviderRateLimits, OAuthTokenPrefixes, PromptRedirectResolver,
+    GrantType, McpMetadataOverrides, McpOptions, OAuthProviderConfigError, OAuthProviderOptions,
+    OAuthProviderRateLimit, OAuthProviderRateLimits, OAuthTokenPrefixes, PromptRedirectResolver,
     PromptShouldRedirectResolver, RefreshTokenFormatDecodeOutput, RefreshTokenFormatter,
     RequestUriResolver, SecretStorage, StringGeneratorResolver, TokenHashResolver,
 };

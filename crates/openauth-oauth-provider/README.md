@@ -47,6 +47,36 @@ let auth = OpenAuth::builder()
 Run your adapter migration flow after enabling the plugin so the OAuth client,
 consent, access-token, and refresh-token tables exist.
 
+## MCP (Model Context Protocol)
+
+MCP is exposed as a profile of the OAuth provider rather than a separate
+authorization server. Enable protected-resource metadata with `McpOptions`:
+
+```rust
+use openauth_oauth_provider::{oauth_provider, McpOptions, OAuthProviderOptions};
+
+let provider = oauth_provider(OAuthProviderOptions {
+    login_page: "/login".to_owned(),
+    consent_page: "/oauth/consent".to_owned(),
+    mcp: Some(McpOptions {
+        resource: Some("https://api.example.com/mcp".to_owned()),
+        ..McpOptions::default()
+    }),
+    ..OAuthProviderOptions::default()
+})?;
+# let _ = provider;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+MCP clients discover authorization metadata via
+`/.well-known/oauth-authorization-server` and protected-resource metadata via
+`/.well-known/oauth-protected-resource`. Authorization, token, registration,
+userinfo, introspection, and revocation traffic uses the standard `/oauth2/*`
+routes.
+
+Framework-neutral resource-server helpers are available behind the
+`mcp-client` feature.
+
 ## How It Fits
 
 - `openauth-oauth-provider`: provider-side OAuth/OIDC server behavior.

@@ -34,7 +34,7 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | JWT | ✅ | JWKS, token, sign/verify endpoints, claims, schema options, and crypto adapter paths are implemented. |
 | Last login method | ✅ | OAuth and credential method persistence plus session response metadata are implemented. |
 | Magic link | ✅ | Sign-in, verify, token generation, failure redirects, and rate limits are implemented. |
-| MCP | ✅ | OAuth-style metadata, registration, consent, token hardening, userinfo, and login resume paths are implemented. |
+| MCP | 🎯 | Replaced by the sibling `openauth-oauth-provider` crate via `OAuthProviderOptions::mcp`; OAuth flows use `/oauth2/*`. |
 | Multi-session | ✅ | Signed per-session cookies, switching, revocation, max-session limiting, forged-cookie rejection, and sign-out cleanup are implemented. |
 | OAuth proxy | ✅ | Callback rewriting, encrypted preview payloads, replay max-age, state cleanup, production passthrough, skip headers, custom secrets, and database-backed state are implemented. |
 | One Tap | ✅ | Server callback, account linking, disabled sign-up, session/cookie behavior, additional fields, and metadata are implemented; missing-email response shape intentionally differs. |

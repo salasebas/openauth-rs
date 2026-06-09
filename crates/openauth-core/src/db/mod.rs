@@ -8,6 +8,7 @@ mod hooks;
 mod id;
 mod memory;
 mod models;
+pub mod oauth_provider;
 mod output;
 mod schema;
 pub mod sql;
@@ -27,6 +28,10 @@ pub use hooks::HookedAdapter;
 pub use id::{IdGeneration, IdPolicy, IdValue};
 pub use memory::MemoryAdapter;
 pub use models::{Account, RateLimit, Session, User, Verification};
+pub use oauth_provider::{
+    oauth_provider_schema, OAUTH_ACCESS_TOKEN_MODEL, OAUTH_CLIENT_MODEL, OAUTH_CONSENT_MODEL,
+    OAUTH_REFRESH_TOKEN_MODEL,
+};
 pub use output::filter_output_fields;
 pub use schema::{
     auth_schema, AuthSchemaOptions, DbField, DbFieldType, DbSchema, DbTable, ForeignKey, OnDelete,

@@ -44,6 +44,7 @@ mod clients;
 mod consent;
 mod introspection;
 mod logout;
+mod mcp;
 mod metadata;
 mod token;
 mod userinfo;
@@ -53,6 +54,7 @@ use clients::*;
 use consent::*;
 use introspection::*;
 use logout::*;
+use mcp::*;
 use metadata::*;
 use token::*;
 use userinfo::*;
@@ -60,7 +62,7 @@ use userinfo::*;
 pub(crate) fn oauth_provider_endpoints(
     options: Arc<ResolvedOAuthProviderOptions>,
 ) -> Vec<AsyncAuthEndpoint> {
-    vec![
+    let mut endpoints = vec![
         metadata_endpoint(
             "/.well-known/oauth-authorization-server",
             Arc::clone(&options),
@@ -94,6 +96,10 @@ pub(crate) fn oauth_provider_endpoints(
         get_consent_endpoint(Arc::clone(&options)),
         get_consents_endpoint(Arc::clone(&options)),
         update_consent_endpoint(Arc::clone(&options)),
-        delete_consent_endpoint(options),
-    ]
+        delete_consent_endpoint(Arc::clone(&options)),
+    ];
+    if let Some(endpoint) = protected_resource_metadata_endpoint(options) {
+        endpoints.push(endpoint);
+    }
+    endpoints
 }

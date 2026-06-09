@@ -30,8 +30,6 @@ mod jwt;
 mod last_login_method;
 #[path = "magic_link/mod.rs"]
 mod magic_link;
-#[path = "mcp/mod.rs"]
-mod mcp;
 #[path = "multi_session/mod.rs"]
 mod multi_session;
 #[path = "oauth_proxy/mod.rs"]
@@ -72,7 +70,9 @@ fn upstream_server_plugin_parity_is_explicit_about_replaced_oidc_provider() {
         );
     }
     assert!(replaced.contains(&("oidc-provider", "openauth-oauth-provider")));
+    assert!(replaced.contains(&("mcp", "openauth-oauth-provider")));
     assert!(!supported.contains(&"oidc-provider"));
+    assert!(!supported.contains(&"mcp"));
 }
 
 fn supported_server_plugins() -> Vec<&'static str> {
@@ -92,7 +92,6 @@ fn supported_server_plugins() -> Vec<&'static str> {
         "jwt",
         "last-login-method",
         "magic-link",
-        "mcp",
         "multi-session",
         "oauth-proxy",
         "one-tap",
@@ -139,5 +138,8 @@ fn upstream_server_plugins() -> Vec<&'static str> {
 }
 
 fn replaced_server_plugins() -> Vec<(&'static str, &'static str)> {
-    vec![("oidc-provider", "openauth-oauth-provider")]
+    vec![
+        ("oidc-provider", "openauth-oauth-provider"),
+        ("mcp", "openauth-oauth-provider"),
+    ]
 }

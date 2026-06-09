@@ -8,7 +8,6 @@ use openauth_plugins::{
     api_key::api_key,
     device_authorization::device_authorization,
     jwt::jwt,
-    mcp::{mcp, McpOptions},
     organization::organization,
     phone_number::{phone_number, PhoneNumberOptions},
     siwe::{siwe, SiweOptions},
@@ -67,12 +66,6 @@ pub fn schema_plugin(plugin: &str) -> Option<AuthPlugin> {
         "api-key" => Some(api_key()),
         "device-authorization" => Some(device_authorization()),
         "jwt" => jwt().ok(),
-        "mcp" => mcp(McpOptions {
-            login_page: "/login".to_owned(),
-            ..McpOptions::default()
-        })
-        .ok()
-        .map(|plugin| plugin.into_auth_plugin()),
         "organization" => Some(organization()),
         "phone-number" => Some(phone_number(
             Arc::new(MemoryAdapter::new()),

@@ -18,7 +18,6 @@ pub mod haveibeenpwned;
 pub mod jwt;
 pub mod last_login_method;
 pub mod magic_link;
-pub mod mcp;
 pub mod multi_session;
 pub mod oauth_proxy;
 pub mod one_tap;
@@ -46,7 +45,6 @@ pub const PLUGIN_IDS: &[&str] = &[
     jwt::UPSTREAM_PLUGIN_ID,
     last_login_method::UPSTREAM_PLUGIN_ID,
     magic_link::UPSTREAM_PLUGIN_ID,
-    mcp::UPSTREAM_PLUGIN_ID,
     multi_session::UPSTREAM_PLUGIN_ID,
     oauth_proxy::UPSTREAM_PLUGIN_ID,
     one_tap::UPSTREAM_PLUGIN_ID,

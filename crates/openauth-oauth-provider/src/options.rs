@@ -808,8 +808,32 @@ impl Default for OAuthProviderRateLimits {
     }
 }
 
+/// Metadata extension points for MCP discovery responses.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct McpMetadataOverrides {
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub authorization_server: Map<String, Value>,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub protected_resource: Map<String, Value>,
+}
+
+/// MCP profile options. When enabled, the provider exposes MCP resource metadata.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct McpOptions {
+    /// Protected resource identifier (RFC 9728). Defaults to the origin of `base_url`.
+    pub resource: Option<String>,
+    pub metadata: McpMetadataOverrides,
+}
+
+/// Resolved MCP options stored on the plugin after validation.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ResolvedMcpOptions {
+    pub resource: Option<String>,
+    pub metadata: McpMetadataOverrides,
+}
+
 /// User-facing OAuth provider plugin options.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OAuthProviderOptions {
     pub scopes: Vec<String>,
     pub client_registration_default_scopes: Vec<String>,
@@ -866,6 +890,8 @@ pub struct OAuthProviderOptions {
     pub jwks_path: String,
     pub valid_audiences: Vec<String>,
     pub rate_limits: OAuthProviderRateLimits,
+    /// Enable MCP protected-resource metadata.
+    pub mcp: Option<McpOptions>,
 }
 
 impl Default for OAuthProviderOptions {
@@ -926,12 +952,13 @@ impl Default for OAuthProviderOptions {
             jwks_path: "/jwks".to_owned(),
             valid_audiences: Vec::new(),
             rate_limits: OAuthProviderRateLimits::default(),
+            mcp: None,
         }
     }
 }
 
 /// Fully resolved OAuth provider options after upstream-compatible defaults.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedOAuthProviderOptions {
     pub scopes: Vec<String>,
     pub claims: Vec<String>,
@@ -990,6 +1017,7 @@ pub struct ResolvedOAuthProviderOptions {
     pub jwks_path: String,
     pub valid_audiences: Vec<String>,
     pub rate_limits: OAuthProviderRateLimits,
+    pub mcp: Option<ResolvedMcpOptions>,
 }
 
 /// OAuth provider extension returned by [`crate::oauth_provider`].
@@ -1036,6 +1064,8 @@ pub enum OAuthProviderConfigError {
     HashedClientSecretsRequireJwtPlugin,
     #[error("encryption method not recommended, please use 'hashed' or the 'hash' function")]
     EncryptedClientSecretsWithJwtPlugin,
+    #[error("mcp.resource must be a valid absolute URL when set")]
+    InvalidMcpResource,
     #[error("unable to initialize jwt plugin: {0}")]
     JwtPlugin(String),
 }
