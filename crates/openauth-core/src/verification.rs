@@ -236,6 +236,38 @@ impl<'a> DbVerificationStore<'a> {
         Ok(Some(verification))
     }
 
+    /// Atomically updates a verification row only when its stored value is unchanged.
+    ///
+    /// Parallel callers racing on the same identifier can use this as a compare-and-swap
+    /// boundary when incrementing attempt counters or other value-encoded state.
+    pub async fn compare_and_update_verification_value(
+        &self,
+        identifier: &str,
+        verification_id: &str,
+        expected_value: &str,
+        new_value: String,
+    ) -> Result<Option<Verification>, OpenAuthError> {
+        let stored_identifier = process_verification_identifier(&self.options, identifier).await?;
+        self.adapter
+            .update(
+                Update::new(VERIFICATION_MODEL)
+                    .where_clause(identifier_where(&stored_identifier))
+                    .where_clause(Where::new(
+                        "id",
+                        DbValue::String(verification_id.to_owned()),
+                    ))
+                    .where_clause(Where::new(
+                        "value",
+                        DbValue::String(expected_value.to_owned()),
+                    ))
+                    .data("value", DbValue::String(new_value))
+                    .data("updated_at", DbValue::Timestamp(OffsetDateTime::now_utc())),
+            )
+            .await?
+            .map(verification_from_record)
+            .transpose()
+    }
+
     pub async fn update_verification(
         &self,
         identifier: &str,

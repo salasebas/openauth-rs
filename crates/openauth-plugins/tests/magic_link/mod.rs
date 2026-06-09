@@ -276,6 +276,60 @@ async fn verifies_existing_unverified_user() -> Result<(), Box<dyn std::error::E
 }
 
 #[tokio::test]
+async fn concurrent_verify_mints_only_one_session() -> Result<(), Box<dyn std::error::Error>> {
+    let sent = sent_messages();
+    let (router, adapter) = build_router(sent.clone(), options(sent.clone()))?;
+    seed_user(&adapter, "user_1", "Ada", "ada@example.com", true).await?;
+
+    post_json(
+        &router,
+        "/api/auth/sign-in/magic-link",
+        r#"{"email":"ada@example.com"}"#,
+    )
+    .await?;
+    let token = token_from_last_message(&sent)?;
+    let path = format!("/api/auth/magic-link/verify?token={token}");
+    let sessions_before = adapter.len("session").await;
+
+    let (first, second) = tokio::join!(get(&router, &path), get(&router, &path));
+    let responses = [first?, second?];
+    let ok = responses
+        .iter()
+        .filter(|response| response.status() == StatusCode::OK)
+        .count();
+    let rejected = responses
+        .iter()
+        .filter(|response| response.status() == StatusCode::FOUND)
+        .count();
+
+    assert_eq!(
+        ok, 1,
+        "only one concurrent verify should mint a session for the default single attempt"
+    );
+    assert_eq!(
+        rejected, 1,
+        "the losing concurrent verify should redirect with an error"
+    );
+    let rejected_location = responses
+        .iter()
+        .find(|response| response.status() == StatusCode::FOUND)
+        .and_then(|response| response.headers().get(header::LOCATION))
+        .and_then(|value| value.to_str().ok())
+        .ok_or("missing rejected redirect location")?;
+    assert!(
+        rejected_location.contains("error=ATTEMPTS_EXCEEDED")
+            || rejected_location.contains("error=INVALID_TOKEN"),
+        "{rejected_location}"
+    );
+    assert_eq!(
+        adapter.len("session").await,
+        sessions_before + 1,
+        "only one new session row should be created by concurrent verification"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn respects_allowed_attempts_and_unlimited_attempts() -> Result<(), Box<dyn std::error::Error>>
 {
     let sent = sent_messages();

@@ -7,19 +7,17 @@ use openauth_core::api::{
 };
 use openauth_core::auth::trusted_origins::OriginMatchSettings;
 use openauth_core::context::AuthContext;
-use openauth_core::db::{DbAdapter, DbRecord, DbValue, FindOne, User, Verification, Where};
+use openauth_core::db::{DbAdapter, User};
 use openauth_core::error::OpenAuthError;
 use openauth_core::session::DbSessionStore;
 use openauth_core::user::{CreateUserInput, DbUserStore};
-use openauth_core::verification::{
-    CreateVerificationInput, DbVerificationStore, UpdateVerificationInput,
-};
+use openauth_core::verification::{CreateVerificationInput, DbVerificationStore};
 use serde::Serialize;
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 use url::Url;
 
-use super::options::{MagicLinkEmail, MagicLinkOptions, MagicLinkSendContext};
+use super::options::{AllowedAttempts, MagicLinkEmail, MagicLinkOptions, MagicLinkSendContext};
 use super::payload::{
     parse_verify_query, SignInMagicLinkBody, VerificationPayload, VerifyMagicLinkQuery,
 };
@@ -159,37 +157,16 @@ pub(crate) fn verify_magic_link_endpoint(options: MagicLinkOptions) -> AsyncAuth
 
                 let adapter = required_adapter(context)?;
                 let identifier = options.store_token.identifier(&query.token).await?;
-                let Some(verification) = find_verification(adapter.as_ref(), &identifier).await?
-                else {
-                    return response::redirect_with_error(&error_url, "INVALID_TOKEN");
-                };
-                if verification.expires_at <= OffsetDateTime::now_utc() {
-                    DbVerificationStore::new(adapter.as_ref())
-                        .delete_verification(&identifier)
-                        .await?;
-                    return response::redirect_with_error(&error_url, "EXPIRED_TOKEN");
-                }
-
-                let mut payload: VerificationPayload = serde_json::from_str(&verification.value)
-                    .map_err(|error| {
-                        OpenAuthError::Api(format!("invalid magic link payload: {error}"))
-                    })?;
-                if options.allowed_attempts.exceeded(payload.attempt) {
-                    DbVerificationStore::new(adapter.as_ref())
-                        .delete_verification(&identifier)
-                        .await?;
-                    return response::redirect_with_error(&error_url, "ATTEMPTS_EXCEEDED");
-                }
-                payload.attempt = payload.attempt.saturating_add(1);
-                DbVerificationStore::new(adapter.as_ref())
-                    .update_verification(
-                        &identifier,
-                        UpdateVerificationInput::new().value(
-                            serde_json::to_string(&payload)
-                                .map_err(|error| OpenAuthError::Api(error.to_string()))?,
-                        ),
-                    )
-                    .await?;
+                let store = DbVerificationStore::new(adapter.as_ref());
+                let payload =
+                    match reserve_magic_link_attempt(&store, &identifier, options.allowed_attempts)
+                        .await?
+                    {
+                        Ok(reserved) => reserved,
+                        Err(error_code) => {
+                            return response::redirect_with_error(&error_url, error_code);
+                        }
+                    };
 
                 let (user, is_new_user) =
                     match resolve_user(adapter.as_ref(), context, &options, &payload).await {
@@ -389,6 +366,59 @@ fn validate_verify_origins(
     Ok(None)
 }
 
+const MAGIC_LINK_ATTEMPT_CAS_RETRIES: u32 = 8;
+
+async fn reserve_magic_link_attempt(
+    store: &DbVerificationStore<'_>,
+    identifier: &str,
+    allowed_attempts: AllowedAttempts,
+) -> Result<Result<VerificationPayload, &'static str>, OpenAuthError> {
+    for _ in 0..MAGIC_LINK_ATTEMPT_CAS_RETRIES {
+        let Some(verification) = store
+            .find_verification_including_expired(identifier)
+            .await?
+        else {
+            return Ok(Err("INVALID_TOKEN"));
+        };
+        if verification.expires_at <= OffsetDateTime::now_utc() {
+            store.delete_verification(identifier).await?;
+            return Ok(Err("EXPIRED_TOKEN"));
+        }
+
+        let mut payload: VerificationPayload = serde_json::from_str(&verification.value)
+            .map_err(|error| OpenAuthError::Api(format!("invalid magic link payload: {error}")))?;
+        if allowed_attempts.exceeded(payload.attempt) {
+            store.delete_verification(identifier).await?;
+            return Ok(Err("ATTEMPTS_EXCEEDED"));
+        }
+
+        if matches!(allowed_attempts, AllowedAttempts::Unlimited) {
+            return Ok(Ok(payload));
+        }
+
+        let expected_value = verification.value.clone();
+        payload.attempt = payload.attempt.saturating_add(1);
+        let new_value = serde_json::to_string(&payload)
+            .map_err(|error| OpenAuthError::Api(error.to_string()))?;
+        let Some(updated) = store
+            .compare_and_update_verification_value(
+                identifier,
+                &verification.id,
+                &expected_value,
+                new_value,
+            )
+            .await?
+        else {
+            continue;
+        };
+        let payload = serde_json::from_str(&updated.value)
+            .map_err(|error| OpenAuthError::Api(format!("invalid magic link payload: {error}")))?;
+        return Ok(Ok(payload));
+    }
+
+    Ok(Err("ATTEMPTS_EXCEEDED"))
+}
+
 async fn resolve_user(
     adapter: &dyn DbAdapter,
     context: &AuthContext,
@@ -418,49 +448,4 @@ async fn resolve_user(
     }
 
     Ok(Some((user, false)))
-}
-
-async fn find_verification(
-    adapter: &dyn DbAdapter,
-    identifier: &str,
-) -> Result<Option<Verification>, OpenAuthError> {
-    let Some(record) = adapter
-        .find_one(FindOne::new("verification").where_clause(Where::new(
-            "identifier",
-            DbValue::String(identifier.to_owned()),
-        )))
-        .await?
-    else {
-        return Ok(None);
-    };
-    verification_from_record(record).map(Some)
-}
-
-fn verification_from_record(record: DbRecord) -> Result<Verification, OpenAuthError> {
-    Ok(Verification {
-        id: string_field(&record, "id")?.to_owned(),
-        identifier: string_field(&record, "identifier")?.to_owned(),
-        value: string_field(&record, "value")?.to_owned(),
-        expires_at: timestamp_field(&record, "expires_at")?,
-        created_at: timestamp_field(&record, "created_at")?,
-        updated_at: timestamp_field(&record, "updated_at")?,
-    })
-}
-
-fn string_field<'a>(record: &'a DbRecord, field: &str) -> Result<&'a str, OpenAuthError> {
-    match record.get(field) {
-        Some(DbValue::String(value)) => Ok(value),
-        _ => Err(OpenAuthError::Adapter(format!(
-            "verification record field `{field}` must be string"
-        ))),
-    }
-}
-
-fn timestamp_field(record: &DbRecord, field: &str) -> Result<OffsetDateTime, OpenAuthError> {
-    match record.get(field) {
-        Some(DbValue::Timestamp(value)) => Ok(*value),
-        _ => Err(OpenAuthError::Adapter(format!(
-            "verification record field `{field}` must be timestamp"
-        ))),
-    }
 }
