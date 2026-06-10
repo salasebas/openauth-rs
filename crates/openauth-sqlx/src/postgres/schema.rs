@@ -10,7 +10,7 @@ use sqlx::postgres::PgRow;
 use super::errors::{inactive_transaction, sql_error};
 use super::state::PostgresExecutor;
 use super::support::sanitize_identifier;
-use crate::migration::SchemaMigrationPlan;
+use openauth_core::db::SchemaMigrationPlan;
 
 pub(super) async fn plan_migrations(
     mut executor: PostgresExecutor<'_, '_>,

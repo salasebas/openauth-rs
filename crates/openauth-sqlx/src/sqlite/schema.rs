@@ -2,7 +2,7 @@ use super::errors::{inactive_transaction, sql_error};
 use super::foreign_keys;
 use super::state::SqliteExecutor;
 use super::support::sanitize_identifier;
-use crate::migration::SchemaMigrationPlan;
+use openauth_core::db::SchemaMigrationPlan;
 use openauth_core::db::{
     plan_schema_migration, DbSchema, ForeignKey, IdGeneration, OnDelete, SqlColumnSnapshot,
     SqlDialect, SqlSchemaSnapshot,

@@ -2,7 +2,7 @@ use fred::types::Value;
 use openauth_core::error::OpenAuthError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RateLimitScriptResult {
+pub(crate) struct RateLimitScriptResult {
     pub permitted: bool,
     pub count: u64,
     pub last_request: i64,
@@ -35,7 +35,7 @@ redis.call("PEXPIRE", key, window)
 return {1, count, now}
 "#;
 
-pub fn parse_rate_limit_script_result(
+pub(crate) fn parse_rate_limit_script_result(
     value: Value,
 ) -> Result<RateLimitScriptResult, OpenAuthError> {
     let Value::Array(values) = value else {

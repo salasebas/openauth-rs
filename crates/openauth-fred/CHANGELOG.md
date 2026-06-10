@@ -2,8 +2,9 @@
 
 All notable changes to `openauth-fred` are documented in this file.
 
-## [Unreleased]
+## Unreleased
 
+## [0.1.1] - 2026-06-09
 
 ### Added
 
@@ -42,6 +43,14 @@ All notable changes to `openauth-fred` are documented in this file.
 - Fixed `FredSecondaryStorage` so `get`, `set`, and `delete` reject an empty
   `key_prefix` instead of operating at the Redis/Valkey root namespace,
   matching the validation already enforced by `list_keys` and `clear`.
+
+### Changed
+
+- **Breaking:** Removed `connect_redis` and `connect_valkey` aliases from
+  `FredRateLimitStore`, `FredSecondaryStorage`, and `FredOpenAuthStores`. Use
+  `connect`.
+- **Breaking:** Removed public `normalize_fred_url`, `parse_rate_limit_script_result`,
+  and `RateLimitScriptResult` (internal Lua plumbing).
 
 ## [0.0.6] - 2026-05-24
 

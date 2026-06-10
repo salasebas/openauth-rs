@@ -4,7 +4,7 @@ use deadpool_postgres::{Config, Pool, PoolConfig, Runtime};
 use openauth_core::error::OpenAuthError;
 use tokio_postgres::{
     tls::{MakeTlsConnect, TlsConnect},
-    Client, NoTls, Socket,
+    Client, Socket,
 };
 
 pub(crate) const DEFAULT_POOL_MAX_SIZE: usize = 16;
@@ -25,10 +25,6 @@ where
     config
         .create_pool(Some(Runtime::Tokio1), tls)
         .map_err(deadpool_error)
-}
-
-pub(crate) fn create_pool_no_tls(config: Config) -> Result<Pool, OpenAuthError> {
-    create_pool(config, NoTls)
 }
 
 pub(crate) fn pg_client(client: &deadpool_postgres::Client) -> &Client {

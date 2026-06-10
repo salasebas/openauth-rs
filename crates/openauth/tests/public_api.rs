@@ -355,12 +355,15 @@ async fn openauth_builder_uses_sqlx_rate_limit_store_with_handler_async(
     });
     let adapter = openauth_sqlx::SqliteAdapter::with_schema(pool, schema.clone());
     adapter.create_schema(&schema, None).await?;
-    let rate_limit = openauth_sqlx::SqliteRateLimitStore::from(&adapter);
+    let stores = openauth_sqlx::SqliteStores {
+        adapter: adapter.clone(),
+        rate_limit: openauth_sqlx::SqliteRateLimitStore::from(&adapter),
+    };
     let auth = OpenAuth::builder()
         .secret("secret-a-at-least-32-chars-long!!")
-        .adapter(adapter)
+        .adapter(stores.adapter)
         .rate_limit(
-            RateLimitOptions::database(rate_limit)
+            RateLimitOptions::database(stores.rate_limit)
                 .enabled(true)
                 .window(60)
                 .max(1),
@@ -473,7 +476,7 @@ fn openauth_crate_reexports_oauth_and_social_provider_packages() {
 #[cfg(feature = "sqlx")]
 #[test]
 fn openauth_crate_reexports_sqlx_adapter_package_behind_feature() {
-    let _kind = openauth::sqlx::migration::MigrationStatementKind::CreateTable;
+    let _kind = openauth::db::MigrationStatementKind::CreateTable;
 }
 
 #[cfg(feature = "sqlx-sqlite")]
@@ -493,7 +496,7 @@ fn openauth_crate_reexports_tokio_postgres_adapter_package_behind_feature() {
 #[cfg(feature = "deadpool-postgres")]
 #[test]
 fn openauth_crate_reexports_deadpool_postgres_adapter_package_behind_feature() {
-    let _constructor = openauth::deadpool_postgres::DeadpoolPostgresAdapter::connect;
+    let _constructor = openauth::deadpool_postgres::DeadpoolPostgresAdapter::builder;
 }
 
 #[cfg(feature = "plugins")]
