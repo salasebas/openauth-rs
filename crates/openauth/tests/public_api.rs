@@ -11,8 +11,8 @@ use openauth::{
     PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook,
     PluginDatabaseHookContext, PluginDatabaseOperation, PluginEndpoint, PluginEndpointHooks,
     PluginErrorCode, PluginHookMatcher, PluginInitOutput, PluginMigration, PluginRateLimitRule,
-    PluginRequestAction, PluginSchemaContribution, ProviderOptions, RateLimitConsumeInput,
-    RateLimitDecision, RateLimitFuture, RateLimitOptions, RateLimitStorageOption, RateLimitStore,
+    PluginRequestAction, PluginSchemaContribution, RateLimitConsumeInput, RateLimitDecision,
+    RateLimitFuture, RateLimitOptions, RateLimitStorageOption, RateLimitStore,
     SessionAdditionalField, SessionAuth, SessionOptions, SignOutResult, SocialOAuthProvider,
     TrustedOriginOptions, UpdateUserInput, UserOptions, VerificationEmail,
 };
@@ -355,12 +355,15 @@ async fn openauth_builder_uses_sqlx_rate_limit_store_with_handler_async(
     });
     let adapter = openauth_sqlx::SqliteAdapter::with_schema(pool, schema.clone());
     adapter.create_schema(&schema, None).await?;
-    let rate_limit = openauth_sqlx::SqliteRateLimitStore::from(&adapter);
+    let stores = openauth_sqlx::SqliteStores {
+        adapter: adapter.clone(),
+        rate_limit: openauth_sqlx::SqliteRateLimitStore::from(&adapter),
+    };
     let auth = OpenAuth::builder()
         .secret("secret-a-at-least-32-chars-long!!")
-        .adapter(adapter)
+        .adapter(stores.adapter)
         .rate_limit(
-            RateLimitOptions::database(rate_limit)
+            RateLimitOptions::database(stores.rate_limit)
                 .enabled(true)
                 .window(60)
                 .max(1),
@@ -473,7 +476,7 @@ fn openauth_crate_reexports_oauth_and_social_provider_packages() {
 #[cfg(feature = "sqlx")]
 #[test]
 fn openauth_crate_reexports_sqlx_adapter_package_behind_feature() {
-    let _kind = openauth::sqlx::migration::MigrationStatementKind::CreateTable;
+    let _kind = openauth::db::MigrationStatementKind::CreateTable;
 }
 
 #[cfg(feature = "sqlx-sqlite")]
@@ -493,7 +496,7 @@ fn openauth_crate_reexports_tokio_postgres_adapter_package_behind_feature() {
 #[cfg(feature = "deadpool-postgres")]
 #[test]
 fn openauth_crate_reexports_deadpool_postgres_adapter_package_behind_feature() {
-    let _constructor = openauth::deadpool_postgres::DeadpoolPostgresAdapter::connect;
+    let _constructor = openauth::deadpool_postgres::DeadpoolPostgresAdapter::builder;
 }
 
 #[cfg(feature = "plugins")]
@@ -518,16 +521,19 @@ fn public_api_openauth_plugins_reexport_exposes_siwe_constructor(
 }
 
 #[test]
-fn openauth_crate_accepts_social_oauth_runtime_providers() {
-    let provider: Arc<dyn SocialOAuthProvider> = Arc::new(
-        openauth::social_providers::github::github(ProviderOptions::default()),
-    );
+fn openauth_crate_accepts_social_oauth_runtime_providers() -> Result<(), Box<dyn std::error::Error>>
+{
+    let provider: Arc<dyn SocialOAuthProvider> =
+        Arc::new(openauth::social_providers::providers::github(
+            openauth::social_providers::SocialProviderConfig::new("client-id", "client-secret"),
+        )?);
     let options = OpenAuthOptions {
         social_providers: vec![provider],
         ..OpenAuthOptions::default()
     };
 
     assert_eq!(options.social_providers[0].id(), "github");
+    Ok(())
 }
 
 #[test]
@@ -565,7 +571,7 @@ async fn openauth_instance_exposes_async_handler() -> Result<(), Box<dyn std::er
 }
 
 #[test]
-fn openauth_crate_reexports_core_contract_types() {
+fn openauth_crate_reexports_core_contract_types() -> Result<(), Box<dyn std::error::Error>> {
     fn _uses_api_request(_request: ApiRequest) {}
     fn _uses_api_response(_response: ApiResponse) {}
     fn _uses_error(_error: OpenAuthError) {}
@@ -577,9 +583,10 @@ fn openauth_crate_reexports_core_contract_types() {
         message: "test".to_owned(),
         original_message: None,
     };
-    let provider: Arc<dyn SocialOAuthProvider> = Arc::new(
-        openauth::social_providers::github::github(ProviderOptions::default()),
-    );
+    let provider: Arc<dyn SocialOAuthProvider> =
+        Arc::new(openauth::social_providers::providers::github(
+            openauth::social_providers::SocialProviderConfig::new("client-id", "client-secret"),
+        )?);
     let _plugin = AuthPlugin::new("test-plugin").with_social_provider(provider.clone());
     let _plugin_endpoint_type: Option<PluginEndpoint> = None;
     let _plugin_init = PluginInitOutput::new().social_provider(provider);
@@ -667,6 +674,7 @@ fn openauth_crate_reexports_core_contract_types() {
         success: true,
         cookies: Vec::new(),
     };
+    Ok(())
 }
 
 #[tokio::test]

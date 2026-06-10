@@ -14,8 +14,8 @@ use openauth_core::auth::oauth::{
 use openauth_core::context::AuthContext;
 use openauth_core::cookies::parse_cookies;
 use openauth_oauth::oauth2::{
-    validate_authorization_code_with_client, AuthorizationCodeRequest, ClientAuthentication,
-    ClientId, ClientTokenRequest, OAuth2Tokens, ProviderOptions,
+    exchange_authorization_code, AuthorizationCodeRequest, ClientAuthentication, ClientId,
+    ClientSecret as OAuthClientSecret, OAuth2Tokens, ProviderOptions,
 };
 use openidconnect::core::{CoreIdToken, CoreIdTokenVerifier, CoreJsonWebKeySet};
 use openidconnect::{
@@ -143,21 +143,19 @@ async fn callback(
     if ensure_oidc_endpoint_allowed(&token_endpoint, allow_private_ips).is_err() {
         return redirect_with_error(&error_url, "invalid_oidc_config");
     }
-    let tokens = match validate_authorization_code_with_client(
-        ClientTokenRequest {
-            token_endpoint,
-            request: AuthorizationCodeRequest {
-                code,
-                redirect_uri: oidc_redirect_uri(&context.base_url, &provider.provider_id, options),
-                options: ProviderOptions {
-                    client_id: Some(ClientId::Single(config.client_id.clone())),
-                    client_secret: Some(config.client_secret.expose_secret().to_owned()),
-                    ..ProviderOptions::default()
-                },
-                code_verifier: config.pkce.then_some(state_data.code_verifier.clone()),
-                authentication: oidc_client_authentication(&config),
-                ..AuthorizationCodeRequest::default()
+    let tokens = match exchange_authorization_code(
+        &token_endpoint,
+        AuthorizationCodeRequest {
+            code,
+            redirect_uri: oidc_redirect_uri(&context.base_url, &provider.provider_id, options),
+            options: ProviderOptions {
+                client_id: Some(ClientId::Single(config.client_id.clone())),
+                client_secret: OAuthClientSecret::new(config.client_secret.expose_secret()).ok(),
+                ..ProviderOptions::default()
             },
+            code_verifier: config.pkce.then_some(state_data.code_verifier.clone()),
+            authentication: oidc_client_authentication(&config),
+            ..AuthorizationCodeRequest::default()
         },
         utils::oauth_http_client(allow_private_ips),
     )

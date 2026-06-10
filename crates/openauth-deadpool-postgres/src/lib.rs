@@ -5,15 +5,12 @@
 //! planning plus `openauth-tokio-postgres` driver helpers.
 
 mod adapter;
+mod builder;
 mod config;
-pub mod migration;
 mod rate_limit;
 mod transaction;
 mod tx_guard;
 
 pub use self::adapter::DeadpoolPostgresAdapter;
-pub use self::migration::{
-    ColumnToAdd, IndexToCreate, MigrationStatement, MigrationStatementKind, SchemaMigrationPlan,
-    SchemaMigrationWarning, TableToCreate,
-};
+pub use self::builder::{DeadpoolPostgresBuilder, DeadpoolPostgresStores};
 pub use self::rate_limit::DeadpoolPostgresRateLimitStore;

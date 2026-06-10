@@ -5,15 +5,12 @@ use std::collections::BTreeMap;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, get_primary_client_id,
-    refresh_access_token, refresh_access_token_request, validate_authorization_code,
-    validate_token_with_client, AuthorizationCodeRequest, AuthorizationUrlRequest,
-    ClientAuthentication, ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError,
-    OAuthFormRequest, OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
-    TokenValidationOptions,
+    validate_token, OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
+    TokenValidationOptions, ValidateTokenOptions,
 };
 
 use crate::http::ValidationHttpClient;
+use crate::runtime::ProviderIdentity;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
@@ -147,16 +144,18 @@ pub struct MicrosoftEntraIdUserInfo {
 
 #[derive(Debug, Clone)]
 pub struct MicrosoftEntraIdProvider {
-    options: MicrosoftEntraIdOptions,
+    client: OAuth2Client,
+    profile_photo_size: MicrosoftEntraIdPhotoSize,
+    disable_profile_photo: bool,
     tenant: String,
     authority: String,
-    authorization_endpoint: String,
-    token_endpoint: String,
     jwks_endpoint: String,
     validation_http_client: ValidationHttpClient,
 }
 
-pub fn microsoft_entra_id(options: MicrosoftEntraIdOptions) -> MicrosoftEntraIdProvider {
+pub fn microsoft_entra_id(
+    options: MicrosoftEntraIdOptions,
+) -> Result<MicrosoftEntraIdProvider, OAuthError> {
     MicrosoftEntraIdProvider::new(options)
 }
 
@@ -183,26 +182,55 @@ impl MicrosoftEntraIdProfile {
 }
 
 impl MicrosoftEntraIdProvider {
-    pub fn new(options: MicrosoftEntraIdOptions) -> Self {
+    pub fn new(options: MicrosoftEntraIdOptions) -> Result<Self, OAuthError> {
         let tenant = normalize_tenant(options.tenant_id.as_deref());
         let authority = normalize_authority(options.authority.as_deref());
         let authorization_endpoint = format!("{authority}/{tenant}/oauth2/v2.0/authorize");
         let token_endpoint = format!("{authority}/{tenant}/oauth2/v2.0/token");
         let jwks_endpoint = format!("{authority}/{tenant}/discovery/v2.0/keys");
+        let MicrosoftEntraIdOptions {
+            oauth,
+            profile_photo_size,
+            disable_profile_photo,
+            ..
+        } = options;
+        let disable_default_scope = oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(MICROSOFT_ENTRA_ID_ID, oauth)
+            .authorization_endpoint(authorization_endpoint)?
+            .token_endpoint(token_endpoint)?;
+        if !disable_default_scope {
+            builder = builder.default_scopes([
+                "openid",
+                "profile",
+                "email",
+                "User.Read",
+                "offline_access",
+            ]);
+        }
 
-        Self {
-            options,
+        Ok(Self {
+            client: builder.build()?,
+            profile_photo_size,
+            disable_profile_photo,
             tenant,
             authority,
-            authorization_endpoint,
-            token_endpoint,
             jwks_endpoint,
             validation_http_client: ValidationHttpClient::shared(),
-        }
+        })
     }
 
-    pub fn options(&self) -> &MicrosoftEntraIdOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
+    }
+
+    pub fn microsoft_options(&self) -> MicrosoftEntraIdOptions {
+        MicrosoftEntraIdOptions {
+            oauth: self.options(),
+            tenant_id: Some(self.tenant.clone()),
+            authority: Some(self.authority.clone()),
+            profile_photo_size: self.profile_photo_size,
+            disable_profile_photo: self.disable_profile_photo,
+        }
     }
 
     /// Overrides the HTTP client used for JWKS and ID-token validation.
@@ -212,11 +240,11 @@ impl MicrosoftEntraIdProvider {
     }
 
     pub fn authorization_endpoint(&self) -> &str {
-        &self.authorization_endpoint
+        self.client.authorization_endpoint().as_str()
     }
 
     pub fn token_endpoint(&self) -> &str {
-        &self.token_endpoint
+        self.client.token_endpoint().as_str()
     }
 
     pub fn jwks_endpoint(&self) -> &str {
@@ -227,97 +255,44 @@ impl MicrosoftEntraIdProvider {
         &self,
         input: MicrosoftEntraIdAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        if get_primary_client_id(&self.options.oauth.client_id).is_none() {
-            return Err(OAuthError::MissingOption("client_id"));
+        let mut url = self
+            .client
+            .authorization_url(input.state, input.redirect_uri)?;
+        if let Some(code_verifier) = input.code_verifier {
+            url = url.code_verifier(code_verifier);
         }
-
-        let mut scopes = self.scopes();
-        scopes.extend(input.scopes);
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: MICROSOFT_ENTRA_ID_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: self.authorization_endpoint.clone(),
-            redirect_uri: input.redirect_uri,
-            state: input.state,
-            code_verifier: input.code_verifier,
-            scopes,
-            prompt: self.options.oauth.prompt.clone(),
-            login_hint: input.login_hint,
-            ..AuthorizationUrlRequest::default()
-        })
-    }
-
-    pub fn authorization_code_request(
-        &self,
-        input: MicrosoftEntraIdAuthorizationCodeRequest,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: input.code,
-            redirect_uri: input.redirect_uri,
-            options: self.options.oauth.clone(),
-            code_verifier: input.code_verifier,
-            device_id: input.device_id,
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        if let Some(login_hint) = input.login_hint {
+            url = url.login_hint(login_hint);
+        }
+        if let Some(prompt) = self.client.options().prompt.clone() {
+            url = url.prompt(prompt);
+        }
+        url.scopes(input.scopes).build()
     }
 
     pub async fn validate_authorization_code(
         &self,
         input: MicrosoftEntraIdAuthorizationCodeRequest,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: self.token_endpoint.clone(),
-            request: AuthorizationCodeRequest {
-                code: input.code,
-                redirect_uri: input.redirect_uri,
-                options: self.options.oauth.clone(),
-                code_verifier: input.code_verifier,
-                device_id: input.device_id,
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
-    }
-
-    pub fn refresh_access_token_request(
-        &self,
-        refresh_token: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: ProviderOptions {
-                client_id: self.options.oauth.client_id.clone(),
-                client_secret: self.options.oauth.client_secret.clone(),
-                ..ProviderOptions::default()
-            },
-            authentication: ClientAuthentication::Post,
-            extra_params: BTreeMap::from([("scope".to_owned(), self.scopes().join(" "))]),
-            ..RefreshAccessTokenRequest::default()
-        })
+        let mut exchange = self.client.exchange_code(input.code, input.redirect_uri)?;
+        if let Some(code_verifier) = input.code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        if let Some(device_id) = input.device_id {
+            exchange = exchange.device_id(device_id);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: self.token_endpoint.clone(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: ProviderOptions {
-                    client_id: self.options.oauth.client_id.clone(),
-                    client_secret: self.options.oauth.client_secret.clone(),
-                    ..ProviderOptions::default()
-                },
-                authentication: ClientAuthentication::Post,
-                extra_params: BTreeMap::from([("scope".to_owned(), self.scopes().join(" "))]),
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client
+            .refresh_token(refresh_token)?
+            .extra_param("scope", self.scopes().join(" "))
+            .send()
+            .await
     }
 
     pub async fn verify_id_token(
@@ -335,7 +310,7 @@ impl MicrosoftEntraIdProvider {
         nonce: Option<&str>,
         jwks_url: &str,
     ) -> Result<bool, OAuthError> {
-        if self.options.oauth.disable_id_token_sign_in {
+        if self.client.options().disable_id_token_sign_in {
             return Ok(false);
         }
 
@@ -347,15 +322,18 @@ impl MicrosoftEntraIdProvider {
         let expected_issuers = self.expected_issuers();
         let validate_multitenant_issuer = expected_issuers.is_empty();
 
-        let result = match validate_token_with_client(
+        let result = match validate_token(
             token,
             jwks_url,
-            TokenValidationOptions {
-                audience: audiences,
-                issuer: expected_issuers,
-                ..TokenValidationOptions::default().require_standard_claims()
+            ValidateTokenOptions {
+                validation: TokenValidationOptions {
+                    audience: audiences,
+                    issuer: expected_issuers,
+                    ..TokenValidationOptions::default().require_standard_claims()
+                },
+                http: Some(self.validation_http_client.inner().clone()),
+                ..ValidateTokenOptions::default()
             },
-            self.validation_http_client.inner(),
         )
         .await
         {
@@ -402,7 +380,7 @@ impl MicrosoftEntraIdProvider {
             return Ok(None);
         };
 
-        if !self.options.disable_profile_photo {
+        if !self.disable_profile_photo {
             if let Some(access_token) = token.access_token.as_deref() {
                 if let Some(picture) = self
                     .fetch_profile_photo(access_token, MICROSOFT_ENTRA_ID_GRAPH_PHOTO_BASE_URL)
@@ -418,7 +396,7 @@ impl MicrosoftEntraIdProvider {
     }
 
     fn scopes(&self) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
+        let mut scopes = if self.client.options().disable_default_scope {
             Vec::new()
         } else {
             ["openid", "profile", "email", "User.Read", "offline_access"]
@@ -426,12 +404,12 @@ impl MicrosoftEntraIdProvider {
                 .map(str::to_owned)
                 .collect()
         };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
+        scopes.extend(self.client.options().scope.iter().cloned());
         scopes
     }
 
     fn client_id_audiences(&self) -> Vec<String> {
-        match &self.options.oauth.client_id {
+        match &self.client.options().client_id {
             Some(openauth_oauth::oauth2::ClientId::Single(value)) if !value.is_empty() => {
                 vec![value.clone()]
             }
@@ -481,7 +459,7 @@ impl MicrosoftEntraIdProvider {
     }
 
     async fn fetch_profile_photo(&self, access_token: &str, base_url: &str) -> Option<String> {
-        let size = self.options.profile_photo_size.as_u16();
+        let size = self.profile_photo_size.as_u16();
         let base_url = base_url.trim_end_matches('/');
         let url = format!("{base_url}/{size}x{size}/$value");
         let response = crate::http::shared_client()
@@ -501,7 +479,7 @@ impl MicrosoftEntraIdProvider {
     }
 }
 
-impl OAuthProviderContract for MicrosoftEntraIdProvider {
+impl ProviderIdentity for MicrosoftEntraIdProvider {
     fn id(&self) -> &str {
         MICROSOFT_ENTRA_ID_ID
     }
@@ -568,14 +546,20 @@ where
 )]
 mod tests {
     use super::*;
+    use openauth_oauth::oauth2::ClientId;
 
     #[tokio::test]
     async fn fetch_profile_photo_returns_data_url_when_graph_photo_is_available() {
         let server = BinaryServer::spawn(b"fake-jpeg".to_vec(), 200);
         let provider = MicrosoftEntraIdProvider::new(MicrosoftEntraIdOptions {
+            oauth: ProviderOptions {
+                client_id: Some(ClientId::from("test-client")),
+                ..ProviderOptions::default()
+            },
             profile_photo_size: MicrosoftEntraIdPhotoSize::Size64,
             ..MicrosoftEntraIdOptions::default()
-        });
+        })
+        .expect("provider should build");
 
         let picture = provider
             .fetch_profile_photo("access-token", &server.url())

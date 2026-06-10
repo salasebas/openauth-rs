@@ -5,8 +5,8 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{ClientId, OAuthProviderContract, ProviderOptions};
-use openauth_social_providers::notion::{
+use openauth_oauth::oauth2::{ClientId, ClientSecret, ProviderOptions};
+use openauth_social_providers::advanced::notion::{
     NotionAuthorizationUrlRequest, NotionOwner, NotionOwnerUser, NotionPerson, NotionProfile,
     NotionProvider, NotionUserInfoResponse,
 };
@@ -16,7 +16,8 @@ fn notion_provider_exposes_upstream_metadata() {
     let provider = NotionProvider::new(ProviderOptions {
         client_id: Some(ClientId::from("notion-client")),
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(provider.id(), "notion");
     assert_eq!(provider.name(), "Notion");
@@ -28,7 +29,8 @@ fn notion_authorization_url_uses_owner_user_and_no_default_scope() {
         client_id: Some(ClientId::from("notion-client")),
         scope: vec!["workspace.content".to_owned()],
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(NotionAuthorizationUrlRequest {
@@ -69,7 +71,8 @@ fn notion_authorization_url_omits_scope_when_no_scopes_are_configured() {
     let provider = NotionProvider::new(ProviderOptions {
         client_id: Some(ClientId::from("notion-client")),
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(NotionAuthorizationUrlRequest {
@@ -86,9 +89,10 @@ fn notion_authorization_url_omits_scope_when_no_scopes_are_configured() {
 fn notion_authorization_code_request_uses_basic_auth() {
     let provider = NotionProvider::new(ProviderOptions {
         client_id: Some(ClientId::from("notion-client")),
-        client_secret: Some("notion-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("notion-secret").expect("valid client secret")),
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let request = provider
         .authorization_code_request("auth-code", "https://app.example.com/callback/notion")
@@ -112,9 +116,10 @@ fn notion_authorization_code_request_uses_basic_auth() {
 fn notion_refresh_token_request_uses_post_auth_like_upstream_helper_default() {
     let provider = NotionProvider::new(ProviderOptions {
         client_id: Some(ClientId::from("notion-client")),
-        client_secret: Some("notion-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("notion-secret").expect("valid client secret")),
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let request = provider
         .refresh_access_token_request("refresh-token")

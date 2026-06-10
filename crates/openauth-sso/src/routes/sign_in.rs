@@ -18,7 +18,7 @@ use openauth_core::crypto::random::generate_random_string;
 use openauth_core::db::DbAdapter;
 #[cfg(feature = "oidc")]
 use openauth_oauth::oauth2::{
-    create_authorization_url, AuthorizationUrlRequest, ClientId, ProviderOptions,
+    create_authorization_url, AuthorizationUrlRequest, ClientId, ClientSecret, ProviderOptions,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -239,7 +239,8 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                         id: provider.issuer,
                         options: ProviderOptions {
                             client_id: Some(ClientId::Single(config.client_id)),
-                            client_secret: Some(config.client_secret.into_inner()),
+                            client_secret: ClientSecret::new(config.client_secret.expose_secret())
+                                .ok(),
                             ..ProviderOptions::default()
                         },
                         authorization_endpoint,

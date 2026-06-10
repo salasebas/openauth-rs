@@ -18,7 +18,7 @@ use crate::schema::{
 };
 use crate::transaction::TokioPostgresTxAdapter;
 use crate::tx_guard::SharedClientRollbackGuard;
-use crate::SchemaMigrationPlan;
+use openauth_core::db::SchemaMigrationPlan;
 
 #[derive(Clone)]
 pub struct TokioPostgresAdapter {

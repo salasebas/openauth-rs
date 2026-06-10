@@ -13,7 +13,6 @@ mod url;
 pub use bundle::{RedisOpenAuthOptions, RedisOpenAuthStores};
 pub use rate_limit::{RedisRateLimitOptions, RedisRateLimitStore};
 pub use secondary::{RedisSecondaryStorage, RedisSecondaryStorageOptions};
-pub use url::normalize_redis_url;
 
 /// Current crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -21,7 +20,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) async fn connect_manager(
     redis_url: &str,
 ) -> Result<redis::aio::ConnectionManager, openauth_core::error::OpenAuthError> {
-    let redis_url = normalize_redis_url(redis_url);
+    let redis_url = url::normalize_redis_url(redis_url);
     let client = redis::Client::open(redis_url.as_ref())
         .map_err(|error| openauth_core::error::OpenAuthError::Adapter(error.to_string()))?;
     redis::aio::ConnectionManager::new(client)
@@ -36,11 +35,11 @@ mod tests {
     #[test]
     fn normalizes_valkey_urls_to_redis_urls() {
         assert_eq!(
-            normalize_redis_url("valkey://localhost:6379").as_ref(),
+            url::normalize_redis_url("valkey://localhost:6379").as_ref(),
             "redis://localhost:6379"
         );
         assert_eq!(
-            normalize_redis_url("valkeys://localhost:6380").as_ref(),
+            url::normalize_redis_url("valkeys://localhost:6380").as_ref(),
             "rediss://localhost:6380"
         );
     }
@@ -48,15 +47,15 @@ mod tests {
     #[test]
     fn leaves_non_valkey_urls_unchanged() {
         assert_eq!(
-            normalize_redis_url("redis://localhost:6379").as_ref(),
+            url::normalize_redis_url("redis://localhost:6379").as_ref(),
             "redis://localhost:6379"
         );
         assert_eq!(
-            normalize_redis_url("rediss://localhost:6380").as_ref(),
+            url::normalize_redis_url("rediss://localhost:6380").as_ref(),
             "rediss://localhost:6380"
         );
         assert_eq!(
-            normalize_redis_url("unix:///tmp/redis.sock").as_ref(),
+            url::normalize_redis_url("unix:///tmp/redis.sock").as_ref(),
             "unix:///tmp/redis.sock"
         );
     }
@@ -102,7 +101,7 @@ mod tests {
     #[test]
     fn tls_urls_open_as_tls_connections() -> Result<(), redis::RedisError> {
         for url in ["rediss://localhost:6379", "valkeys://localhost:6380"] {
-            let client = redis::Client::open(normalize_redis_url(url).as_ref())?;
+            let client = redis::Client::open(url::normalize_redis_url(url).as_ref())?;
             assert!(
                 matches!(
                     client.get_connection_info().addr,

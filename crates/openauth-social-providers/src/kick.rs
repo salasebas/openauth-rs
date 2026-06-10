@@ -1,21 +1,18 @@
 //! Kick social OAuth provider.
 
 use openauth_oauth::oauth2::{
-    create_authorization_code_request, create_authorization_url,
-    create_refresh_access_token_request, refresh_access_token, validate_authorization_code,
-    AuthorizationCodeRequest, AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest,
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract,
-    ProviderOptions, RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const KICK_ID: &str = "kick";
 pub const KICK_NAME: &str = "Kick";
 pub const KICK_AUTHORIZATION_ENDPOINT: &str = "https://id.kick.com/oauth/authorize";
 pub const KICK_TOKEN_ENDPOINT: &str = "https://id.kick.com/oauth/token";
 pub const KICK_USER_INFO_ENDPOINT: &str = "https://api.kick.com/public/v1/users";
-
 const DEFAULT_SCOPES: &[&str] = &["user:read"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,20 +39,29 @@ pub struct KickAuthorizationUrlRequest {
 
 #[derive(Debug, Clone)]
 pub struct KickProvider {
-    options: ProviderOptions,
+    client: OAuth2Client,
 }
 
 impl KickProvider {
-    pub fn new(options: ProviderOptions) -> Self {
-        Self { options }
+    pub fn new(options: ProviderOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.disable_default_scope;
+        let mut builder = OAuth2Client::builder("kick", options)
+            .authorization_endpoint(KICK_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(KICK_TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
+        }
+        Ok(Self {
+            client: builder.build()?,
+        })
     }
 
-    pub fn options(&self) -> &ProviderOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn token_endpoint(&self) -> &str {
-        KICK_TOKEN_ENDPOINT
+        self.client.token_endpoint().as_str()
     }
 
     pub fn user_info_endpoint(&self) -> &str {
@@ -66,23 +72,13 @@ impl KickProvider {
         &self,
         input: KickAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        let mut scopes = Vec::new();
-        if !self.options.disable_default_scope {
-            scopes.extend(DEFAULT_SCOPES.iter().map(|scope| (*scope).to_owned()));
+        let mut url = self
+            .client
+            .authorization_url(input.state, input.redirect_uri)?;
+        if let Some(code_verifier) = input.code_verifier {
+            url = url.code_verifier(code_verifier);
         }
-        scopes.extend(self.options.scope.iter().cloned());
-        scopes.extend(input.scopes);
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: self.id().to_owned(),
-            options: self.options.clone(),
-            authorization_endpoint: KICK_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: input.redirect_uri,
-            state: input.state,
-            code_verifier: input.code_verifier,
-            scopes,
-            ..AuthorizationUrlRequest::default()
-        })
+        url.scopes(input.scopes).build()
     }
 
     pub fn create_authorization_code_request(
@@ -91,26 +87,20 @@ impl KickProvider {
         code_verifier: Option<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        create_authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.clone(),
-            code_verifier,
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.into_form_request()
     }
 
     pub fn refresh_access_token_request(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        create_refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token_value.into(),
-            options: self.options.clone(),
-            authentication: ClientAuthentication::Post,
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .refresh_token(refresh_token_value)?
+            .into_form_request()
     }
 
     pub async fn validate_authorization_code(
@@ -119,34 +109,18 @@ impl KickProvider {
         code_verifier: Option<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: KICK_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.clone(),
-                code_verifier,
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: KICK_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token_value.into(),
-                options: self.options.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token_value)?.send().await
     }
 
     pub async fn get_user_info(
@@ -193,19 +167,27 @@ impl KickProvider {
             data: profile,
         })
     }
-}
 
-impl OAuthProviderContract for KickProvider {
-    fn id(&self) -> &str {
+    pub fn id(&self) -> &str {
         KICK_ID
     }
 
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         KICK_NAME
     }
 }
 
-pub fn kick(options: ProviderOptions) -> KickProvider {
+impl ProviderIdentity for KickProvider {
+    fn id(&self) -> &str {
+        self.id()
+    }
+
+    fn name(&self) -> &str {
+        self.name()
+    }
+}
+
+pub fn kick(options: ProviderOptions) -> Result<KickProvider, OAuthError> {
     KickProvider::new(options)
 }
 

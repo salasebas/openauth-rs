@@ -50,6 +50,23 @@ impl OAuthJwksCacheConfig {
     }
 }
 
+/// Options for [`verify_jws_access_token`].
+#[derive(Debug, Clone, Default)]
+pub struct JwksVerifyOptions {
+    pub verify_options: TokenValidationOptions,
+    pub cache: OAuthJwksCacheConfig,
+    pub http: Option<OAuthHttpClient>,
+}
+
+impl JwksVerifyOptions {
+    pub fn new(verify_options: TokenValidationOptions) -> Self {
+        Self {
+            verify_options,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CachedJwks {
     jwks: JwkSet,
@@ -57,13 +74,17 @@ struct CachedJwks {
 }
 
 pub async fn get_jwks(jwks_url: &str) -> Result<JwkSet, OAuthError> {
-    get_jwks_with_client(jwks_url, &default_http_client()?).await
+    get_jwks_with_http(jwks_url, None).await
 }
 
-pub async fn get_jwks_with_client(
+pub async fn get_jwks_with_http(
     jwks_url: &str,
-    client: &OAuthHttpClient,
+    http: Option<&OAuthHttpClient>,
 ) -> Result<JwkSet, OAuthError> {
+    let client = match http {
+        Some(client) => client,
+        None => &default_http_client()?,
+    };
     let bytes = client.get_bytes(jwks_url).await?;
     JwkSet::from_bytes(bytes).map_err(Into::into)
 }
@@ -71,58 +92,14 @@ pub async fn get_jwks_with_client(
 pub async fn verify_jws_access_token(
     token: &str,
     jwks_url: &str,
-    verify_options: TokenValidationOptions,
+    options: JwksVerifyOptions,
 ) -> Result<TokenValidationResult, OAuthError> {
-    verify_jws_access_token_with_cache_config(
-        token,
-        jwks_url,
-        verify_options,
-        OAuthJwksCacheConfig::default(),
-    )
-    .await
-}
-
-pub async fn verify_jws_access_token_with_cache_config(
-    token: &str,
-    jwks_url: &str,
-    verify_options: TokenValidationOptions,
-    cache_config: OAuthJwksCacheConfig,
-) -> Result<TokenValidationResult, OAuthError> {
-    verify_jws_access_token_with_client_and_cache_config(
-        token,
-        jwks_url,
-        verify_options,
-        &default_http_client()?,
-        cache_config,
-    )
-    .await
-}
-
-pub async fn verify_jws_access_token_with_client(
-    token: &str,
-    jwks_url: &str,
-    verify_options: TokenValidationOptions,
-    client: &OAuthHttpClient,
-) -> Result<TokenValidationResult, OAuthError> {
-    verify_jws_access_token_with_client_and_cache_config(
-        token,
-        jwks_url,
-        verify_options,
-        client,
-        OAuthJwksCacheConfig::default(),
-    )
-    .await
-}
-
-pub async fn verify_jws_access_token_with_client_and_cache_config(
-    token: &str,
-    jwks_url: &str,
-    verify_options: TokenValidationOptions,
-    client: &OAuthHttpClient,
-    cache_config: OAuthJwksCacheConfig,
-) -> Result<TokenValidationResult, OAuthError> {
-    let jwks = get_cached_jwks_for_token(token, jwks_url, client, cache_config).await?;
-    let mut result = verify_jws_with_jwks(token, &jwks, &verify_options)?;
+    let client = match options.http.as_ref() {
+        Some(client) => client,
+        None => &default_http_client()?,
+    };
+    let jwks = get_cached_jwks_for_token(token, jwks_url, client, options.cache).await?;
+    let mut result = verify_jws_with_jwks(token, &jwks, &options.verify_options)?;
     map_azp_to_client_id(&mut result.payload);
     Ok(result)
 }
@@ -165,7 +142,7 @@ pub(crate) async fn get_cached_jwks_for_token(
             return Ok(cached);
         }
     }
-    let jwks = get_jwks_with_client(jwks_url, client).await?;
+    let jwks = get_jwks_with_http(jwks_url, Some(client)).await?;
     cache_jwks(jwks_url, &jwks, cache_config)?;
     Ok(jwks)
 }

@@ -77,6 +77,33 @@ let auth = OpenAuth::builder()
 When configuring [`OpenAuthOptions`](https://docs.rs/openauth-core/latest/openauth_core/options/struct.OpenAuthOptions.html)
 directly, `.plugins(vec![...])` replaces the entire plugin list instead.
 
+## Social Sign-In
+
+Built-in OAuth providers live in [`openauth-social-providers`](../openauth-social-providers/README.md)
+and are re-exported as `openauth::social_providers`. Register providers on the
+builder:
+
+```rust
+use openauth::OpenAuth;
+use openauth::social_providers::providers::github;
+use openauth::social_providers::SocialProviderConfig;
+
+let auth = OpenAuth::builder()
+    .secret("secret-a-at-least-32-chars-long!!")
+    .base_url("https://app.example.com/api/auth")
+    .social_provider(github(SocialProviderConfig::new(
+        std::env::var("GITHUB_CLIENT_ID")?,
+        std::env::var("GITHUB_CLIENT_SECRET")?,
+    ))?)
+    .build()?;
+# let _ = auth;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Use `SocialProviderConfig::builder()` when credentials or scopes are loaded in
+separate steps. Low-level provider types remain under
+`openauth::social_providers::advanced`.
+
 ## Feature Flags
 
 - `i18n`: re-export `openauth-i18n`.

@@ -10,13 +10,13 @@ use openauth_core::db::{
     DbSchema, DbTable, DbValue, DeleteMany, FindMany, FindOne, ForeignKey, IdGeneration, IdPolicy,
     OnDelete, RateLimitStorage, SqlRateLimitNames, TableOptions, Update, Where, WhereOperator,
 };
+use openauth_core::db::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     AdvancedOptions, OpenAuthOptions, RateLimitConsumeInput, RateLimitRule, RateLimitStore,
     UserAdditionalField, UserOptions,
 };
 use openauth_core::test_utils::fast_verify_password;
-use openauth_deadpool_postgres::migration::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_deadpool_postgres::{DeadpoolPostgresAdapter, DeadpoolPostgresRateLimitStore};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -59,8 +59,11 @@ fn database_url_allows_postgres_env_override() {
 
 async fn adapter() -> Result<DeadpoolPostgresAdapter, OpenAuthError> {
     let schema = test_schema();
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
     adapter.create_schema(&schema, None).await?;
     Ok(adapter)
 }
@@ -71,7 +74,11 @@ async fn single_connection_adapter() -> Result<DeadpoolPostgresAdapter, OpenAuth
     let schema = test_schema();
     let mut config = Config::new();
     config.url = Some(database_url());
-    let adapter = DeadpoolPostgresAdapter::from_config_with_schema(config, schema.clone(), 1)?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .config(config)
+        .schema(schema.clone())
+        .max_size(1)
+        .build_adapter()?;
     adapter.create_schema(&schema, None).await?;
     Ok(adapter)
 }
@@ -124,7 +131,11 @@ async fn deadpool_postgres_adapter_reports_public_capabilities() -> Result<(), O
 #[tokio::test]
 async fn deadpool_postgres_adapter_validate_connection_checks_out_pool() -> Result<(), OpenAuthError>
 {
-    let adapter = DeadpoolPostgresAdapter::connect_checked(&database_url()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .checked(true)
+        .connect()
+        .await?;
 
     adapter.validate_connection().await
 }
@@ -132,8 +143,11 @@ async fn deadpool_postgres_adapter_validate_connection_checks_out_pool() -> Resu
 #[tokio::test]
 async fn deadpool_postgres_adapter_plans_and_runs_migrations() -> Result<(), OpenAuthError> {
     let schema = test_schema();
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
 
     let plan = adapter.plan_migrations(&schema).await?;
 
@@ -152,7 +166,11 @@ async fn deadpool_postgres_adapter_reports_missing_database_pool_errors(
 ) -> Result<(), OpenAuthError> {
     let missing_database = format!("missing_{}", unique_prefix());
     let url = format!("postgres://user:password@localhost:5432/{missing_database}");
-    let adapter = DeadpoolPostgresAdapter::connect_with_schema(&url, test_schema()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(url)
+        .schema(test_schema())
+        .connect()
+        .await?;
 
     let error = match adapter.plan_migrations(&test_schema()).await {
         Ok(_) => {
@@ -176,7 +194,12 @@ async fn deadpool_postgres_adapter_connect_checked_reports_missing_database_pool
     let missing_database = format!("missing_{}", unique_prefix());
     let url = format!("postgres://user:password@localhost:5432/{missing_database}");
 
-    let error = match DeadpoolPostgresAdapter::connect_checked(&url).await {
+    let error = match DeadpoolPostgresAdapter::builder()
+        .database_url(url)
+        .checked(true)
+        .connect()
+        .await
+    {
         Ok(_) => {
             return Err(OpenAuthError::Adapter(
                 "checked connection should fail for missing database".to_owned(),
@@ -200,8 +223,11 @@ async fn deadpool_postgres_adapter_returns_database_generated_uuid_ids() -> Resu
         rate_limit_storage: RateLimitStorage::Database,
         ..prefixed_options(&prefix)
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
     adapter.create_schema(&schema, None).await?;
 
     conformance::assert_returns_database_generated_uuid_ids(
@@ -222,8 +248,11 @@ async fn deadpool_postgres_adapter_supports_forced_uuid_ids() -> Result<(), Open
         rate_limit_storage: RateLimitStorage::Database,
         ..prefixed_options(&prefix)
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
     adapter.create_schema(&schema, None).await?;
 
     conformance::assert_supports_forced_uuid_ids(
@@ -243,8 +272,11 @@ async fn deadpool_postgres_adapter_returns_database_generated_serial_ids(
         rate_limit_storage: RateLimitStorage::Database,
         ..prefixed_options(&prefix)
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
 
     let sql = adapter.compile_migrations(&schema).await?;
     assert!(sql.contains("GENERATED BY DEFAULT AS IDENTITY"));
@@ -276,8 +308,11 @@ async fn deadpool_postgres_adapter_reports_additive_migration_plan() -> Result<(
         rate_limit_storage: RateLimitStorage::Database,
         ..prefixed_options(&prefix)
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), initial.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(initial.clone())
+        .connect()
+        .await?;
     adapter.create_schema(&initial, None).await?;
 
     let updated = auth_schema(AuthSchemaOptions {
@@ -317,8 +352,11 @@ async fn deadpool_postgres_adapter_plan_migrations_reports_empty_database_tables
         rate_limit_storage: RateLimitStorage::Database,
         ..prefixed_options(&prefix)
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
 
     let plan = adapter.plan_migrations(&schema).await?;
     let table_names = plan
@@ -348,8 +386,11 @@ async fn deadpool_postgres_adapter_plan_migrations_reports_plugin_columns_indexe
         rate_limit_storage: RateLimitStorage::Database,
         ..prefixed_options(&prefix)
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), base_schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(base_schema.clone())
+        .connect()
+        .await?;
     adapter.run_migrations(&base_schema).await?;
 
     let mut plugin_schema = base_schema.clone();
@@ -381,8 +422,11 @@ async fn deadpool_postgres_adapter_plan_migrations_reports_plugin_columns_indexe
 async fn deadpool_postgres_adapter_compile_migrations_returns_semicolon_for_noop(
 ) -> Result<(), OpenAuthError> {
     let schema = test_schema();
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
     adapter.run_migrations(&schema).await?;
 
     assert_eq!(adapter.compile_migrations(&schema).await?, ";");
@@ -397,8 +441,11 @@ async fn deadpool_postgres_adapter_run_migrations_adds_plugin_columns_to_existin
         rate_limit_storage: RateLimitStorage::Database,
         ..prefixed_options(&prefix)
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), base_schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(base_schema.clone())
+        .connect()
+        .await?;
     adapter.run_migrations(&base_schema).await?;
 
     let mut plugin_schema = base_schema.clone();
@@ -476,8 +523,11 @@ async fn deadpool_postgres_adapter_run_migrations_creates_plugin_tables_with_ind
             order: Some(5),
         },
     )?;
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
 
     adapter.run_migrations(&schema).await?;
 
@@ -533,8 +583,11 @@ async fn deadpool_postgres_adapter_uses_physical_names_from_auth_schema(
         rate_limit_storage: RateLimitStorage::Database,
         ..prefixed_options(&prefix)
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
     adapter.create_schema(&schema, None).await?;
 
     adapter
@@ -594,7 +647,11 @@ async fn deadpool_postgres_adapter_uses_current_schema_for_migration_detection(
     let mut config = Config::new();
     config.url = Some(database_url());
     config.options = Some(format!("-c search_path={schema_name}"));
-    let adapter = DeadpoolPostgresAdapter::from_config_with_schema(config, schema.clone(), 2)?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .config(config)
+        .schema(schema.clone())
+        .max_size(2)
+        .build_adapter()?;
 
     let plan = adapter.plan_migrations(&schema).await?;
     assert!(plan
@@ -634,8 +691,11 @@ async fn deadpool_postgres_adapter_run_migrations_rejects_type_warnings_without_
     ))
     .await
     .map_err(openauth_tokio_postgres::driver::postgres_error)?;
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
 
     let initial = adapter.plan_migrations(&schema).await?;
     assert!(initial.warnings.iter().any(|warning| {
@@ -681,8 +741,11 @@ async fn deadpool_postgres_adapter_create_schema_rejects_type_warnings_without_a
     ))
     .await
     .map_err(openauth_tokio_postgres::driver::postgres_error)?;
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
 
     let result = adapter.create_schema(&schema, None).await;
     assert!(
@@ -718,8 +781,11 @@ async fn deadpool_postgres_adapter_round_trips_json_arrays_and_create_select(
         rate_limit_storage: RateLimitStorage::Database,
         ..AuthSchemaOptions::default()
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
     adapter.create_schema(&schema, None).await?;
     conformance::assert_round_trips_json_arrays_and_create_select(&adapter).await
 }
@@ -736,8 +802,11 @@ async fn deadpool_postgres_adapter_creates_native_postgres_array_columns(
         rate_limit_storage: RateLimitStorage::Database,
         ..prefixed_options(&prefix)
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
     adapter.create_schema(&schema, None).await?;
 
     let raw = raw_client().await?;
@@ -776,8 +845,11 @@ async fn deadpool_postgres_adapter_accepts_explicit_tls_connector_api() -> Resul
     let schema = test_schema();
     let mut config = Config::new();
     config.url = Some(database_url());
-    let adapter =
-        DeadpoolPostgresAdapter::from_config_with_schema_tls(config, schema.clone(), 16, NoTls)?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .config(config)
+        .schema(schema.clone())
+        .max_size(16)
+        .build_adapter_tls(NoTls)?;
 
     adapter.create_schema(&schema, None).await?;
     assert_eq!(adapter.capabilities().adapter_id, "deadpool-postgres");
@@ -1013,8 +1085,11 @@ async fn deadpool_postgres_adapter_round_trips_json_and_array_fields() -> Result
         rate_limit_storage: RateLimitStorage::Database,
         ..prefixed_options(&prefix)
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
     adapter.create_schema(&schema, None).await?;
     let now = OffsetDateTime::now_utc();
     let metadata = serde_json::json!({ "tier": "admin", "enabled": true });
@@ -1116,8 +1191,11 @@ async fn deadpool_postgres_adapter_rejects_nested_transactions() -> Result<(), O
 #[tokio::test]
 async fn deadpool_postgres_transaction_multi_join_uses_fallback() -> Result<(), OpenAuthError> {
     let schema = test_schema();
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
     adapter.create_schema(&schema, None).await?;
 
     conformance::assert_transaction_multi_join_uses_fallback(&adapter, schema).await
@@ -1137,8 +1215,11 @@ async fn deadpool_postgres_rate_limit_store_rejects_invalid_rules_before_databas
 async fn deadpool_postgres_rate_limit_store_is_atomic_and_uses_physical_names(
 ) -> Result<(), OpenAuthError> {
     let schema = test_schema();
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
     adapter.create_schema(&schema, None).await?;
     let store = Arc::new(DeadpoolPostgresRateLimitStore::from(&adapter));
     let rule = RateLimitRule { window: 60, max: 1 };
@@ -1245,8 +1326,11 @@ async fn deadpool_postgres_rate_limit_store_accepts_standalone_physical_names(
         rate_limit_storage: RateLimitStorage::Database,
         ..prefixed_options(&prefix)
     });
-    let adapter =
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url(), schema.clone()).await?;
+    let adapter = DeadpoolPostgresAdapter::builder()
+        .database_url(database_url())
+        .schema(schema.clone())
+        .connect()
+        .await?;
     adapter.create_schema(&schema, None).await?;
     let store = DeadpoolPostgresRateLimitStore::with_names(
         adapter.pool().clone(),
@@ -1288,11 +1372,13 @@ async fn deadpool_postgres_adapter_allows_concurrent_pool_operations() -> Result
     let mut config = Config::new();
     config.url = Some(database_url());
     config.pool = Some(PoolConfig::new(2));
-    let adapter = Arc::new(DeadpoolPostgresAdapter::from_config_with_schema(
-        config,
-        schema.clone(),
-        16,
-    )?);
+    let adapter = Arc::new(
+        DeadpoolPostgresAdapter::builder()
+            .config(config)
+            .schema(schema.clone())
+            .max_size(16)
+            .build_adapter()?,
+    );
     adapter.create_schema(&schema, None).await?;
 
     let mut tasks = Vec::new();
@@ -1367,11 +1453,13 @@ async fn deadpool_postgres_adapter_supports_additional_user_fields_route_flow(
     let mut config = Config::new();
     config.url = Some(database_url());
     config.options = Some(format!("-csearch_path={pg_schema}"));
-    let adapter = Arc::new(DeadpoolPostgresAdapter::from_config_with_schema(
-        config,
-        context.db_schema.clone(),
-        4,
-    )?);
+    let adapter = Arc::new(
+        DeadpoolPostgresAdapter::builder()
+            .config(config)
+            .schema(context.db_schema.clone())
+            .max_size(4)
+            .build_adapter()?,
+    );
     adapter.create_schema(&context.db_schema, None).await?;
     let router = AuthRouter::with_async_endpoints(
         context,

@@ -2,7 +2,7 @@ use super::*;
 
 impl_social_oauth_provider!(
     crate::microsoft_entra_id::MicrosoftEntraIdProvider,
-    options | provider | { provider.options().oauth.clone() },
+    options | provider | { provider.options() },
     authorization | provider,
     input | {
         provider.create_authorization_url(

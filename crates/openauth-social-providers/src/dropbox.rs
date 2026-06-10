@@ -1,15 +1,12 @@
 //! Dropbox social OAuth provider.
 
-use std::collections::BTreeMap;
-
 use openauth_oauth::oauth2::{
-    create_authorization_url, refresh_access_token, validate_authorization_code,
-    AuthorizationCodeRequest, AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest,
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthProviderContract, ProviderOptions,
-    RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 const AUTHORIZATION_ENDPOINT: &str = "https://www.dropbox.com/oauth2/authorize";
 const TOKEN_ENDPOINT: &str = "https://api.dropboxapi.com/oauth2/token";
@@ -88,50 +85,49 @@ pub struct DropboxUserInfo {
 }
 
 /// Dropbox OAuth provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct DropboxProvider {
-    options: DropboxProviderOptions,
+    client: OAuth2Client,
+    access_type: Option<DropboxAccessType>,
 }
 
 impl DropboxProvider {
-    pub fn new(options: DropboxProviderOptions) -> Self {
-        Self { options }
+    pub fn new(options: DropboxProviderOptions) -> Result<Self, OAuthError> {
+        let access_type = options.access_type;
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder("dropbox", options.oauth)
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scope(DEFAULT_SCOPE);
+        }
+        Ok(Self {
+            client: builder.build()?,
+            access_type,
+        })
     }
 
-    pub fn options(&self) -> &DropboxProviderOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn create_authorization_url(
         &self,
         request: DropboxAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        let mut scopes = Vec::new();
-        if !self.options.oauth.disable_default_scope {
-            scopes.push(DEFAULT_SCOPE.to_owned());
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?;
+        if let Some(code_verifier) = request.code_verifier {
+            url = url.code_verifier(code_verifier);
         }
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request.scopes);
-
-        let mut additional_params = BTreeMap::new();
-        if let Some(access_type) = self.options.access_type {
-            additional_params.insert(
-                "token_access_type".to_owned(),
-                access_type.as_str().to_owned(),
-            );
-        }
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: self.id().to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: request.code_verifier,
-            scopes,
-            additional_params,
-            ..AuthorizationUrlRequest::default()
-        })
+        let url = url.scopes(request.scopes);
+        let url = if let Some(access_type) = self.access_type {
+            url.param("token_access_type", access_type.as_str())
+        } else {
+            url
+        };
+        url.build()
     }
 
     pub async fn validate_authorization_code(
@@ -140,33 +136,18 @@ impl DropboxProvider {
         code_verifier: Option<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                code_verifier,
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(&self, token: &OAuth2Tokens) -> Option<DropboxUserInfo> {
@@ -206,13 +187,7 @@ impl DropboxProvider {
     }
 }
 
-impl Default for DropboxProvider {
-    fn default() -> Self {
-        Self::new(DropboxProviderOptions::default())
-    }
-}
-
-impl OAuthProviderContract for DropboxProvider {
+impl ProviderIdentity for DropboxProvider {
     fn id(&self) -> &str {
         "dropbox"
     }

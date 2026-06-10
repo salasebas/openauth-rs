@@ -1,13 +1,18 @@
-use openauth_oauth::oauth2::{OAuth2Tokens, OAuthError, ProviderOptions};
-use openauth_social_providers::tiktok::{
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "provider tests intentionally fail fast with contextual setup errors"
+)]
+
+use openauth_oauth::oauth2::{ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions};
+use openauth_social_providers::advanced::tiktok::{
     tiktok, TiktokAuthorizationUrlRequest, TiktokProfile, TiktokProfileData, TiktokProvider,
     TiktokUser, TiktokValidateAuthorizationCodeRequest, TIKTOK_AUTHORIZATION_ENDPOINT, TIKTOK_ID,
     TIKTOK_NAME, TIKTOK_TOKEN_ENDPOINT,
 };
-
 #[test]
 fn tiktok_provider_exposes_upstream_metadata() {
-    let provider = tiktok(provider_options());
+    let provider = tiktok(provider_options()).expect("provider should construct");
 
     assert_eq!(provider.id(), TIKTOK_ID);
     assert_eq!(provider.name(), TIKTOK_NAME);
@@ -18,7 +23,8 @@ fn tiktok_authorization_url_uses_client_key_and_comma_joined_scopes() -> Result<
     let provider = tiktok(ProviderOptions {
         scope: vec!["video.list".to_owned()],
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(TiktokAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -54,7 +60,8 @@ fn tiktok_authorization_url_can_disable_default_scope() -> Result<(), OAuthError
         scope: vec!["video.list".to_owned()],
         disable_default_scope: true,
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(TiktokAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -71,7 +78,7 @@ fn tiktok_authorization_url_can_disable_default_scope() -> Result<(), OAuthError
 
 #[test]
 fn tiktok_authorization_url_rejects_empty_state() {
-    let provider = tiktok(provider_options());
+    let provider = tiktok(provider_options()).expect("provider should construct");
 
     let error = provider
         .create_authorization_url(TiktokAuthorizationUrlRequest {
@@ -80,16 +87,15 @@ fn tiktok_authorization_url_rejects_empty_state() {
             scopes: Vec::new(),
         })
         .err()
-        .map(|error| error.to_string());
+        .map(|error| error.to_string())
+        .expect("error should be present");
 
-    assert!(error
-        .as_deref()
-        .is_some_and(|message| message.contains("authorization state")));
+    assert!(error.contains("authorization state"));
 }
 
 #[test]
 fn tiktok_authorization_url_rejects_invalid_redirect_uri_without_override() {
-    let provider = tiktok(provider_options());
+    let provider = tiktok(provider_options()).expect("provider should construct");
 
     let error = provider
         .create_authorization_url(TiktokAuthorizationUrlRequest {
@@ -98,11 +104,10 @@ fn tiktok_authorization_url_rejects_invalid_redirect_uri_without_override() {
             scopes: Vec::new(),
         })
         .err()
-        .map(|error| error.to_string());
+        .map(|error| error.to_string())
+        .expect("error should be present");
 
-    assert!(error
-        .as_deref()
-        .is_some_and(|message| message.contains("OAuth URL")));
+    assert!(error.contains("OAuth URL"));
 }
 
 #[test]
@@ -110,7 +115,8 @@ fn tiktok_authorization_url_uses_redirect_override_when_configured() -> Result<(
     let provider = tiktok(ProviderOptions {
         redirect_uri: Some("https://auth.example.com/tiktok/callback".to_owned()),
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(TiktokAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -127,29 +133,18 @@ fn tiktok_authorization_url_uses_redirect_override_when_configured() -> Result<(
 
 #[test]
 fn tiktok_authorization_url_requires_client_key() {
-    let provider = tiktok(ProviderOptions {
-        client_secret: Some("tiktok-secret".to_owned()),
-        ..ProviderOptions::default()
-    });
-
-    let error = provider
-        .create_authorization_url(TiktokAuthorizationUrlRequest {
-            state: "state-1".to_owned(),
-            redirect_uri: "https://app.example.com/auth/callback".to_owned(),
-            scopes: Vec::new(),
-        })
-        .err()
-        .map(|error| error.to_string());
-
-    assert_eq!(
-        error.as_deref(),
-        Some("missing OAuth provider option `client_key`")
-    );
+    assert!(matches!(
+        tiktok(ProviderOptions {
+            client_secret: Some(ClientSecret::new("tiktok-secret").expect("valid client secret")),
+            ..ProviderOptions::default()
+        }),
+        Err(OAuthError::MissingOption("client_key"))
+    ));
 }
 
 #[test]
 fn tiktok_authorization_code_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = tiktok(provider_options());
+    let provider = tiktok(provider_options()).expect("provider should construct");
 
     let request = provider.authorization_code_request(TiktokValidateAuthorizationCodeRequest {
         code: "code-1".to_owned(),
@@ -171,7 +166,7 @@ fn tiktok_authorization_code_request_matches_upstream_form_contract() -> Result<
 
 #[test]
 fn tiktok_refresh_token_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = tiktok(provider_options());
+    let provider = tiktok(provider_options()).expect("provider should construct");
 
     let request = provider.refresh_access_token_request("refresh-1")?;
 
@@ -219,7 +214,7 @@ fn tiktok_profile_uses_username_when_display_name_is_empty() {
 
 #[tokio::test]
 async fn tiktok_get_user_info_returns_none_without_access_token() -> Result<(), OAuthError> {
-    let provider = TiktokProvider::new(provider_options());
+    let provider = TiktokProvider::new(provider_options()).expect("provider should construct");
 
     assert!(provider
         .get_user_info(&OAuth2Tokens::default())
@@ -230,7 +225,7 @@ async fn tiktok_get_user_info_returns_none_without_access_token() -> Result<(), 
 
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
-        client_secret: Some("tiktok-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("tiktok-secret").expect("valid client secret")),
         client_key: Some("tiktok-key".to_owned()),
         ..ProviderOptions::default()
     }

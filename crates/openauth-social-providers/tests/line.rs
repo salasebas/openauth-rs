@@ -5,10 +5,11 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthProviderContract, ProviderOptions};
-use openauth_social_providers::line::{
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, ProviderOptions};
+use openauth_social_providers::advanced::line::{
     line, LineAuthorizationUrlRequest, LineIdTokenPayload, LineOptions, LineProvider, LineUserInfo,
 };
+use openauth_social_providers::ProviderIdentity;
 use serde_json::json;
 
 #[test]
@@ -16,10 +17,11 @@ fn line_provider_exposes_upstream_metadata() {
     let provider = line(LineOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("line-client")),
-            client_secret: Some("line-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("line-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(provider.id(), "line");
     assert_eq!(provider.name(), "LINE");
@@ -31,12 +33,13 @@ fn authorization_url_uses_line_defaults_redirect_override_login_hint_and_pkce(
     let provider = LineProvider::new(LineOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("line-client")),
-            client_secret: Some("line-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("line-secret").expect("valid client secret")),
             redirect_uri: Some("https://auth.example.com/line/callback".to_owned()),
             scope: vec!["friends".to_owned()],
             ..ProviderOptions::default()
         },
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(LineAuthorizationUrlRequest {
         state: "state-123".to_owned(),
@@ -79,12 +82,13 @@ fn authorization_url_can_disable_default_scope() -> Result<(), Box<dyn std::erro
     let provider = LineProvider::new(LineOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("line-client")),
-            client_secret: Some("line-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("line-secret").expect("valid client secret")),
             disable_default_scope: true,
             scope: vec!["profile".to_owned()],
             ..ProviderOptions::default()
         },
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(LineAuthorizationUrlRequest {
         state: "state".to_owned(),
@@ -149,7 +153,13 @@ fn userinfo_payload_maps_to_oauth_user_info_with_unverified_email() {
 
 #[tokio::test]
 async fn get_user_info_returns_none_when_id_token_and_access_token_are_missing() {
-    let provider = LineProvider::default();
+    let provider = LineProvider::new(LineOptions {
+        oauth: ProviderOptions {
+            client_id: Some(ClientId::from("line-client")),
+            ..ProviderOptions::default()
+        },
+    })
+    .expect("line provider should construct");
 
     let info = provider
         .get_user_info(&OAuth2Tokens::default())
@@ -161,7 +171,13 @@ async fn get_user_info_returns_none_when_id_token_and_access_token_are_missing()
 
 #[tokio::test]
 async fn get_user_info_ignores_invalid_id_token_and_falls_back_without_panic() {
-    let provider = LineProvider::default();
+    let provider = LineProvider::new(LineOptions {
+        oauth: ProviderOptions {
+            client_id: Some(ClientId::from("line-client")),
+            ..ProviderOptions::default()
+        },
+    })
+    .expect("line provider should construct");
     let tokens = OAuth2Tokens {
         id_token: Some("not-a-jwt".to_owned()),
         ..OAuth2Tokens::default()
@@ -177,7 +193,13 @@ async fn get_user_info_ignores_invalid_id_token_and_falls_back_without_panic() {
 
 #[tokio::test]
 async fn decoded_id_token_is_preferred_for_user_info_mapping() {
-    let provider = LineProvider::default();
+    let provider = LineProvider::new(LineOptions {
+        oauth: ProviderOptions {
+            client_id: Some(ClientId::from("line-client")),
+            ..ProviderOptions::default()
+        },
+    })
+    .expect("line provider should construct");
     let tokens = OAuth2Tokens {
         id_token: Some(unsigned_jwt(json!({
             "iss": "https://access.line.me",
@@ -249,11 +271,12 @@ fn provider_with_client_id(client_id: &str, disable_id_token_sign_in: bool) -> L
     LineProvider::new(LineOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from(client_id)),
-            client_secret: Some("line-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("line-secret").expect("valid client secret")),
             disable_id_token_sign_in,
             ..ProviderOptions::default()
         },
     })
+    .expect("line provider should construct")
 }
 
 fn verify_payload(audience: &str, nonce: Option<&str>) -> LineIdTokenPayload {

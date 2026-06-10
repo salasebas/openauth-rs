@@ -6,8 +6,18 @@ All notable changes to `openauth-sqlx` are documented in this file.
 
 ## [0.1.1] - 2026-06-09
 
+### Added
+
+- `SqliteStores`, `PostgresStores`, and `MySqlStores` bundle each dialect's
+  `DbAdapter` and SQL-backed `RateLimitStore` behind `connect`,
+  `connect_with_schema`, `builder`, `apply_to_options`, and `adapter()`.
+
 ### Changed
 
+- **Breaking:** Removed the public `migration` module. Import planning types
+  from `openauth_core::db` instead of `openauth_sqlx::migration`.
+- **Breaking:** Removed `sqlite_pool_options` from the crate root. SQLite pool
+  foreign-key setup is applied by `SqliteAdapter::connect` / `connect_with_schema`.
 - Postgres migration planning now loads schema snapshots with batched catalog
   queries (`pg_catalog` for constraints and indexes) instead of per-column
   `information_schema` round trips.

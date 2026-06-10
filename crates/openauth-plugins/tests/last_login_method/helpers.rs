@@ -159,7 +159,9 @@ impl SocialOAuthProvider for FakeProvider {
     fn provider_options(&self) -> ProviderOptions {
         ProviderOptions {
             client_id: Some("client-id".into()),
-            client_secret: Some("client-secret".to_owned()),
+            client_secret: Some(
+                openauth_oauth::oauth2::ClientSecret::new("client-secret").expect("client secret"),
+            ),
             ..ProviderOptions::default()
         }
     }

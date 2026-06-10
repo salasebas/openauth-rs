@@ -1,25 +1,21 @@
 //! Paybin OpenID Connect social provider.
 
-use std::collections::BTreeMap;
-
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, get_primary_client_id,
-    refresh_access_token, refresh_access_token_request, validate_authorization_code,
-    AuthorizationCodeRequest, AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest,
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract,
-    ProviderOptions, RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
+use crate::runtime::ProviderIdentity;
+
 pub const PAYBIN_ID: &str = "paybin";
 pub const PAYBIN_NAME: &str = "Paybin";
-pub const PAYBIN_DEFAULT_ISSUER: &str = "https://idp.paybin.io";
 pub const PAYBIN_AUTHORIZATION_ENDPOINT: &str = "https://idp.paybin.io/oauth2/authorize";
 pub const PAYBIN_TOKEN_ENDPOINT: &str = "https://idp.paybin.io/oauth2/token";
+pub const PAYBIN_DEFAULT_ISSUER: &str = "https://idp.paybin.io";
 pub const PAYBIN_DEFAULT_SCOPES: &[&str] = &["openid", "email", "profile"];
 
 /// Paybin ID token profile claims.
@@ -35,7 +31,7 @@ pub struct PaybinProfile {
     pub given_name: Option<String>,
     pub family_name: Option<String>,
     #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub extra: std::collections::BTreeMap<String, Value>,
 }
 
 impl PaybinProfile {
@@ -80,49 +76,44 @@ pub struct PaybinUserInfo {
 }
 
 /// Paybin OAuth/OIDC provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PaybinProvider {
-    options: PaybinOptions,
-    authorization_endpoint: String,
-    token_endpoint: String,
+    client: OAuth2Client,
 }
 
-pub fn paybin(options: PaybinOptions) -> PaybinProvider {
+pub fn paybin(options: PaybinOptions) -> Result<PaybinProvider, OAuthError> {
     PaybinProvider::new(options)
 }
 
 impl PaybinProvider {
-    pub fn new(options: PaybinOptions) -> Self {
+    pub fn new(options: PaybinOptions) -> Result<Self, OAuthError> {
         let issuer = options
             .issuer
             .as_deref()
             .unwrap_or(PAYBIN_DEFAULT_ISSUER)
-            .to_owned();
-        Self {
-            options,
-            authorization_endpoint: format!("{issuer}/oauth2/authorize"),
-            token_endpoint: format!("{issuer}/oauth2/token"),
+            .trim_end_matches('/');
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(PAYBIN_ID, options.oauth)
+            .authorization_endpoint(format!("{issuer}/oauth2/authorize"))?
+            .token_endpoint(format!("{issuer}/oauth2/token"))?;
+        if !disable_default_scope {
+            builder = builder.default_scopes(PAYBIN_DEFAULT_SCOPES.iter().copied());
         }
+        Ok(Self {
+            client: builder.build()?,
+        })
     }
 
-    pub fn id(&self) -> &str {
-        PAYBIN_ID
-    }
-
-    pub fn name(&self) -> &str {
-        PAYBIN_NAME
-    }
-
-    pub fn options(&self) -> &PaybinOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn authorization_endpoint(&self) -> &str {
-        &self.authorization_endpoint
+        self.client.authorization_endpoint().as_str()
     }
 
     pub fn token_endpoint(&self) -> &str {
-        &self.token_endpoint
+        self.client.token_endpoint().as_str()
     }
 
     pub fn create_authorization_url(
@@ -130,43 +121,17 @@ impl PaybinProvider {
         request: PaybinAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
         self.ensure_client_credentials()?;
-        if request.code_verifier.is_none() {
-            return Err(OAuthError::MissingOption("code_verifier"));
-        }
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: PAYBIN_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: self.authorization_endpoint.clone(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: request.code_verifier,
-            scopes: self.scopes(request.scopes),
-            prompt: self.options.oauth.prompt.clone(),
-            login_hint: request.login_hint,
-            response_mode: self.options.oauth.response_mode.clone(),
-            ..AuthorizationUrlRequest::default()
-        })
-    }
-
-    pub fn authorization_code_request(
-        &self,
-        code: impl Into<String>,
-        code_verifier: Option<impl Into<String>>,
-        redirect_uri: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        let code_verifier = code_verifier
-            .map(Into::into)
+        let code_verifier = request
+            .code_verifier
             .ok_or(OAuthError::MissingOption("code_verifier"))?;
-
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.oauth.clone(),
-            code_verifier: Some(code_verifier),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?
+            .code_verifier(code_verifier);
+        if let Some(login_hint) = request.login_hint {
+            url = url.login_hint(login_hint);
+        }
+        url.scopes(request.scopes).build()
     }
 
     pub async fn validate_authorization_code(
@@ -178,47 +143,18 @@ impl PaybinProvider {
         let code_verifier = code_verifier
             .map(Into::into)
             .ok_or(OAuthError::MissingOption("code_verifier"))?;
-
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: self.token_endpoint.clone(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                code_verifier: Some(code_verifier),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
-    }
-
-    pub fn refresh_access_token_request(
-        &self,
-        refresh_token: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .exchange_code(code, redirect_uri)?
+            .code_verifier(code_verifier)
+            .send()
+            .await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: self.token_endpoint.clone(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token_value.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token_value)?.send().await
     }
 
     pub async fn get_user_info(
@@ -235,45 +171,21 @@ impl PaybinProvider {
         }))
     }
 
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            PAYBIN_DEFAULT_SCOPES
-                .iter()
-                .map(|scope| (*scope).to_owned())
-                .collect()
-        };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
-
     fn ensure_client_credentials(&self) -> Result<(), OAuthError> {
-        if get_primary_client_id(&self.options.oauth.client_id).is_none() {
-            return Err(OAuthError::MissingOption("client_id"));
-        }
-        if self
-            .options
-            .oauth
-            .client_secret
-            .as_deref()
-            .unwrap_or("")
-            .is_empty()
-        {
+        if self.client.options().client_secret.is_none() {
             return Err(OAuthError::MissingOption("client_secret"));
         }
         Ok(())
     }
 }
 
-impl OAuthProviderContract for PaybinProvider {
+impl ProviderIdentity for PaybinProvider {
     fn id(&self) -> &str {
-        self.id()
+        PAYBIN_ID
     }
 
     fn name(&self) -> &str {
-        self.name()
+        PAYBIN_NAME
     }
 }
 

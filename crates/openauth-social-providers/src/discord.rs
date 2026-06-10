@@ -2,19 +2,20 @@
 
 use std::collections::BTreeMap;
 
+use openauth_oauth::oauth2::ClientAuthentication;
 use openauth_oauth::oauth2::{
-    create_authorization_url, refresh_access_token, validate_authorization_code,
-    AuthorizationCodeRequest, AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest,
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthProviderContract, OAuthProviderMetadata,
-    ProviderOptions, RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
+use crate::runtime::ProviderIdentity;
+
 const AUTHORIZATION_ENDPOINT: &str = "https://discord.com/api/oauth2/authorize";
 const TOKEN_ENDPOINT: &str = "https://discord.com/api/oauth2/token";
 const USER_INFO_ENDPOINT: &str = "https://discord.com/api/users/@me";
+const DEFAULT_SCOPES: &[&str] = &["identify", "email"];
 
 /// Discord authorization prompt behavior.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -94,13 +95,14 @@ pub struct DiscordUserInfo {
 }
 
 /// Discord OAuth provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct DiscordProvider {
-    options: DiscordOptions,
-    metadata: OAuthProviderMetadata,
+    client: OAuth2Client,
+    prompt: DiscordPrompt,
+    permissions: Option<u64>,
 }
 
-pub fn discord(options: DiscordOptions) -> DiscordProvider {
+pub fn discord(options: DiscordOptions) -> Result<DiscordProvider, OAuthError> {
     DiscordProvider::new(options)
 }
 
@@ -109,41 +111,64 @@ pub fn map_discord_user_info(profile: DiscordProfile) -> DiscordUserInfo {
 }
 
 impl DiscordProvider {
-    pub fn new(options: DiscordOptions) -> Self {
-        Self {
-            options,
-            metadata: OAuthProviderMetadata::new("discord", "Discord"),
+    pub fn new(options: DiscordOptions) -> Result<Self, OAuthError> {
+        let prompt = options.prompt;
+        let permissions = options.permissions;
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder("discord", options.oauth)
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(TOKEN_ENDPOINT)?
+            .scope_joiner("+")
+            .authentication(ClientAuthentication::Post);
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
         }
+        Ok(Self {
+            client: builder.build()?,
+            prompt,
+            permissions,
+        })
     }
 
-    pub fn options(&self) -> &DiscordOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
+    }
+
+    pub fn discord_options(&self) -> DiscordOptions {
+        DiscordOptions {
+            oauth: self.options(),
+            prompt: self.prompt,
+            permissions: self.permissions,
+        }
     }
 
     pub fn create_authorization_url(
         &self,
         request: DiscordAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        let scopes = self.authorization_scopes(request.scopes);
-        let mut additional_params = BTreeMap::new();
+        let request_scopes = request.scopes;
+        let mut scopes = if !self.client.options().disable_default_scope {
+            DEFAULT_SCOPES
+                .iter()
+                .map(|scope| (*scope).to_owned())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        scopes.extend(self.client.options().scope.iter().cloned());
+        scopes.extend(request_scopes.iter().cloned());
+
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?
+            .prompt(self.prompt.as_str())
+            .scopes(request_scopes);
         if scopes.iter().any(|scope| scope == "bot") {
-            if let Some(permissions) = self.options.permissions {
-                additional_params.insert("permissions".to_owned(), permissions.to_string());
+            if let Some(permissions) = self.permissions {
+                url = url.param("permissions", permissions.to_string());
             }
         }
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: self.id().to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            scopes,
-            prompt: Some(self.options.prompt.as_str().to_owned()),
-            additional_params,
-            scope_joiner: "+".to_owned(),
-            ..AuthorizationUrlRequest::default()
-        })
+        url.build()
     }
 
     pub async fn validate_authorization_code(
@@ -151,33 +176,14 @@ impl DiscordProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        self.client.exchange_code(code, redirect_uri)?.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(
@@ -225,32 +231,15 @@ impl DiscordProvider {
             data: profile,
         }
     }
-
-    fn authorization_scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            vec!["identify".to_owned(), "email".to_owned()]
-        };
-        scopes.extend(request_scopes);
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes
-    }
 }
 
-impl Default for DiscordProvider {
-    fn default() -> Self {
-        Self::new(DiscordOptions::default())
-    }
-}
-
-impl OAuthProviderContract for DiscordProvider {
+impl ProviderIdentity for DiscordProvider {
     fn id(&self) -> &str {
-        self.metadata.id()
+        "discord"
     }
 
     fn name(&self) -> &str {
-        self.metadata.name()
+        "Discord"
     }
 }
 

@@ -2,6 +2,12 @@ use openauth_oauth::oauth2::{
     OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions, SocialAuthorizationCodeRequest,
     SocialAuthorizationUrlRequest, SocialIdTokenRequest, SocialOAuthProvider, SocialProviderFuture,
 };
+
+/// Provider identity used by the social runtime macro (distinct from [`SocialOAuthProvider`]).
+pub trait ProviderIdentity {
+    fn id(&self) -> &str;
+    fn name(&self) -> &str;
+}
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use url::Url;
@@ -18,11 +24,11 @@ macro_rules! impl_social_oauth_provider {
     ) => {
         impl SocialOAuthProvider for $provider {
             fn id(&self) -> &str {
-                <Self as openauth_oauth::oauth2::OAuthProviderContract>::id(self)
+                <Self as crate::runtime::ProviderIdentity>::id(self)
             }
 
             fn name(&self) -> &str {
-                <Self as openauth_oauth::oauth2::OAuthProviderContract>::name(self)
+                <Self as crate::runtime::ProviderIdentity>::name(self)
             }
 
             fn provider_options(&self) -> ProviderOptions {
@@ -93,22 +99,6 @@ fn parse_provider_user<T: DeserializeOwned>(value: Option<Value>) -> Result<Opti
 
 fn parse_url(value: String) -> Result<Url, OAuthError> {
     Url::parse(&value).map_err(OAuthError::InvalidUrl)
-}
-
-fn cognito_provider_options(options: &crate::cognito::CognitoOptions) -> ProviderOptions {
-    ProviderOptions {
-        client_id: Some(options.client_id.clone()),
-        client_secret: options.client_secret.clone(),
-        client_key: options.client_key.clone(),
-        scope: options.scope.clone(),
-        disable_default_scope: options.disable_default_scope,
-        redirect_uri: options.redirect_uri.clone(),
-        authorization_endpoint: options.authorization_endpoint.clone(),
-        disable_id_token_sign_in: options.disable_id_token_sign_in,
-        prompt: options.prompt.clone(),
-        response_mode: options.response_mode.clone(),
-        ..ProviderOptions::default()
-    }
 }
 
 mod apple;

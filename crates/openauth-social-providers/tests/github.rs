@@ -5,8 +5,8 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{ClientId, ProviderOptions};
-use openauth_social_providers::github::{
+use openauth_oauth::oauth2::{ClientId, ClientSecret, ProviderOptions};
+use openauth_social_providers::advanced::github::{
     github, map_github_user_info, GitHubAuthorizationUrlRequest, GitHubEmail, GitHubProfile,
     GitHubValidateAuthorizationCodeRequest,
 };
@@ -17,7 +17,8 @@ fn github_authorization_url_uses_upstream_defaults() {
         client_id: Some(ClientId::from("github-client")),
         scope: vec!["repo".to_owned()],
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(GitHubAuthorizationUrlRequest {
@@ -39,7 +40,8 @@ fn github_authorization_url_can_disable_default_scopes() {
         scope: vec!["repo".to_owned()],
         disable_default_scope: true,
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(GitHubAuthorizationUrlRequest {
@@ -60,9 +62,10 @@ fn github_authorization_url_can_disable_default_scopes() {
 fn github_authorization_code_request_matches_upstream_form_contract() {
     let provider = github(ProviderOptions {
         client_id: Some(ClientId::from("github-client")),
-        client_secret: Some("github-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("github-secret").expect("valid client secret")),
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let request = provider
         .create_authorization_code_request(GitHubValidateAuthorizationCodeRequest {

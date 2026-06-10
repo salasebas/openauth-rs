@@ -341,7 +341,10 @@ async fn deadpool_postgres_run_migrations_adds_scim_tables_when_configured(
     let base_context = create_auth_context(base_options())?;
     let scim_context = create_auth_context(scim_only_options())?;
     let adapter = Arc::new(
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url, scim_context.db_schema.clone())
+        DeadpoolPostgresAdapter::builder()
+            .database_url(&database_url)
+            .schema(scim_context.db_schema.clone())
+            .connect()
             .await?,
     );
 
@@ -380,7 +383,10 @@ async fn deadpool_postgres_schema_and_provider_store_work_when_configured(
     };
     let context = scim_context()?;
     let adapter = Arc::new(
-        DeadpoolPostgresAdapter::connect_with_schema(&database_url, context.db_schema.clone())
+        DeadpoolPostgresAdapter::builder()
+            .database_url(&database_url)
+            .schema(context.db_schema.clone())
+            .connect()
             .await?,
     );
 

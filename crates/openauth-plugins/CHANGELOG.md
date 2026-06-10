@@ -4,6 +4,12 @@ All notable changes to `openauth-plugins` are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **Breaking:** `generic_oauth` migrated to `OAuth2Client`, `exchange_authorization_code`,
+  `refresh_access_token_at`, and `ClientSecret` from `openauth-oauth`.
+- `one_tap` Google provider construction is fallible (`google(...)?`).
+
 ## [0.1.0] - 2026-06-08
 
 
