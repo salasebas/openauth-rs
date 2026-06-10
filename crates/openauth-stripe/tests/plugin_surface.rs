@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use http::Method;
 use openauth_core::db::{DbField, DbFieldType, DbTable};
 use openauth_core::plugin::PluginSchemaContribution;

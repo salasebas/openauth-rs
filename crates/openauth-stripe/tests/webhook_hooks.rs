@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use http::{Method, Request, StatusCode};
 
 #[path = "common/mod.rs"]

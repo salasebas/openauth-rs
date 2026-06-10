@@ -801,21 +801,10 @@ fn example_plugins(
         scim(ScimOptions::default()),
         stripe(
             StripeOptions::new(StripeClient::new("sk_test"), "whsec_openauth_example_dev")
-                .subscription(SubscriptionOptions {
-                    enabled: true,
-                    plans: Arc::new(Vec::new()),
-                    get_plans: None,
-                    require_email_verification: false,
-                    authorize_reference: None,
-                    on_subscription_complete: None,
-                    on_subscription_created: None,
-                    on_subscription_update: None,
-                    on_subscription_cancel: None,
-                    on_subscription_deleted: None,
-                    get_checkout_session_params: None,
-                })
+                .subscription(SubscriptionOptions::enabled(Vec::new()))
                 .organization(OrganizationStripeOptions::enabled()),
-        ),
+        )
+        .map_err(|error| ExampleError::InvalidConfig(error.to_string()))?,
     ])
 }
 

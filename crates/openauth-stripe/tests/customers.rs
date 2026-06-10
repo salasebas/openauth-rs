@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use http::{Method, Request, StatusCode};
 use openauth_core::context::{create_auth_context_with_adapter, AuthContext};
 use openauth_core::cookies::{set_session_cookie, CookieOptions, SessionCookieOptions};

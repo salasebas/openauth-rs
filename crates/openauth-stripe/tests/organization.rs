@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use openauth_core::context::create_auth_context_with_adapter;
 use openauth_core::db::{
     Create, DbAdapter, DbField, DbFieldType, DbTable, DbValue, Delete, DeleteMany, MemoryAdapter,
