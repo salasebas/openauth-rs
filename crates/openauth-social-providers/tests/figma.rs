@@ -9,7 +9,7 @@ use openauth_oauth::oauth2::{
     AuthorizationCodeRequest, ClientAuthentication, ClientId, ClientSecret, OAuth2Tokens,
     OAuthError, ProviderOptions, RefreshAccessTokenRequest,
 };
-use openauth_social_providers::figma::{
+use openauth_social_providers::advanced::figma::{
     figma, FigmaAuthorizationUrlRequest, FigmaProfile, FIGMA_AUTHORIZATION_ENDPOINT, FIGMA_ID,
     FIGMA_NAME, FIGMA_TOKEN_ENDPOINT,
 };

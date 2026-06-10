@@ -12,7 +12,7 @@ use openauth_oauth::oauth2::{
     AuthorizationCodeRequest, ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions,
     RefreshAccessTokenRequest,
 };
-use openauth_social_providers::paybin::{
+use openauth_social_providers::advanced::paybin::{
     paybin, PaybinAuthorizationUrlRequest, PaybinOptions, PAYBIN_AUTHORIZATION_ENDPOINT,
     PAYBIN_DEFAULT_ISSUER, PAYBIN_ID, PAYBIN_NAME, PAYBIN_TOKEN_ENDPOINT,
 };

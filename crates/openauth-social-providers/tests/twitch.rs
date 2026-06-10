@@ -11,7 +11,7 @@ use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::Rs256;
 use josekit::jws::JwsHeader;
 use josekit::jwt::{self, JwtPayload};
 use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions};
-use openauth_social_providers::twitch::{
+use openauth_social_providers::advanced::twitch::{
     twitch, TwitchAuthorizationUrlRequest, TwitchOptions, TWITCH_AUTHORIZATION_ENDPOINT,
     TWITCH_DEFAULT_CLAIMS, TWITCH_DEFAULT_SCOPES, TWITCH_ID, TWITCH_ISSUER, TWITCH_NAME,
     TWITCH_TOKEN_ENDPOINT,

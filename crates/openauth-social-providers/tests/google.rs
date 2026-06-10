@@ -5,7 +5,7 @@
 )]
 
 use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuthError, ProviderOptions};
-use openauth_social_providers::google::{
+use openauth_social_providers::advanced::google::{
     GoogleAccessType, GoogleAuthorizationCodeRequest, GoogleAuthorizationUrlRequest, GoogleDisplay,
     GoogleOptions, GoogleProfile, GoogleProvider,
 };

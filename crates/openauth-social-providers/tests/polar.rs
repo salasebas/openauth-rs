@@ -9,7 +9,7 @@ use openauth_social_providers::ProviderIdentity;
 use std::sync::Arc;
 
 use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthError, ProviderOptions};
-use openauth_social_providers::polar::{
+use openauth_social_providers::advanced::polar::{
     PolarAuthorizationUrlRequest, PolarOptions, PolarProfile, PolarProvider,
 };
 

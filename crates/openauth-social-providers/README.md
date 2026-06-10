@@ -20,34 +20,62 @@ Spotify, TikTok, Twitch, Twitter/X, Vercel, VK, WeChat, Zoom, and others.
 
 ```rust
 use openauth::OpenAuth;
-use openauth_oauth::oauth2::{ClientSecret, ProviderOptions};
-use openauth_social_providers::github::GitHubProvider;
+use openauth_social_providers::providers::{github, google};
+use openauth_social_providers::SocialProviderConfig;
 
-let github = GitHubProvider::new(ProviderOptions {
-    client_id: Some("github-client-id".into()),
-    client_secret: Some(ClientSecret::new("github-client-secret")?),
-    ..ProviderOptions::default()
-})?;
+// Short form when you already have both credentials.
+let github = github(SocialProviderConfig::new(
+    std::env::var("GITHUB_CLIENT_ID")?,
+    std::env::var("GITHUB_CLIENT_SECRET")?,
+));
+
+// Builder when credentials or options are assembled step by step.
+let google = google(
+    SocialProviderConfig::builder()
+        .client_id(std::env::var("GOOGLE_CLIENT_ID")?)
+        .client_secret(std::env::var("GOOGLE_CLIENT_SECRET")?)
+        .build()?,
+);
 
 let auth = OpenAuth::builder()
     .secret("secret-a-at-least-32-chars-long!!")
     .base_url("https://app.example.com/api/auth")
     .social_provider(github)
+    .social_provider(google)
     .build()?;
 # let _ = auth;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Each provider exposes a typed `*Provider::new(...)` that returns
-`Result<_, OAuthError>`. Providers build on [`OAuth2Client`] from
-`openauth-oauth` internally; use [`ProviderIdentity`] when you only need
-provider id/name metadata.
+Amazon Cognito needs pool metadata in addition to client credentials:
 
-[`OAuth2Client`]: https://docs.rs/openauth-oauth/latest/openauth_oauth/oauth2/struct.OAuth2Client.html
-[`ProviderIdentity`]: https://docs.rs/openauth-social-providers/latest/openauth_social_providers/trait.ProviderIdentity.html
+```rust
+use openauth_social_providers::providers::cognito;
+use openauth_social_providers::{CognitoPoolConfig, SocialProviderConfig};
+
+let cognito = cognito(
+    SocialProviderConfig::new("client-id", "client-secret"),
+    CognitoPoolConfig::new("auth.example.com", "us-east-1", "us-east-1_pool"),
+)?;
+```
 
 Browser redirects and UI remain application/client concerns. This crate only
 defines server-side OAuth provider behavior.
+
+## Configuration
+
+| Type | Use |
+|------|-----|
+| `SocialProviderConfig::new(id, secret)` | Both credentials available up front |
+| `SocialProviderConfig::builder()` | Load `client_id`, `client_secret`, scopes, and flags separately; `build()?` validates required fields |
+| `ProviderId` | Stable ids (`ProviderId::GITHUB`, …) instead of string literals |
+| `CognitoPoolConfig` | Extra Cognito pool metadata for `providers::cognito` |
+
+## Advanced API
+
+Low-level OAuth request types, endpoint constants, profile structs, and HTTP
+helpers live under `openauth_social_providers::advanced` for custom integrations,
+provider-specific options, and crate tests.
 
 ## Status
 

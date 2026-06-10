@@ -10,7 +10,7 @@ use openauth_oauth::oauth2::{
     AuthorizationCodeRequest, ClientAuthentication, ClientId, ClientSecret, OAuth2Tokens,
     OAuthError, ProviderOptions, RefreshAccessTokenRequest,
 };
-use openauth_social_providers::railway::{
+use openauth_social_providers::advanced::railway::{
     railway, RailwayAuthorizationUrlRequest, RailwayProfile, RAILWAY_AUTHORIZATION_ENDPOINT,
     RAILWAY_ID, RAILWAY_NAME, RAILWAY_TOKEN_ENDPOINT,
 };

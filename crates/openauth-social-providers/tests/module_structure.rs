@@ -1,15 +1,8 @@
-#![allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    reason = "provider tests intentionally fail fast with contextual setup errors"
-)]
-
 use openauth_oauth::oauth2::{
     ClientId, ClientSecret, OAuth2Tokens, ProviderOptions, SocialAuthorizationUrlRequest,
     SocialOAuthProvider,
 };
-use openauth_social_providers::PROVIDER_IDS;
-use openauth_social_providers::{
+use openauth_social_providers::advanced::{
     apple::AppleProvider, atlassian::AtlassianProvider, cognito::CognitoProvider,
     discord::DiscordProvider, dropbox::DropboxProvider, facebook::FacebookProvider, figma::figma,
     figma::FigmaProvider, github::github, github::GitHubProvider, gitlab::GitlabProvider,
@@ -23,6 +16,8 @@ use openauth_social_providers::{
     tiktok::TiktokProvider, twitch::TwitchProvider, twitter::TwitterProvider,
     vercel::VercelProvider, vk::VkProvider, wechat::WeChatProvider, zoom::ZoomProvider,
 };
+use openauth_social_providers::providers::{github as app_github, google as app_google};
+use openauth_social_providers::{ProviderId, SocialProviderConfig, PROVIDER_IDS};
 
 #[test]
 fn social_provider_registry_contains_upstream_provider_names() {
@@ -110,9 +105,26 @@ fn all_provider_types_implement_social_oauth_runtime_trait() {
 }
 
 #[test]
+fn app_catalog_builds_runtime_providers() -> Result<(), Box<dyn std::error::Error>> {
+    let config = SocialProviderConfig::new("client-id", "client-secret");
+    let github = app_github(config.clone())?;
+    let google = app_google(config)?;
+
+    assert_eq!(
+        SocialOAuthProvider::id(&github),
+        ProviderId::GITHUB.as_str()
+    );
+    assert_eq!(
+        SocialOAuthProvider::id(&google),
+        ProviderId::GOOGLE.as_str()
+    );
+    Ok(())
+}
+
+#[test]
 fn github_runtime_wrapper_exposes_metadata_and_authorization_url(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let provider = github(provider_options()).expect("provider should construct");
+    let provider = github(provider_options())?;
 
     assert_eq!(SocialOAuthProvider::id(&provider), "github");
     assert_eq!(SocialOAuthProvider::name(&provider), "GitHub");
@@ -141,8 +153,7 @@ fn google_runtime_wrapper_exposes_metadata_and_authorization_url(
     let provider = google(GoogleOptions {
         oauth: provider_options(),
         ..GoogleOptions::default()
-    })
-    .expect("provider should construct");
+    })?;
 
     assert_eq!(SocialOAuthProvider::id(&provider), "google");
     assert_eq!(SocialOAuthProvider::name(&provider), "Google");
@@ -169,8 +180,8 @@ fn google_runtime_wrapper_exposes_metadata_and_authorization_url(
 #[tokio::test]
 async fn figma_and_railway_runtime_wrappers_return_none_without_access_token(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let figma = figma(provider_options()).expect("provider should construct");
-    let railway = railway(provider_options()).expect("provider should construct");
+    let figma = figma(provider_options())?;
+    let railway = railway(provider_options())?;
 
     let figma_user =
         SocialOAuthProvider::get_user_info(&figma, OAuth2Tokens::default(), None).await?;
@@ -185,7 +196,7 @@ async fn figma_and_railway_runtime_wrappers_return_none_without_access_token(
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::Single("client-id".to_owned())),
-        client_secret: Some(ClientSecret::new("client-secret").expect("valid client secret")),
+        client_secret: ClientSecret::new("client-secret").ok(),
         ..ProviderOptions::default()
     }
 }

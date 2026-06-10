@@ -5,7 +5,7 @@
 )]
 
 use openauth_oauth::oauth2::{ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions};
-use openauth_social_providers::tiktok::{
+use openauth_social_providers::advanced::tiktok::{
     tiktok, TiktokAuthorizationUrlRequest, TiktokProfile, TiktokProfileData, TiktokProvider,
     TiktokUser, TiktokValidateAuthorizationCodeRequest, TIKTOK_AUTHORIZATION_ENDPOINT, TIKTOK_ID,
     TIKTOK_NAME, TIKTOK_TOKEN_ENDPOINT,

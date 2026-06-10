@@ -12,7 +12,7 @@ use openauth_oauth::oauth2::{
     AuthorizationCodeRequest, ClientId, ClientSecret, OAuth2Tokens, OAuth2UserInfo, OAuthError,
     ProviderOptions, RefreshAccessTokenRequest,
 };
-use openauth_social_providers::linear::{
+use openauth_social_providers::advanced::linear::{
     linear, LinearAuthorizationUrlRequest, LinearOptions, LinearUser,
     LINEAR_AUTHORIZATION_ENDPOINT, LINEAR_ID, LINEAR_NAME, LINEAR_TOKEN_ENDPOINT,
 };

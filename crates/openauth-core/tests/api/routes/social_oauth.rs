@@ -1055,9 +1055,7 @@ impl FakeProvider {
             email_verified: true,
             options: ProviderOptions {
                 client_id: Some("client-id".into()),
-                client_secret: Some(
-                    ClientSecret::new("client-secret").expect("valid client secret"),
-                ),
+                client_secret: ClientSecret::new("client-secret").ok(),
                 ..ProviderOptions::default()
             },
         }

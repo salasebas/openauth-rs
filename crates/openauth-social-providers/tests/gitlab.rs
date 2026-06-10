@@ -11,11 +11,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions};
-use openauth_social_providers::gitlab::{
+use openauth_social_providers::advanced::gitlab::{
     gitlab, GitlabAuthorizationUrlRequest, GitlabOptions, GitlabProfile,
     GITLAB_AUTHORIZATION_ENDPOINT, GITLAB_ID, GITLAB_NAME, GITLAB_TOKEN_ENDPOINT,
 };
-use openauth_social_providers::http::ProviderHttpClient;
+use openauth_social_providers::advanced::http::ProviderHttpClient;
 use openauth_social_providers::ProviderIdentity;
 use serde_json::json;
 

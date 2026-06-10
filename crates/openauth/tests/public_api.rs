@@ -11,8 +11,8 @@ use openauth::{
     PluginDatabaseBeforeAction, PluginDatabaseBeforeInput, PluginDatabaseHook,
     PluginDatabaseHookContext, PluginDatabaseOperation, PluginEndpoint, PluginEndpointHooks,
     PluginErrorCode, PluginHookMatcher, PluginInitOutput, PluginMigration, PluginRateLimitRule,
-    PluginRequestAction, PluginSchemaContribution, ProviderOptions, RateLimitConsumeInput,
-    RateLimitDecision, RateLimitFuture, RateLimitOptions, RateLimitStorageOption, RateLimitStore,
+    PluginRequestAction, PluginSchemaContribution, RateLimitConsumeInput, RateLimitDecision,
+    RateLimitFuture, RateLimitOptions, RateLimitStorageOption, RateLimitStore,
     SessionAdditionalField, SessionAuth, SessionOptions, SignOutResult, SocialOAuthProvider,
     TrustedOriginOptions, UpdateUserInput, UserOptions, VerificationEmail,
 };
@@ -40,19 +40,6 @@ fn postgres_url_from_env(value: Option<String>) -> String {
 
 fn mysql_url_from_env(value: Option<String>) -> String {
     value.unwrap_or_else(|| DEFAULT_MYSQL_URL.to_owned())
-}
-
-fn test_github_provider_options() -> ProviderOptions {
-    ProviderOptions {
-        client_id: Some(openauth::oauth::oauth2::ClientId::from("github-client")),
-        ..ProviderOptions::default()
-    }
-}
-
-fn test_github_provider() -> Result<Arc<dyn SocialOAuthProvider>, Box<dyn std::error::Error>> {
-    Ok(Arc::new(openauth::social_providers::github::github(
-        test_github_provider_options(),
-    )?))
 }
 
 #[test]
@@ -536,7 +523,10 @@ fn public_api_openauth_plugins_reexport_exposes_siwe_constructor(
 #[test]
 fn openauth_crate_accepts_social_oauth_runtime_providers() -> Result<(), Box<dyn std::error::Error>>
 {
-    let provider = test_github_provider()?;
+    let provider: Arc<dyn SocialOAuthProvider> =
+        Arc::new(openauth::social_providers::providers::github(
+            openauth::social_providers::SocialProviderConfig::new("client-id", "client-secret"),
+        )?);
     let options = OpenAuthOptions {
         social_providers: vec![provider],
         ..OpenAuthOptions::default()
@@ -593,7 +583,10 @@ fn openauth_crate_reexports_core_contract_types() -> Result<(), Box<dyn std::err
         message: "test".to_owned(),
         original_message: None,
     };
-    let provider = test_github_provider()?;
+    let provider: Arc<dyn SocialOAuthProvider> =
+        Arc::new(openauth::social_providers::providers::github(
+            openauth::social_providers::SocialProviderConfig::new("client-id", "client-secret"),
+        )?);
     let _plugin = AuthPlugin::new("test-plugin").with_social_provider(provider.clone());
     let _plugin_endpoint_type: Option<PluginEndpoint> = None;
     let _plugin_init = PluginInitOutput::new().social_provider(provider);

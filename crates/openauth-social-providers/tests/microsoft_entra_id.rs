@@ -15,8 +15,8 @@ use openauth_oauth::oauth2::{
     AuthorizationCodeRequest, ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions,
     RefreshAccessTokenRequest,
 };
-use openauth_social_providers::http::ValidationHttpClient;
-use openauth_social_providers::microsoft_entra_id::{
+use openauth_social_providers::advanced::http::ValidationHttpClient;
+use openauth_social_providers::advanced::microsoft_entra_id::{
     microsoft_entra_id, MicrosoftEntraIdAuthorizationUrlRequest, MicrosoftEntraIdOptions,
     MicrosoftEntraIdProfile, MicrosoftEntraIdProvider,
 };

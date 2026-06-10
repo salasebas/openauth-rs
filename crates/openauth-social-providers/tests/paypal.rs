@@ -16,7 +16,7 @@ use openauth_oauth::oauth2::{
     AuthorizationCodeRequest, ClientAuthentication, ClientId, ClientSecret, OAuth2Tokens,
     OAuthError, ProviderOptions, RefreshAccessTokenRequest,
 };
-use openauth_social_providers::paypal::{
+use openauth_social_providers::advanced::paypal::{
     paypal, PayPalAuthorizationUrlRequest, PayPalEnvironment, PayPalOptions, PayPalProfile,
     PAYPAL_ISSUER, PAYPAL_LIVE_JWKS_ENDPOINT, PAYPAL_SANDBOX_JWKS_ENDPOINT,
 };

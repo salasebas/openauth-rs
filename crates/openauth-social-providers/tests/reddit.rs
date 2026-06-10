@@ -5,7 +5,7 @@
 )]
 
 use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions};
-use openauth_social_providers::reddit::{
+use openauth_social_providers::advanced::reddit::{
     reddit, RedditAuthorizationUrlRequest, RedditOptions, RedditProfile, RedditProvider,
     REDDIT_AUTHORIZATION_ENDPOINT, REDDIT_DEFAULT_SCOPE, REDDIT_ID, REDDIT_NAME,
     REDDIT_TOKEN_ENDPOINT,
