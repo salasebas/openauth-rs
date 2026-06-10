@@ -7,20 +7,18 @@
 
 mod adapter;
 mod connection;
+#[doc(hidden)]
 pub mod driver;
 mod errors;
-pub mod migration;
 mod query;
 mod rate_limit;
 mod row;
 mod schema;
+mod stores;
 mod transaction;
 mod tx_guard;
 
 pub use self::adapter::TokioPostgresAdapter;
 pub use self::connection::TokioPostgresConnection;
-pub use self::migration::{
-    ColumnToAdd, IndexToCreate, MigrationStatement, MigrationStatementKind, SchemaMigrationPlan,
-    SchemaMigrationWarning, TableToCreate,
-};
 pub use self::rate_limit::TokioPostgresRateLimitStore;
+pub use self::stores::{TokioPostgresStores, TokioPostgresStoresBuilder};

@@ -2,8 +2,9 @@
 
 All notable changes to `openauth-redis` are documented in this file.
 
-## [Unreleased]
+## Unreleased
 
+## [0.1.1] - 2026-06-09
 
 ### Added
 
@@ -13,7 +14,7 @@ All notable changes to `openauth-redis` are documented in this file.
   `RateLimitOptions::secondary_storage` in one call.
 - `RedisSecondaryStorage::list_keys` and `clear` using `SCAN`, matching
   `openauth-fred`.
-- `connect_with_options`, `connect_redis`, and `connect_valkey` on both stores.
+- `connect_with_options` on both stores.
 - `scan_count` on `RedisSecondaryStorageOptions`.
 - Live Redis/Valkey coverage runs the shared `SecondaryStorage` contract suite,
   including `set_if_not_exists`, `compare_and_set`, `delete_if_value`, `take`,
@@ -28,6 +29,11 @@ All notable changes to `openauth-redis` are documented in this file.
 
 ### Changed
 
+- **Breaking:** Removed `connect_redis` and `connect_valkey` aliases from
+  `RedisRateLimitStore`, `RedisSecondaryStorage`, and `RedisOpenAuthStores`.
+  Use `connect` (Valkey URLs are normalized internally).
+- **Breaking:** Removed public `normalize_redis_url`. URL normalization happens
+  inside `connect`.
 - `set` with `Some(0)` deletes the key instead of storing without expiration,
   matching `openauth-core` expiry semantics and `openauth-fred`.
 - Empty `key_prefix` is rejected for secondary storage and rate limit keys.

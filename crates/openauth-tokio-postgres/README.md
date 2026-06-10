@@ -11,37 +11,51 @@ not a pool; production applications that need pooling should usually prefer
 
 ## What It Provides
 
+- `TokioPostgresStores`: bundled adapter + SQL-backed rate-limit store sharing
+  one client (recommended entry point).
 - `TokioPostgresAdapter` for OpenAuth primary storage.
 - `TokioPostgresConnection` for sharing one client and transaction gate across
   adapters and rate-limit stores.
-- `TokioPostgresRateLimitStore` for SQL-backed rate limiting.
-- Shared Postgres schema, query, row, migration, and transaction helpers.
+- `TokioPostgresRateLimitStore` for BYO-client setups.
 - Native Postgres arrays for OpenAuth `StringArray` and `NumberArray` fields.
+
+Migration planning types live in `openauth_core::db`. Low-level driver helpers
+used by `openauth-deadpool-postgres` are `#[doc(hidden)]`.
 
 ## Quick Start
 
 ```rust
-use openauth::OpenAuth;
-use openauth_tokio_postgres::TokioPostgresAdapter;
+use openauth::{OpenAuth, OpenAuthOptions};
+use openauth_core::db::{auth_schema, AuthSchemaOptions, RateLimitStorage};
+use openauth_tokio_postgres::TokioPostgresStores;
 
-let adapter = TokioPostgresAdapter::connect(
+let schema = auth_schema(AuthSchemaOptions {
+    rate_limit_storage: RateLimitStorage::Database,
+    ..AuthSchemaOptions::default()
+})?;
+
+let stores = TokioPostgresStores::connect_with_schema(
     "postgres://user:password@localhost:5432/openauth",
+    schema.clone(),
 )
 .await?;
 
-let rate_limit_store = adapter.rate_limit_store();
 let auth = OpenAuth::builder()
-    .secret("secret-a-at-least-32-chars-long!!")
-    .adapter(adapter)
+    .options(stores.apply_to_options(
+        OpenAuthOptions::new().secret("secret-a-at-least-32-chars-long!!"),
+    ))
+    .adapter(stores.adapter)
     .build()?;
 
 auth.run_migrations().await?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+### BYO client
+
 When the application owns the `tokio_postgres::Client`, build a
 `TokioPostgresConnection` once and share it between the adapter and rate-limit
-store instead of cloning the client into separate constructors:
+store:
 
 ```rust
 use openauth_tokio_postgres::{

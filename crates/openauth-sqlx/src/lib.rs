@@ -1,6 +1,7 @@
 //! SQLx database adapters for OpenAuth.
 
-pub mod migration;
+pub(crate) mod migration;
+mod stores;
 
 #[cfg(feature = "sqlite")]
 mod sqlite;
@@ -30,7 +31,13 @@ pub use postgres::PostgresRateLimitStore;
 pub use sqlite::SqliteRateLimitStore;
 
 #[cfg(feature = "sqlite")]
-pub use sqlite::pool_options as sqlite_pool_options;
+pub use stores::{SqliteStores, SqliteStoresBuilder};
+
+#[cfg(feature = "postgres")]
+pub use stores::{PostgresStores, PostgresStoresBuilder};
+
+#[cfg(feature = "mysql")]
+pub use stores::{MySqlStores, MySqlStoresBuilder};
 
 pub(crate) use openauth_core::db::{
     consume_sql_rate_limit_record as consume_record, rate_limit_count_from_i64 as count_from_i64,

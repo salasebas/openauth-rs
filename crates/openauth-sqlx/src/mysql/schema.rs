@@ -7,7 +7,7 @@ use openauth_core::error::OpenAuthError;
 use super::errors::{inactive_transaction, sql_error};
 use super::state::MySqlExecutor;
 use super::support::sanitize_identifier;
-use crate::migration::{MigrationStatement, MigrationStatementKind, SchemaMigrationPlan};
+use openauth_core::db::{MigrationStatement, MigrationStatementKind, SchemaMigrationPlan};
 
 pub(super) async fn plan_migrations(
     mut executor: MySqlExecutor<'_, '_>,

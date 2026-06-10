@@ -22,6 +22,19 @@ Versioning while the API is still pre-1.0.
   `test-util` feature for integration-test helpers (WebAuthn backend injection,
   SCIM token/patch/store modules, SAML signature helpers, OAuth provider DB
   helpers).
+- `openauth-social-providers`: application-facing catalog under `providers::*`,
+  with `SocialProviderConfig`, `SocialProviderConfigBuilder`, `ProviderId`, and
+  `CognitoPoolConfig` for registering built-in social OAuth providers with
+  `OpenAuthOptions::social_provider`.
+- `openauth-social-providers`: `advanced::*` module for low-level provider
+  request types, profile structs, endpoint constants, and HTTP helpers.
+- `openauth-example-full-app`: wires `oauth_provider` through
+  `openauth::oauth_provider` with the umbrella `oauth-provider` feature.
+- `openauth-example-full-app`: `postgres-deadpool` adapter profile (`deadpool-postgres`
+  over `tokio-postgres`) in the sidebar and database studio, sharing the same
+  Postgres URL as `postgres-sqlx`.
+- `openauth-example-full-app`: adapter labels now expose the SQL driver explicitly
+  as `postgres-sqlx` and `mysql-sqlx` (`postgres` / `mysql` remain accepted aliases).
 
 ### Changed
 
@@ -47,16 +60,18 @@ Versioning while the API is still pre-1.0.
 - **Breaking:** Low-level `openauth-oauth-provider` DB/token helpers
   (`store_token`, `decide_authorize`, schema mappers, etc.) are behind
   `test-util`; application code should use HTTP routes and plugin options.
-- `openauth-example-full-app`: wires `oauth_provider` through
-  `openauth::oauth_provider` with the umbrella `oauth-provider` feature.
-- `openauth-example-full-app`: `postgres-deadpool` adapter profile (`deadpool-postgres`
-  over `tokio-postgres`) in the sidebar and database studio, sharing the same
-  Postgres URL as `postgres-sqlx`.
-- `openauth-example-full-app`: adapter labels now expose the SQL driver explicitly
-  as `postgres-sqlx` and `mysql-sqlx` (`postgres` / `mysql` remain accepted aliases).
-
-### Changed
-
+- **Breaking:** Storage adapter crates (`openauth-sqlx`, `openauth-deadpool-postgres`,
+  `openauth-tokio-postgres`, `openauth-redis`, `openauth-fred`) now lead with
+  bundled `*Stores` types and `apply_to_options` for the recommended app-dev
+  setup. See each crate's README and CHANGELOG for removed constructors and
+  migration re-exports (`openauth_core::db` is canonical).
+- **Breaking:** `openauth-social-providers` no longer exposes per-provider modules
+  at the crate root. Use `openauth_social_providers::providers::{github, google,
+  …}` for app setup and `openauth_social_providers::advanced::{github, …}` for
+  low-level OAuth types and tests.
+- **Breaking:** public provider factories now take `SocialProviderConfig` (or
+  `SocialProviderConfig::builder().build()?`) instead of `ProviderOptions` or
+  per-provider `*Options` structs.
 - `openauth-sqlx`, `openauth-tokio-postgres`: Postgres migration planning now
   loads schema snapshots with a fixed set of batched catalog queries instead of
   per-column `information_schema` round trips.

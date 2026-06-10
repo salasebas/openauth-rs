@@ -187,6 +187,6 @@ pub fn postgres_rate_limit_record(row: Row) -> Result<RateLimitRecord, OpenAuthE
 pub async fn plan_schema_migrations(
     client: &Client,
     schema: &DbSchema,
-) -> Result<crate::migration::SchemaMigrationPlan, OpenAuthError> {
+) -> Result<openauth_core::db::SchemaMigrationPlan, OpenAuthError> {
     plan_migrations(client, schema).await
 }
