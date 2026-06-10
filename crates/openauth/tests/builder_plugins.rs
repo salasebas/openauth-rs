@@ -1,13 +1,14 @@
 use openauth::plugin::AuthPlugin;
 use openauth::OpenAuth;
 
-#[test]
-fn builder_plugins_extends_existing_plugin_list() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::test]
+async fn builder_plugins_extends_existing_plugin_list() -> Result<(), Box<dyn std::error::Error>> {
     let auth = OpenAuth::builder()
         .secret("secret-a-at-least-32-chars-long!!")
         .plugin(AuthPlugin::new("first"))
         .plugins(vec![AuthPlugin::new("second"), AuthPlugin::new("third")])
-        .build()?;
+        .build()
+        .await?;
 
     let ids: Vec<_> = auth
         .options()
