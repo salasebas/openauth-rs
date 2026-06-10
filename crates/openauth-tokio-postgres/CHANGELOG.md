@@ -6,8 +6,17 @@ All notable changes to `openauth-tokio-postgres` are documented in this file.
 
 ## [0.1.1] - 2026-06-09
 
+### Added
+
+- `TokioPostgresStores` bundles the adapter and SQL-backed rate-limit store with
+  `apply_to_options`.
+
 ### Changed
 
+- **Breaking:** Removed the public `migration` module. Import planning types from
+  `openauth_core::db`.
+- **Breaking:** `driver` is now `#[doc(hidden)]` (still used internally by
+  `openauth-deadpool-postgres`).
 - Postgres migration planning now loads schema snapshots with batched catalog
   queries instead of per-column `information_schema` round trips (shared with
   `openauth-deadpool-postgres`).

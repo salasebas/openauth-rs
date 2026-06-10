@@ -6,8 +6,6 @@ mod schema;
 mod state;
 mod support;
 
-pub use foreign_keys::pool_options;
-
 use std::sync::Arc;
 
 use openauth_core::db::{
@@ -29,8 +27,8 @@ use self::schema::{
     create_schema, execute_migration_plan_on_pool, plan_migrations as plan_schema_migrations,
 };
 use self::state::{SqliteExecutor, SqliteState};
-use crate::migration::SchemaMigrationPlan;
 use crate::{consume_record, count_from_i64, count_to_i64, RateLimitSqlNames};
+use openauth_core::db::SchemaMigrationPlan;
 
 #[derive(Debug, Clone)]
 pub struct SqliteAdapter {

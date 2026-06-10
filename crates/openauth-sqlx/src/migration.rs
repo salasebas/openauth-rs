@@ -1,14 +1,9 @@
-//! Compatibility re-exports for SQL migration planning types.
+//! Internal migration helpers for SQLx adapters.
 
 use std::path::Path;
 
-use openauth_core::db::SchemaCreation;
+use openauth_core::db::{SchemaCreation, SchemaMigrationPlan};
 use openauth_core::error::OpenAuthError;
-
-pub use openauth_core::db::{
-    ColumnToAdd, IndexToCreate, MigrationStatement, MigrationStatementKind, SchemaMigrationPlan,
-    SchemaMigrationWarning, TableToCreate,
-};
 
 pub(crate) fn ensure_executable(plan: &SchemaMigrationPlan) -> Result<(), OpenAuthError> {
     openauth_core::db::ensure_executable_migration_plan(plan)

@@ -26,14 +26,6 @@ impl FredOpenAuthStores {
         Self::connect_with_options(url, FredOpenAuthOptions::default()).await
     }
 
-    pub async fn connect_redis(url: &str) -> Result<Self, OpenAuthError> {
-        Self::connect(url).await
-    }
-
-    pub async fn connect_valkey(url: &str) -> Result<Self, OpenAuthError> {
-        Self::connect(url).await
-    }
-
     pub async fn connect_with_options(
         url: &str,
         options: FredOpenAuthOptions,
