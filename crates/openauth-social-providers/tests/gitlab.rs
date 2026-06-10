@@ -10,26 +10,25 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use openauth_oauth::oauth2::{
-    ClientId, OAuth2Tokens, OAuthError, OAuthProviderContract, ProviderOptions,
-};
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions};
 use openauth_social_providers::advanced::gitlab::{
     gitlab, GitlabAuthorizationUrlRequest, GitlabOptions, GitlabProfile,
     GITLAB_AUTHORIZATION_ENDPOINT, GITLAB_ID, GITLAB_NAME, GITLAB_TOKEN_ENDPOINT,
 };
 use openauth_social_providers::advanced::http::ProviderHttpClient;
+use openauth_social_providers::ProviderIdentity;
 use serde_json::json;
 
 #[test]
 fn gitlab_provider_exposes_upstream_metadata() {
-    let provider = gitlab(gitlab_options());
+    let provider = gitlab(gitlab_options()).expect("provider should construct");
 
     assert_eq!((provider.id(), provider.name()), (GITLAB_ID, GITLAB_NAME));
 }
 
 #[test]
 fn gitlab_authorization_url_uses_default_endpoint_and_scope() -> Result<(), OAuthError> {
-    let provider = gitlab(gitlab_options());
+    let provider = gitlab(gitlab_options()).expect("provider should construct");
 
     let url = provider.create_authorization_url(GitlabAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -65,7 +64,8 @@ fn gitlab_custom_issuer_derives_and_cleans_endpoints() {
             oauth: gitlab_provider_options(),
             ..GitlabOptions::default()
         }
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(
         provider.authorization_endpoint(),
@@ -91,7 +91,8 @@ fn gitlab_authorization_url_can_disable_default_scope() -> Result<(), OAuthError
             ..ProviderOptions::default()
         },
         ..GitlabOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(GitlabAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -106,7 +107,7 @@ fn gitlab_authorization_url_can_disable_default_scope() -> Result<(), OAuthError
 
 #[test]
 fn gitlab_token_requests_use_existing_oauth_form_behavior() -> Result<(), OAuthError> {
-    let provider = gitlab(gitlab_options());
+    let provider = gitlab(gitlab_options()).expect("provider should construct");
 
     let code_request = provider.authorization_code_request(
         "code-1",
@@ -189,6 +190,7 @@ async fn gitlab_userinfo_accepts_active_unlocked_profiles() -> Result<(), OAuthE
             ..GitlabOptions::default()
         }
     })
+    .expect("provider should construct")
     .with_http_client(ProviderHttpClient::permissive());
 
     let info = provider
@@ -225,6 +227,7 @@ async fn gitlab_userinfo_rejects_inactive_locked_and_http_errors() -> Result<(),
             ..GitlabOptions::default()
         }
     })
+    .expect("provider should construct")
     .with_http_client(ProviderHttpClient::permissive());
     assert!(inactive_provider
         .get_user_info(&tokens("access-1"))
@@ -250,6 +253,7 @@ async fn gitlab_userinfo_rejects_inactive_locked_and_http_errors() -> Result<(),
             ..GitlabOptions::default()
         }
     })
+    .expect("provider should construct")
     .with_http_client(ProviderHttpClient::permissive());
     assert!(locked_provider
         .get_user_info(&tokens("access-1"))
@@ -264,6 +268,7 @@ async fn gitlab_userinfo_rejects_inactive_locked_and_http_errors() -> Result<(),
             ..GitlabOptions::default()
         }
     })
+    .expect("provider should construct")
     .with_http_client(ProviderHttpClient::permissive());
     assert!(http_error_provider
         .get_user_info(&tokens("access-1"))
@@ -294,7 +299,8 @@ async fn gitlab_userinfo_rejects_private_literal_ip_issuer_by_default() -> Resul
             oauth: gitlab_provider_options(),
             ..GitlabOptions::default()
         }
-    });
+    })
+    .expect("provider should construct");
     assert!(matches!(
         guarded.get_user_info(&tokens("access-1")).await,
         Err(OAuthError::InvalidConfiguration(_))
@@ -308,6 +314,7 @@ async fn gitlab_userinfo_rejects_private_literal_ip_issuer_by_default() -> Resul
             ..GitlabOptions::default()
         }
     })
+    .expect("provider should construct")
     .with_http_client(ProviderHttpClient::permissive());
     let info = permissive
         .get_user_info(&tokens("access-1"))
@@ -327,7 +334,7 @@ fn gitlab_options() -> GitlabOptions {
 fn gitlab_provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("gitlab-client")),
-        client_secret: Some("gitlab-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("gitlab-secret").expect("valid client secret")),
         ..ProviderOptions::default()
     }
 }

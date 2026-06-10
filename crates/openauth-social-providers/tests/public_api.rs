@@ -56,7 +56,7 @@ fn provider_ids_match_registry() {
 fn providers_catalog_builds_authorization_urls() -> Result<(), Box<dyn std::error::Error>> {
     let config = SocialProviderConfig::new("client-id", "client-secret");
 
-    let github_provider = github(config.clone());
+    let github_provider = github(config.clone())?;
     assert_eq!(
         SocialOAuthProvider::id(&github_provider),
         ProviderId::GITHUB.as_str()
@@ -71,7 +71,7 @@ fn providers_catalog_builds_authorization_urls() -> Result<(), Box<dyn std::erro
     )?;
     assert_eq!(github_url.host_str(), Some("github.com"));
 
-    let google_provider = google(config);
+    let google_provider = google(config)?;
     assert_eq!(
         SocialOAuthProvider::id(&google_provider),
         ProviderId::GOOGLE.as_str()
@@ -98,7 +98,7 @@ fn builder_wires_github_provider_with_extra_scopes() -> Result<(), OAuthError> {
             .client_secret("client-secret")
             .scope(["repo"])
             .build()?,
-    );
+    )?;
 
     assert_eq!(
         SocialOAuthProvider::id(&provider),

@@ -1,17 +1,14 @@
 //! Polar social OAuth provider.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use openauth_oauth::oauth2::{
-    create_authorization_url, refresh_access_token, validate_authorization_code,
-    AuthorizationCodeRequest, AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest,
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthProviderContract, ProviderOptions,
-    RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const POLAR_ID: &str = "polar";
 pub const POLAR_NAME: &str = "Polar";
@@ -44,7 +41,7 @@ pub struct PolarProfileSettings {
     #[serde(default)]
     pub profile_settings_public_email: Option<String>,
     #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// Polar profile returned by `/v1/oauth2/userinfo`.
@@ -69,7 +66,7 @@ pub struct PolarProfile {
     #[serde(default)]
     pub profile_settings: Option<PolarProfileSettings>,
     #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// Polar OAuth provider configuration.
@@ -96,39 +93,50 @@ pub struct PolarUserInfo {
 }
 
 /// Polar OAuth provider.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PolarProvider {
-    options: PolarOptions,
+    client: OAuth2Client,
+    map_profile_to_user: Option<UserMapper>,
 }
 
-pub fn polar(options: PolarOptions) -> PolarProvider {
+pub fn polar(options: PolarOptions) -> Result<PolarProvider, OAuthError> {
     PolarProvider::new(options)
 }
 
 impl PolarProvider {
-    pub fn new(options: PolarOptions) -> Self {
-        Self { options }
+    pub fn new(options: PolarOptions) -> Result<Self, OAuthError> {
+        let PolarOptions {
+            oauth,
+            map_profile_to_user,
+        } = options;
+        let disable_default_scope = oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(POLAR_ID, oauth)
+            .authorization_endpoint(POLAR_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(POLAR_TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scopes(POLAR_DEFAULT_SCOPES.iter().copied());
+        }
+        Ok(Self {
+            client: builder.build()?,
+            map_profile_to_user,
+        })
     }
 
-    pub fn options(&self) -> &PolarOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn create_authorization_url(
         &self,
         request: PolarAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: POLAR_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: POLAR_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: request.code_verifier,
-            scopes: self.authorization_scopes(request.scopes),
-            prompt: self.options.oauth.prompt.clone(),
-            ..AuthorizationUrlRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?;
+        if let Some(code_verifier) = request.code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        url.scopes(request.scopes).build()
     }
 
     pub async fn validate_authorization_code(
@@ -137,34 +145,18 @@ impl PolarProvider {
         code_verifier: Option<impl Into<String>>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: POLAR_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                code_verifier: code_verifier.map(Into::into),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: POLAR_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token_value.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token_value)?.send().await
     }
 
     pub async fn get_user_info(
@@ -216,7 +208,7 @@ impl PolarProvider {
     }
 
     pub fn map_user_info(&self, profile: PolarProfile) -> PolarUserInfo {
-        if let Some(mapper) = &self.options.map_profile_to_user {
+        if let Some(mapper) = &self.map_profile_to_user {
             let user = mapper(&profile);
             return PolarUserInfo {
                 user,
@@ -226,23 +218,9 @@ impl PolarProvider {
 
         Self::map_profile(profile)
     }
-
-    fn authorization_scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            POLAR_DEFAULT_SCOPES
-                .iter()
-                .map(|scope| (*scope).to_owned())
-                .collect()
-        };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
 }
 
-impl OAuthProviderContract for PolarProvider {
+impl ProviderIdentity for PolarProvider {
     fn id(&self) -> &str {
         POLAR_ID
     }

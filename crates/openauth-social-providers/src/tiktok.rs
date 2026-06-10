@@ -1,25 +1,29 @@
 //! TikTok social OAuth provider.
 
-use std::collections::BTreeMap;
-
 use openauth_oauth::oauth2::{
-    authorization_code_request, refresh_access_token, refresh_access_token_request,
-    validate_authorization_code, validate_authorization_url_invariants, AuthorizationCodeRequest,
-    ClientAuthentication, ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError,
-    OAuthFormRequest, OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
+    create_authorization_code_request, create_refresh_access_token_request,
+    exchange_authorization_code, refresh_access_token_at, validate_authorization_url_invariants,
+    AuthorizationCodeRequest, ClientAuthentication, ClientId, OAuth2Client, OAuth2Tokens,
+    OAuth2UserInfo, OAuthError, OAuthFormRequest, ProviderOptions, RefreshAccessTokenRequest,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::runtime::ProviderIdentity;
+
+const AUTHORIZATION_ENDPOINT: &str = "https://www.tiktok.com/v2/auth/authorize";
+const TOKEN_ENDPOINT: &str = "https://open.tiktokapis.com/v2/oauth/token/";
+const USERINFO_ENDPOINT: &str = "https://open.tiktokapis.com/v2/user/info/";
+const DEFAULT_SCOPE: &str = "user.info.profile";
+
+const USERINFO_FIELDS: &[&str] = &["open_id", "avatar_large_url", "display_name", "username"];
+
 pub const TIKTOK_ID: &str = "tiktok";
 pub const TIKTOK_NAME: &str = "TikTok";
-pub const TIKTOK_AUTHORIZATION_ENDPOINT: &str = "https://www.tiktok.com/v2/auth/authorize";
-pub const TIKTOK_TOKEN_ENDPOINT: &str = "https://open.tiktokapis.com/v2/oauth/token/";
-pub const TIKTOK_USERINFO_ENDPOINT: &str = "https://open.tiktokapis.com/v2/user/info/";
-pub const TIKTOK_DEFAULT_SCOPE: &str = "user.info.profile";
-
-const TIKTOK_USERINFO_FIELDS: &[&str] =
-    &["open_id", "avatar_large_url", "display_name", "username"];
+pub const TIKTOK_AUTHORIZATION_ENDPOINT: &str = AUTHORIZATION_ENDPOINT;
+pub const TIKTOK_TOKEN_ENDPOINT: &str = TOKEN_ENDPOINT;
+pub const TIKTOK_USERINFO_ENDPOINT: &str = USERINFO_ENDPOINT;
+pub const TIKTOK_DEFAULT_SCOPE: &str = DEFAULT_SCOPE;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TiktokProfile {
@@ -94,20 +98,33 @@ pub struct TiktokUserInfo {
 
 #[derive(Debug, Clone)]
 pub struct TiktokProvider {
-    options: ProviderOptions,
+    client: OAuth2Client,
+    token_options: ProviderOptions,
     http_client: reqwest::Client,
 }
 
-pub fn tiktok(options: ProviderOptions) -> TiktokProvider {
+pub fn tiktok(options: ProviderOptions) -> Result<TiktokProvider, OAuthError> {
     TiktokProvider::new(options)
 }
 
 impl TiktokProvider {
-    pub fn new(options: ProviderOptions) -> Self {
-        Self {
-            options,
-            http_client: crate::http::shared_client(),
+    pub fn new(options: ProviderOptions) -> Result<Self, OAuthError> {
+        Self::ensure_token_credentials(&options)?;
+        let token_options = options.clone();
+        let build_options = Self::oauth_for_client(options)?;
+        let disable_default_scope = token_options.disable_default_scope;
+        let mut builder = OAuth2Client::builder("tiktok", build_options)
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(TOKEN_ENDPOINT)?
+            .scope_joiner(",");
+        if !disable_default_scope {
+            builder = builder.default_scope(DEFAULT_SCOPE);
         }
+        Ok(Self {
+            client: builder.build()?,
+            token_options,
+            http_client: crate::http::shared_client(),
+        })
     }
 
     pub fn id(&self) -> &str {
@@ -118,16 +135,16 @@ impl TiktokProvider {
         TIKTOK_NAME
     }
 
-    pub fn options(&self) -> &ProviderOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.token_options.clone()
     }
 
     pub fn token_endpoint(&self) -> &str {
-        TIKTOK_TOKEN_ENDPOINT
+        self.client.token_endpoint().as_str()
     }
 
     pub fn userinfo_endpoint(&self) -> &str {
-        TIKTOK_USERINFO_ENDPOINT
+        USERINFO_ENDPOINT
     }
 
     pub fn create_authorization_url(
@@ -136,17 +153,17 @@ impl TiktokProvider {
     ) -> Result<Url, OAuthError> {
         validate_authorization_url_invariants(
             &request.state,
-            self.options.redirect_uri.as_deref(),
+            self.token_options.redirect_uri.as_deref(),
             &request.redirect_uri,
         )?;
         let client_key = self.client_key()?;
         let redirect_uri = self
-            .options
+            .token_options
             .redirect_uri
             .as_deref()
             .unwrap_or(&request.redirect_uri);
         let scopes = self.scopes(request.scopes);
-        let mut url = Url::parse(TIKTOK_AUTHORIZATION_ENDPOINT)?;
+        let mut url = Url::parse(AUTHORIZATION_ENDPOINT)?;
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("scope", &scopes.join(","));
@@ -162,31 +179,20 @@ impl TiktokProvider {
         &self,
         request: TiktokValidateAuthorizationCodeRequest,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        self.ensure_token_credentials()?;
-        authorization_code_request(AuthorizationCodeRequest {
-            code: request.code,
-            redirect_uri: request.redirect_uri,
-            options: self.options.clone(),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        Self::ensure_token_credentials(&self.token_options)?;
+        create_authorization_code_request(self.authorization_code_exchange(request)?)
     }
 
     pub async fn validate_authorization_code(
         &self,
         request: TiktokValidateAuthorizationCodeRequest,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        self.ensure_token_credentials()?;
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: TIKTOK_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: request.code,
-                redirect_uri: request.redirect_uri,
-                options: self.options.clone(),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
+        Self::ensure_token_credentials(&self.token_options)?;
+        exchange_authorization_code(
+            self.client.token_endpoint().as_str(),
+            self.authorization_code_exchange(request)?,
+            self.client.http(),
+        )
         .await
     }
 
@@ -194,31 +200,20 @@ impl TiktokProvider {
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        self.ensure_token_credentials()?;
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.clone(),
-            authentication: ClientAuthentication::Post,
-            extra_params: self.refresh_extra_params()?,
-            ..RefreshAccessTokenRequest::default()
-        })
+        Self::ensure_token_credentials(&self.token_options)?;
+        create_refresh_access_token_request(self.refresh_exchange(refresh_token)?)
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        self.ensure_token_credentials()?;
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: TIKTOK_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.clone(),
-                authentication: ClientAuthentication::Post,
-                extra_params: self.refresh_extra_params()?,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
+        Self::ensure_token_credentials(&self.token_options)?;
+        refresh_access_token_at(
+            self.client.token_endpoint().as_str(),
+            self.refresh_exchange(refresh_token)?,
+            self.client.http(),
+        )
         .await
     }
 
@@ -231,8 +226,8 @@ impl TiktokProvider {
         };
         let response = self
             .http_client
-            .get(TIKTOK_USERINFO_ENDPOINT)
-            .query(&[("fields", TIKTOK_USERINFO_FIELDS.join(","))])
+            .get(USERINFO_ENDPOINT)
+            .query(&[("fields", USERINFO_FIELDS.join(","))])
             .bearer_auth(access_token)
             .send()
             .await;
@@ -278,30 +273,35 @@ impl TiktokProvider {
     }
 
     fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.disable_default_scope {
+        let mut scopes = if self.token_options.disable_default_scope {
             Vec::new()
         } else {
-            vec![TIKTOK_DEFAULT_SCOPE.to_owned()]
+            vec![DEFAULT_SCOPE.to_owned()]
         };
-        scopes.extend(self.options.scope.iter().cloned());
+        scopes.extend(self.token_options.scope.iter().cloned());
         scopes.extend(request_scopes);
         scopes
     }
 
     fn client_key(&self) -> Result<&str, OAuthError> {
-        self.options
+        self.token_options
             .client_key
             .as_deref()
             .filter(|client_key| !client_key.is_empty())
             .ok_or(OAuthError::MissingOption("client_key"))
     }
 
-    fn ensure_token_credentials(&self) -> Result<(), OAuthError> {
-        self.client_key()?;
-        if self
-            .options
-            .client_secret
+    fn ensure_token_credentials(options: &ProviderOptions) -> Result<(), OAuthError> {
+        if options
+            .client_key
             .as_deref()
+            .filter(|client_key| !client_key.is_empty())
+            .is_none()
+        {
+            return Err(OAuthError::MissingOption("client_key"));
+        }
+        if options
+            .client_secret_str()
             .filter(|client_secret| !client_secret.is_empty())
             .is_none()
         {
@@ -310,15 +310,43 @@ impl TiktokProvider {
         Ok(())
     }
 
-    fn refresh_extra_params(&self) -> Result<BTreeMap<String, String>, OAuthError> {
-        Ok(BTreeMap::from([(
-            "client_key".to_owned(),
-            self.client_key()?.to_owned(),
-        )]))
+    fn oauth_for_client(mut options: ProviderOptions) -> Result<ProviderOptions, OAuthError> {
+        if options.client_id.is_none() {
+            let client_key = options
+                .client_key
+                .as_deref()
+                .filter(|client_key| !client_key.is_empty())
+                .ok_or(OAuthError::MissingOption("client_key"))?;
+            options.client_id = Some(ClientId::from(client_key));
+        }
+        Ok(options)
+    }
+
+    fn authorization_code_exchange(
+        &self,
+        request: TiktokValidateAuthorizationCodeRequest,
+    ) -> Result<AuthorizationCodeRequest, OAuthError> {
+        Ok(AuthorizationCodeRequest::try_new(
+            request.code,
+            request.redirect_uri,
+            self.token_options.clone(),
+        )?
+        .authentication(ClientAuthentication::Post))
+    }
+
+    fn refresh_exchange(
+        &self,
+        refresh_token: impl Into<String>,
+    ) -> Result<RefreshAccessTokenRequest, OAuthError> {
+        Ok(
+            RefreshAccessTokenRequest::try_new(refresh_token, self.token_options.clone())?
+                .authentication(ClientAuthentication::Post)
+                .extra_param("client_key", self.client_key()?),
+        )
     }
 }
 
-impl OAuthProviderContract for TiktokProvider {
+impl ProviderIdentity for TiktokProvider {
     fn id(&self) -> &str {
         self.id()
     }

@@ -1,21 +1,19 @@
 //! PayPal social OAuth provider.
 
-use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use josekit::jwk::JwkSet;
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, get_oauth2_tokens,
-    refresh_access_token_request, validate_authorization_code, validate_token,
-    verify_jws_with_jwks, AuthorizationCodeRequest, AuthorizationUrlRequest, ClientAuthentication,
-    ClientId, ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest,
-    OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest, TokenValidationOptions,
+    validate_token, verify_jws_with_jwks, ClientAuthentication, ClientId, OAuth2Client,
+    OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions, TokenValidationOptions,
+    ValidateTokenOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const PAYPAL_ID: &str = "paypal";
 pub const PAYPAL_NAME: &str = "PayPal";
@@ -91,7 +89,7 @@ pub struct PayPalProfile {
     pub age_range: Option<String>,
     pub payer_id: Option<String>,
     #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub extra: std::collections::BTreeMap<String, Value>,
 }
 
 impl PayPalProfile {
@@ -114,19 +112,21 @@ pub struct PayPalUserInfo {
 
 #[derive(Clone)]
 pub struct PayPalProvider {
-    options: PayPalOptions,
-    authorization_endpoint: &'static str,
-    token_endpoint: &'static str,
+    client: OAuth2Client,
+    environment: PayPalEnvironment,
+    jwks_endpoint: Option<String>,
+    map_profile_to_user: Option<UserMapper>,
+    verify_id_token: Option<PayPalVerifyIdToken>,
     user_info_endpoint: &'static str,
     http_client: reqwest::Client,
 }
 
-pub fn paypal(options: PayPalOptions) -> PayPalProvider {
+pub fn paypal(options: PayPalOptions) -> Result<PayPalProvider, OAuthError> {
     PayPalProvider::new(options)
 }
 
 impl PayPalProvider {
-    pub fn new(options: PayPalOptions) -> Self {
+    pub fn new(options: PayPalOptions) -> Result<Self, OAuthError> {
         let (authorization_endpoint, token_endpoint, user_info_endpoint) = match options.environment
         {
             PayPalEnvironment::Sandbox => (
@@ -141,25 +141,40 @@ impl PayPalProvider {
             ),
         };
 
-        Self {
-            options,
-            authorization_endpoint,
-            token_endpoint,
+        let PayPalOptions {
+            oauth,
+            environment,
+            jwks_endpoint,
+            map_profile_to_user,
+            verify_id_token,
+            ..
+        } = options;
+
+        Ok(Self {
+            client: OAuth2Client::builder(PAYPAL_ID, oauth)
+                .authorization_endpoint(authorization_endpoint)?
+                .token_endpoint(token_endpoint)?
+                .authentication(ClientAuthentication::Basic)
+                .build()?,
+            environment,
+            jwks_endpoint,
+            map_profile_to_user,
+            verify_id_token,
             user_info_endpoint,
             http_client: crate::http::shared_client(),
-        }
+        })
     }
 
-    pub fn options(&self) -> &PayPalOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn authorization_endpoint(&self) -> &str {
-        self.authorization_endpoint
+        self.client.authorization_endpoint().as_str()
     }
 
     pub fn token_endpoint(&self) -> &str {
-        self.token_endpoint
+        self.client.token_endpoint().as_str()
     }
 
     pub fn user_info_endpoint(&self) -> &str {
@@ -169,35 +184,18 @@ impl PayPalProvider {
     pub fn create_authorization_url(
         &self,
         request: PayPalAuthorizationUrlRequest,
-    ) -> Result<Url, OAuthError> {
+    ) -> Result<url::Url, OAuthError> {
         self.ensure_client_credentials()?;
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: PAYPAL_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: self.authorization_endpoint.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: request.code_verifier,
-            scopes: Vec::new(),
-            prompt: self.options.oauth.prompt.clone(),
-            ..AuthorizationUrlRequest::default()
-        })
-    }
-
-    pub fn authorization_code_request(
-        &self,
-        code: impl Into<String>,
-        redirect_uri: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Basic,
-            headers: paypal_token_headers(),
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?;
+        if let Some(code_verifier) = request.code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        if let Some(prompt) = self.client.options().prompt.clone() {
+            url = url.prompt(prompt);
+        }
+        url.build()
     }
 
     pub async fn validate_authorization_code(
@@ -205,40 +203,22 @@ impl PayPalProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: self.token_endpoint.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Basic,
-                headers: paypal_token_headers(),
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
-    }
-
-    pub fn refresh_access_token_request(
-        &self,
-        refresh_token_value: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token_value.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Basic,
-            ..RefreshAccessTokenRequest::default()
-        })
-        .map(with_paypal_token_headers)
+        self.client
+            .exchange_code(code, redirect_uri)?
+            .header("Accept-Language", "en_US")
+            .send()
+            .await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        let request = self.refresh_access_token_request(refresh_token_value)?;
-        let data = post_form(self.token_endpoint, request).await?;
-        get_oauth2_tokens(data)
+        self.client
+            .refresh_token(refresh_token_value)?
+            .header("Accept-Language", "en_US")
+            .send()
+            .await
     }
 
     pub async fn verify_id_token(
@@ -246,11 +226,11 @@ impl PayPalProvider {
         token: &str,
         nonce: Option<&str>,
     ) -> Result<bool, OAuthError> {
-        if self.options.oauth.disable_id_token_sign_in {
+        if self.client.options().disable_id_token_sign_in {
             return Ok(false);
         }
 
-        if let Some(verify_id_token) = &self.options.verify_id_token {
+        if let Some(verify_id_token) = &self.verify_id_token {
             return verify_id_token(token.to_owned(), nonce.map(str::to_owned)).await;
         }
 
@@ -262,7 +242,7 @@ impl PayPalProvider {
         let payload = match validate_token(
             token,
             self.jwks_endpoint(),
-            self.id_token_validation_options(audiences),
+            ValidateTokenOptions::new(self.id_token_validation_options(audiences)),
         )
         .await
         {
@@ -279,7 +259,7 @@ impl PayPalProvider {
         nonce: Option<&str>,
         jwk_set: &JwkSet,
     ) -> Result<bool, OAuthError> {
-        if self.options.oauth.disable_id_token_sign_in {
+        if self.client.options().disable_id_token_sign_in {
             return Ok(false);
         }
 
@@ -333,7 +313,6 @@ impl PayPalProvider {
 
     pub fn map_profile(&self, profile: PayPalProfile) -> PayPalUserInfo {
         let user = self
-            .options
             .map_profile_to_user
             .as_ref()
             .map(|mapper| mapper(&profile))
@@ -346,17 +325,7 @@ impl PayPalProvider {
     }
 
     fn ensure_client_credentials(&self) -> Result<(), OAuthError> {
-        if openauth_oauth::oauth2::get_primary_client_id(&self.options.oauth.client_id).is_none() {
-            return Err(OAuthError::MissingOption("client_id"));
-        }
-        if self
-            .options
-            .oauth
-            .client_secret
-            .as_deref()
-            .unwrap_or("")
-            .is_empty()
-        {
+        if self.client.options().client_secret.is_none() {
             return Err(OAuthError::MissingOption("client_secret"));
         }
         Ok(())
@@ -367,10 +336,9 @@ impl PayPalProvider {
     }
 
     fn jwks_endpoint(&self) -> &str {
-        self.options
-            .jwks_endpoint
+        self.jwks_endpoint
             .as_deref()
-            .unwrap_or(match self.options.environment {
+            .unwrap_or(match self.environment {
                 PayPalEnvironment::Sandbox => PAYPAL_SANDBOX_JWKS_ENDPOINT,
                 PayPalEnvironment::Live => PAYPAL_LIVE_JWKS_ENDPOINT,
             })
@@ -406,7 +374,7 @@ impl PayPalProvider {
     }
 
     fn client_id_audiences(&self) -> Vec<String> {
-        match &self.options.oauth.client_id {
+        match &self.client.options().client_id {
             Some(ClientId::Single(value)) if !value.is_empty() => vec![value.clone()],
             Some(ClientId::Multiple(values)) => values
                 .iter()
@@ -418,7 +386,7 @@ impl PayPalProvider {
     }
 }
 
-impl OAuthProviderContract for PayPalProvider {
+impl ProviderIdentity for PayPalProvider {
     fn id(&self) -> &str {
         PAYPAL_ID
     }
@@ -426,33 +394,4 @@ impl OAuthProviderContract for PayPalProvider {
     fn name(&self) -> &str {
         PAYPAL_NAME
     }
-}
-
-fn paypal_token_headers() -> BTreeMap<String, String> {
-    BTreeMap::from([("Accept-Language".to_owned(), "en_US".to_owned())])
-}
-
-fn with_paypal_token_headers(mut request: OAuthFormRequest) -> OAuthFormRequest {
-    request.set_header("Accept-Language", "en_US");
-    request
-}
-
-async fn post_form(
-    token_endpoint: &str,
-    request: OAuthFormRequest,
-) -> Result<serde_json::Value, OAuthError> {
-    let client = crate::http::shared_client();
-    let mut builder = client.post(token_endpoint);
-    for (key, value) in &request.headers {
-        builder = builder.header(key, value);
-    }
-    let response = builder
-        .body(request.to_form_urlencoded())
-        .send()
-        .await?
-        .error_for_status()?;
-    response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(Into::into)
 }

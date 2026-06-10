@@ -5,11 +5,12 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{ClientId, OAuthProviderContract, ProviderOptions};
+use openauth_oauth::oauth2::{ClientId, ProviderOptions};
 use openauth_social_providers::advanced::dropbox::{
     DropboxAccessType, DropboxAuthorizationUrlRequest, DropboxName, DropboxProfile,
     DropboxProvider, DropboxProviderOptions,
 };
+use openauth_social_providers::ProviderIdentity;
 
 #[test]
 fn dropbox_provider_exposes_upstream_metadata() {
@@ -19,7 +20,8 @@ fn dropbox_provider_exposes_upstream_metadata() {
             ..ProviderOptions::default()
         },
         ..DropboxProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(provider.id(), "dropbox");
     assert_eq!(provider.name(), "Dropbox");
@@ -33,7 +35,8 @@ fn authorization_url_includes_default_scope_and_access_type() {
             ..ProviderOptions::default()
         },
         access_type: Some(DropboxAccessType::Offline),
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(DropboxAuthorizationUrlRequest {
@@ -83,7 +86,8 @@ fn authorization_url_can_disable_default_scope() {
             ..ProviderOptions::default()
         },
         ..DropboxProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(DropboxAuthorizationUrlRequest {

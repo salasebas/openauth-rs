@@ -521,17 +521,19 @@ fn public_api_openauth_plugins_reexport_exposes_siwe_constructor(
 }
 
 #[test]
-fn openauth_crate_accepts_social_oauth_runtime_providers() {
+fn openauth_crate_accepts_social_oauth_runtime_providers() -> Result<(), Box<dyn std::error::Error>>
+{
     let provider: Arc<dyn SocialOAuthProvider> =
         Arc::new(openauth::social_providers::providers::github(
             openauth::social_providers::SocialProviderConfig::new("client-id", "client-secret"),
-        ));
+        )?);
     let options = OpenAuthOptions {
         social_providers: vec![provider],
         ..OpenAuthOptions::default()
     };
 
     assert_eq!(options.social_providers[0].id(), "github");
+    Ok(())
 }
 
 #[test]
@@ -569,7 +571,7 @@ async fn openauth_instance_exposes_async_handler() -> Result<(), Box<dyn std::er
 }
 
 #[test]
-fn openauth_crate_reexports_core_contract_types() {
+fn openauth_crate_reexports_core_contract_types() -> Result<(), Box<dyn std::error::Error>> {
     fn _uses_api_request(_request: ApiRequest) {}
     fn _uses_api_response(_response: ApiResponse) {}
     fn _uses_error(_error: OpenAuthError) {}
@@ -584,7 +586,7 @@ fn openauth_crate_reexports_core_contract_types() {
     let provider: Arc<dyn SocialOAuthProvider> =
         Arc::new(openauth::social_providers::providers::github(
             openauth::social_providers::SocialProviderConfig::new("client-id", "client-secret"),
-        ));
+        )?);
     let _plugin = AuthPlugin::new("test-plugin").with_social_provider(provider.clone());
     let _plugin_endpoint_type: Option<PluginEndpoint> = None;
     let _plugin_init = PluginInitOutput::new().social_provider(provider);
@@ -672,6 +674,7 @@ fn openauth_crate_reexports_core_contract_types() {
         success: true,
         cookies: Vec::new(),
     };
+    Ok(())
 }
 
 #[tokio::test]

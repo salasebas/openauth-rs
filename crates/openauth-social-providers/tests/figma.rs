@@ -1,4 +1,14 @@
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthError, ProviderOptions};
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "provider tests intentionally fail fast with contextual setup errors"
+)]
+
+use openauth_oauth::oauth2::{
+    create_authorization_code_request, create_refresh_access_token_request,
+    AuthorizationCodeRequest, ClientAuthentication, ClientId, ClientSecret, OAuth2Tokens,
+    OAuthError, ProviderOptions, RefreshAccessTokenRequest,
+};
 use openauth_social_providers::advanced::figma::{
     figma, FigmaAuthorizationUrlRequest, FigmaProfile, FIGMA_AUTHORIZATION_ENDPOINT, FIGMA_ID,
     FIGMA_NAME, FIGMA_TOKEN_ENDPOINT,
@@ -6,14 +16,14 @@ use openauth_social_providers::advanced::figma::{
 
 #[test]
 fn figma_provider_exposes_upstream_metadata() {
-    let provider = figma(provider_options());
+    let provider = figma(provider_options()).expect("provider should construct");
 
     assert_eq!((provider.id(), provider.name()), (FIGMA_ID, FIGMA_NAME));
 }
 
 #[test]
 fn figma_authorization_url_uses_default_scope_and_pkce() -> Result<(), OAuthError> {
-    let provider = figma(provider_options());
+    let provider = figma(provider_options()).expect("provider should construct");
     let url = provider.create_authorization_url(FigmaAuthorizationUrlRequest {
         state: "state-1".to_owned(),
         redirect_uri: "https://app.example.com/auth/callback".to_owned(),
@@ -40,27 +50,23 @@ fn figma_authorization_url_uses_default_scope_and_pkce() -> Result<(), OAuthErro
 
 #[test]
 fn figma_authorization_url_requires_client_id_and_secret() {
-    let provider = figma(ProviderOptions::default());
+    assert!(matches!(
+        figma(ProviderOptions::default()),
+        Err(OAuthError::MissingOption("client_id"))
+    ));
 
-    let error = provider
-        .create_authorization_url(FigmaAuthorizationUrlRequest {
-            state: "state-1".to_owned(),
-            redirect_uri: "https://app.example.com/auth/callback".to_owned(),
-            code_verifier: Some("01234567890123456789012345678901234567890123456789".to_owned()),
-            scopes: Vec::new(),
-        })
-        .err()
-        .map(|error| error.to_string());
-
-    assert_eq!(
-        error.as_deref(),
-        Some("missing OAuth provider option `client_id`")
-    );
+    assert!(matches!(
+        figma(ProviderOptions {
+            client_id: Some(ClientId::from("figma-client")),
+            ..ProviderOptions::default()
+        }),
+        Err(OAuthError::MissingOption("client_secret"))
+    ));
 }
 
 #[test]
 fn figma_authorization_url_requires_code_verifier() {
-    let provider = figma(provider_options());
+    let provider = figma(provider_options()).expect("provider should construct");
 
     let error = provider
         .create_authorization_url(FigmaAuthorizationUrlRequest {
@@ -70,40 +76,40 @@ fn figma_authorization_url_requires_code_verifier() {
             scopes: Vec::new(),
         })
         .err()
-        .map(|error| error.to_string());
+        .map(|error| error.to_string())
+        .expect("error should be present");
 
-    assert_eq!(
-        error.as_deref(),
-        Some("missing OAuth provider option `code_verifier`")
-    );
+    assert_eq!(error, "missing OAuth provider option `code_verifier`");
 }
 
-#[test]
-fn figma_authorization_code_request_requires_code_verifier() {
-    let provider = figma(provider_options());
+#[tokio::test]
+async fn figma_validate_authorization_code_requires_code_verifier() {
+    let provider = figma(provider_options()).expect("provider should construct");
 
     let error = provider
-        .authorization_code_request(
+        .validate_authorization_code(
             "code-1",
             None::<String>,
             "https://app.example.com/auth/callback",
         )
-        .err()
-        .map(|error| error.to_string());
+        .await
+        .unwrap_err()
+        .to_string();
 
-    assert_eq!(
-        error.as_deref(),
-        Some("missing OAuth provider option `code_verifier`")
-    );
+    assert_eq!(error, "missing OAuth provider option `code_verifier`");
 }
 
 #[test]
 fn figma_token_requests_use_basic_auth() -> Result<(), OAuthError> {
-    let provider = figma(provider_options());
-    let request = provider.authorization_code_request(
-        "code-1",
-        Some("01234567890123456789012345678901234567890123456789"),
-        "https://app.example.com/auth/callback",
+    let provider = figma(provider_options()).expect("provider should construct");
+    let request = create_authorization_code_request(
+        AuthorizationCodeRequest::try_new(
+            "code-1",
+            "https://app.example.com/auth/callback",
+            provider.options(),
+        )?
+        .authentication(ClientAuthentication::Basic)
+        .code_verifier("01234567890123456789012345678901234567890123456789"),
     )?;
 
     assert_eq!(
@@ -118,8 +124,11 @@ fn figma_token_requests_use_basic_auth() -> Result<(), OAuthError> {
 
 #[test]
 fn figma_refresh_requests_use_basic_auth() -> Result<(), OAuthError> {
-    let provider = figma(provider_options());
-    let request = provider.refresh_access_token_request("refresh-1")?;
+    let provider = figma(provider_options()).expect("provider should construct");
+    let request = create_refresh_access_token_request(
+        RefreshAccessTokenRequest::try_new("refresh-1", provider.options())?
+            .authentication(ClientAuthentication::Basic),
+    )?;
 
     assert_eq!(provider.token_endpoint(), FIGMA_TOKEN_ENDPOINT);
     assert_eq!(
@@ -154,7 +163,7 @@ fn figma_profile_maps_to_unverified_user_info() {
 
 #[tokio::test]
 async fn figma_get_user_info_returns_none_without_access_token() -> Result<(), OAuthError> {
-    let provider = figma(provider_options());
+    let provider = figma(provider_options()).expect("provider should construct");
 
     let user_info = provider.get_user_info(&OAuth2Tokens::default()).await?;
 
@@ -165,7 +174,7 @@ async fn figma_get_user_info_returns_none_without_access_token() -> Result<(), O
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("figma-client")),
-        client_secret: Some("figma-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("figma-secret").expect("valid client secret")),
         ..ProviderOptions::default()
     }
 }

@@ -4,9 +4,13 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
+use openauth_social_providers::ProviderIdentity;
 use std::sync::Arc;
 
-use openauth_oauth::oauth2::{ClientId, OAuthError, ProviderOptions};
+use openauth_oauth::oauth2::{
+    create_authorization_code_request, AuthorizationCodeRequest, ClientId, ClientSecret,
+    OAuthError, ProviderOptions,
+};
 use openauth_social_providers::advanced::vercel::{
     vercel, VercelAuthorizationUrlRequest, VercelOptions, VercelProfile, VercelUserPatch,
     VERCEL_AUTHORIZATION_ENDPOINT, VERCEL_ID, VERCEL_NAME, VERCEL_TOKEN_ENDPOINT,
@@ -14,14 +18,14 @@ use openauth_social_providers::advanced::vercel::{
 
 #[test]
 fn vercel_provider_exposes_upstream_metadata() {
-    let provider = vercel(vercel_options());
+    let provider = vercel(vercel_options()).expect("provider should construct");
 
     assert_eq!((provider.id(), provider.name()), (VERCEL_ID, VERCEL_NAME));
 }
 
 #[test]
 fn vercel_authorization_url_requires_pkce_and_uses_upstream_endpoint() -> Result<(), OAuthError> {
-    let provider = vercel(vercel_options());
+    let provider = vercel(vercel_options()).expect("provider should construct");
     let url = provider.create_authorization_url(VercelAuthorizationUrlRequest {
         state: "state-1".to_owned(),
         redirect_uri: "https://app.example.com/auth/callback/vercel".to_owned(),
@@ -49,13 +53,14 @@ fn vercel_authorization_url_appends_provider_scopes_before_request_scopes() -> R
     let provider = vercel(VercelOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("vercel-client")),
-            client_secret: Some("vercel-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("vercel-secret").expect("valid client secret")),
             scope: vec!["openid".to_owned(), "email".to_owned()],
             ..ProviderOptions::default()
         },
         map_profile_to_user: None,
         ..VercelOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(VercelAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -73,7 +78,7 @@ fn vercel_authorization_url_appends_provider_scopes_before_request_scopes() -> R
 
 #[test]
 fn vercel_authorization_url_requires_code_verifier() {
-    let provider = vercel(vercel_options());
+    let provider = vercel(vercel_options()).expect("provider should construct");
 
     let error = provider
         .create_authorization_url(VercelAuthorizationUrlRequest {
@@ -90,16 +95,17 @@ fn vercel_authorization_url_requires_code_verifier() {
     );
 }
 
-#[test]
-fn vercel_authorization_code_request_requires_code_verifier() {
-    let provider = vercel(vercel_options());
+#[tokio::test]
+async fn vercel_validate_authorization_code_requires_code_verifier() {
+    let provider = vercel(vercel_options()).expect("provider should construct");
 
     let error = provider
-        .authorization_code_request(
+        .validate_authorization_code(
             "code-1",
             None::<String>,
             "https://app.example.com/auth/callback/vercel",
         )
+        .await
         .unwrap_err();
 
     assert_eq!(
@@ -110,11 +116,14 @@ fn vercel_authorization_code_request_requires_code_verifier() {
 
 #[test]
 fn vercel_authorization_code_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = vercel(vercel_options());
-    let request = provider.authorization_code_request(
-        "code-1",
-        Some("01234567890123456789012345678901234567890123456789"),
-        "https://app.example.com/auth/callback/vercel",
+    let provider = vercel(vercel_options()).expect("provider should construct");
+    let request = create_authorization_code_request(
+        AuthorizationCodeRequest::try_new(
+            "code-1",
+            "https://app.example.com/auth/callback/vercel",
+            provider.options(),
+        )?
+        .code_verifier("01234567890123456789012345678901234567890123456789"),
     )?;
 
     assert_eq!(provider.token_endpoint(), VERCEL_TOKEN_ENDPOINT);
@@ -135,7 +144,7 @@ fn vercel_authorization_code_request_matches_upstream_form_contract() -> Result<
 
 #[test]
 fn vercel_profile_maps_name_preferred_username_and_email_verified() {
-    let provider = vercel(vercel_options());
+    let provider = vercel(vercel_options()).expect("provider should construct");
 
     let named = provider.map_profile(vercel_profile(Some("Vercel User"), Some("verceluser")));
     assert_eq!(named.user.name.as_deref(), Some("Vercel User"));
@@ -159,7 +168,8 @@ fn vercel_custom_mapper_can_override_user_info_fields() {
             ..VercelUserPatch::default()
         })),
         ..VercelOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let mapped = provider.map_profile(vercel_profile(Some("Vercel User"), Some("verceluser")));
 
@@ -179,7 +189,7 @@ fn vercel_options() -> VercelOptions {
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("vercel-client")),
-        client_secret: Some("vercel-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("vercel-secret").expect("valid client secret")),
         ..ProviderOptions::default()
     }
 }

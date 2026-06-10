@@ -10,25 +10,28 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use openauth_oauth::oauth2::{
-    ClientId, OAuth2Tokens, OAuthError, OAuthProviderContract, ProviderOptions,
+    create_authorization_code_request, create_refresh_access_token_request,
+    AuthorizationCodeRequest, ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions,
+    RefreshAccessTokenRequest,
 };
 use openauth_social_providers::advanced::http::ProviderHttpClient;
 use openauth_social_providers::advanced::zoom::{
     zoom, ZoomAuthorizationCodeRequest, ZoomAuthorizationUrlRequest, ZoomOptions, ZoomProfile,
     ZoomProvider, ZOOM_AUTHORIZATION_ENDPOINT, ZOOM_ID, ZOOM_NAME, ZOOM_TOKEN_ENDPOINT,
 };
+use openauth_social_providers::ProviderIdentity;
 use serde_json::json;
 
 #[test]
 fn zoom_provider_exposes_upstream_metadata() {
-    let provider = zoom(zoom_options());
+    let provider = zoom(zoom_options()).expect("provider should construct");
 
     assert_eq!((provider.id(), provider.name()), (ZOOM_ID, ZOOM_NAME));
 }
 
 #[test]
 fn zoom_authorization_url_uses_pkce_by_default() -> Result<(), OAuthError> {
-    let provider = zoom(zoom_options());
+    let provider = zoom(zoom_options()).expect("provider should construct");
 
     let url = provider.create_authorization_url(ZoomAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -60,7 +63,8 @@ fn zoom_authorization_url_can_disable_pkce() -> Result<(), OAuthError> {
     let provider = zoom(ZoomOptions {
         pkce: false,
         ..zoom_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(ZoomAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -75,7 +79,7 @@ fn zoom_authorization_url_can_disable_pkce() -> Result<(), OAuthError> {
 
 #[test]
 fn zoom_authorization_url_requires_code_verifier_when_pkce_is_enabled() {
-    let provider = zoom(zoom_options());
+    let provider = zoom(zoom_options()).expect("provider should construct");
 
     let result = provider.create_authorization_url(ZoomAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -89,16 +93,17 @@ fn zoom_authorization_url_requires_code_verifier_when_pkce_is_enabled() {
     ));
 }
 
-#[test]
-fn zoom_authorization_code_request_requires_code_verifier_when_pkce_is_enabled() {
-    let provider = zoom(zoom_options());
+#[tokio::test]
+async fn zoom_validate_authorization_code_requires_code_verifier_when_pkce_is_enabled() {
+    let provider = zoom(zoom_options()).expect("provider should construct");
 
     let error = provider
-        .authorization_code_request(ZoomAuthorizationCodeRequest {
+        .validate_authorization_code(ZoomAuthorizationCodeRequest {
             code: "code-1".to_owned(),
             redirect_uri: "https://app.example.com/auth/callback".to_owned(),
             code_verifier: None,
         })
+        .await
         .unwrap_err();
 
     assert!(matches!(error, OAuthError::MissingOption("code_verifier")));
@@ -110,13 +115,14 @@ fn zoom_authorization_code_request_allows_missing_code_verifier_when_pkce_is_dis
     let provider = zoom(ZoomOptions {
         pkce: false,
         ..zoom_options()
-    });
+    })
+    .expect("provider should construct");
 
-    let request = provider.authorization_code_request(ZoomAuthorizationCodeRequest {
-        code: "code-1".to_owned(),
-        redirect_uri: "https://app.example.com/auth/callback".to_owned(),
-        code_verifier: None,
-    })?;
+    let request = create_authorization_code_request(AuthorizationCodeRequest::try_new(
+        "code-1",
+        "https://app.example.com/auth/callback",
+        provider.options(),
+    )?)?;
 
     assert_eq!(request.form_value("code_verifier"), None);
     Ok(())
@@ -124,13 +130,16 @@ fn zoom_authorization_code_request_allows_missing_code_verifier_when_pkce_is_dis
 
 #[test]
 fn zoom_authorization_code_request_uses_post_client_authentication() -> Result<(), OAuthError> {
-    let provider = zoom(zoom_options());
+    let provider = zoom(zoom_options()).expect("provider should construct");
 
-    let request = provider.authorization_code_request(ZoomAuthorizationCodeRequest {
-        code: "code-1".to_owned(),
-        redirect_uri: "https://app.example.com/auth/callback".to_owned(),
-        code_verifier: Some("01234567890123456789012345678901234567890123456789".to_owned()),
-    })?;
+    let request = create_authorization_code_request(
+        AuthorizationCodeRequest::try_new(
+            "code-1",
+            "https://app.example.com/auth/callback",
+            provider.options(),
+        )?
+        .code_verifier("01234567890123456789012345678901234567890123456789"),
+    )?;
 
     assert_eq!(request.form_value("grant_type"), Some("authorization_code"));
     assert_eq!(request.form_value("code"), Some("code-1"));
@@ -155,13 +164,17 @@ fn zoom_refresh_access_token_request_uses_zoom_endpoint_and_credentials() -> Res
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("zoom-client")),
             client_key: Some("zoom-key".to_owned()),
-            client_secret: Some("zoom-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("zoom-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
         ..ZoomOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
-    let request = provider.refresh_access_token_request("refresh-1")?;
+    let request = create_refresh_access_token_request(
+        RefreshAccessTokenRequest::try_new("refresh-1", provider.options())?
+            .extra_param("client_key", "zoom-key"),
+    )?;
 
     assert_eq!(provider.token_endpoint(), ZOOM_TOKEN_ENDPOINT);
     assert_eq!(request.form_value("grant_type"), Some("refresh_token"));
@@ -206,6 +219,7 @@ async fn zoom_userinfo_fetches_profile_with_bearer_token() -> Result<(), OAuthEr
         }),
     );
     let provider = ZoomProvider::new_with_user_info_endpoint(zoom_options(), server.url())
+        .expect("provider should construct")
         .with_http_client(ProviderHttpClient::permissive());
 
     let info = provider
@@ -225,6 +239,7 @@ async fn zoom_userinfo_fetches_profile_with_bearer_token() -> Result<(), OAuthEr
 async fn zoom_userinfo_returns_none_for_http_errors() -> Result<(), OAuthError> {
     let server = JsonServer::spawn(500, json!({ "error": "server_error" }));
     let provider = ZoomProvider::new_with_user_info_endpoint(zoom_options(), server.url())
+        .expect("provider should construct")
         .with_http_client(ProviderHttpClient::permissive());
 
     assert!(provider.get_user_info(&tokens("access-1")).await?.is_none());
@@ -245,7 +260,8 @@ async fn zoom_userinfo_rejects_private_literal_ip_endpoint_by_default() -> Resul
     );
 
     // `server.url()` is a loopback literal IP, refused by the default client.
-    let guarded = ZoomProvider::new_with_user_info_endpoint(zoom_options(), server.url());
+    let guarded = ZoomProvider::new_with_user_info_endpoint(zoom_options(), server.url())
+        .expect("provider should construct");
     assert!(matches!(
         guarded.get_user_info(&tokens("access-1")).await,
         Err(OAuthError::InvalidConfiguration(_))
@@ -253,6 +269,7 @@ async fn zoom_userinfo_rejects_private_literal_ip_endpoint_by_default() -> Resul
 
     // An explicitly permissive client may still reach the loopback fixture.
     let permissive = ZoomProvider::new_with_user_info_endpoint(zoom_options(), server.url())
+        .expect("provider should construct")
         .with_http_client(ProviderHttpClient::permissive());
     let info = permissive
         .get_user_info(&tokens("access-1"))
@@ -266,7 +283,7 @@ fn zoom_options() -> ZoomOptions {
     ZoomOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("zoom-client")),
-            client_secret: Some("zoom-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("zoom-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
         ..ZoomOptions::default()

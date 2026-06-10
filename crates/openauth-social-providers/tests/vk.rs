@@ -1,4 +1,10 @@
-use openauth_oauth::oauth2::{ClientId, OAuthError, OAuthProviderContract, ProviderOptions};
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "provider tests intentionally fail fast with contextual setup errors"
+)]
+
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuthError, ProviderOptions};
 use openauth_social_providers::advanced::vk::{
     vk, VkAuthorizationUrlRequest, VkProfile, VkProfileUser, VkProvider, VK_AUTHORIZATION_ENDPOINT,
     VK_ID, VK_NAME, VK_TOKEN_ENDPOINT,
@@ -6,7 +12,8 @@ use openauth_social_providers::advanced::vk::{
 
 #[test]
 fn vk_provider_exposes_upstream_metadata() {
-    let provider = vk(VkOptionsFixture::default().into_options());
+    let provider =
+        vk(VkOptionsFixture::default().into_options()).expect("provider should construct");
 
     assert_eq!(provider.id(), VK_ID);
     assert_eq!(provider.name(), VK_NAME);
@@ -14,7 +21,8 @@ fn vk_provider_exposes_upstream_metadata() {
 
 #[test]
 fn vk_authorization_url_uses_upstream_endpoint_and_default_scopes() -> Result<(), OAuthError> {
-    let provider = vk(VkOptionsFixture::default().into_options());
+    let provider =
+        vk(VkOptionsFixture::default().into_options()).expect("provider should construct");
 
     let url = provider.create_authorization_url(VkAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -40,7 +48,8 @@ fn vk_authorization_url_uses_default_configured_and_request_scopes() -> Result<(
         scope: vec!["friends".to_owned()],
         ..VkOptionsFixture::default()
     }
-    .into_options());
+    .into_options())
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(VkAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -67,7 +76,8 @@ fn vk_authorization_url_can_disable_default_scope() -> Result<(), OAuthError> {
         scope: vec!["friends".to_owned()],
         disable_default_scope: true,
     }
-    .into_options());
+    .into_options())
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(VkAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -81,7 +91,8 @@ fn vk_authorization_url_can_disable_default_scope() -> Result<(), OAuthError> {
 
 #[test]
 fn vk_authorization_code_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = vk(VkOptionsFixture::default().into_options());
+    let provider =
+        vk(VkOptionsFixture::default().into_options()).expect("provider should construct");
 
     let request = provider.create_authorization_code_request(
         "code-1",
@@ -110,7 +121,8 @@ fn vk_authorization_code_request_matches_upstream_form_contract() -> Result<(), 
 
 #[test]
 fn vk_refresh_access_token_request_matches_upstream_form_contract() -> Result<(), OAuthError> {
-    let provider = vk(VkOptionsFixture::default().into_options());
+    let provider =
+        vk(VkOptionsFixture::default().into_options()).expect("provider should construct");
 
     let request = provider.refresh_access_token_request("refresh-1")?;
 
@@ -153,7 +165,8 @@ fn vk_profile_without_email_returns_none() {
 
 #[tokio::test]
 async fn vk_get_user_info_returns_none_when_access_token_is_missing() -> Result<(), OAuthError> {
-    let provider = vk(VkOptionsFixture::default().into_options());
+    let provider =
+        vk(VkOptionsFixture::default().into_options()).expect("provider should construct");
 
     let info = provider
         .get_user_info(&openauth_oauth::oauth2::OAuth2Tokens::default())
@@ -190,7 +203,7 @@ impl VkOptionsFixture {
         openauth_social_providers::advanced::vk::VkOptions {
             oauth: ProviderOptions {
                 client_id: Some(ClientId::from("vk-client")),
-                client_secret: Some("vk-secret".to_owned()),
+                client_secret: Some(ClientSecret::new("vk-secret").expect("valid client secret")),
                 client_key: Some("vk-client-key".to_owned()),
                 scope: self.scope,
                 disable_default_scope: self.disable_default_scope,

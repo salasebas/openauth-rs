@@ -1,19 +1,27 @@
-use openauth_oauth::oauth2::{ClientId, OAuthError, OAuthProviderContract, ProviderOptions};
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "provider tests intentionally fail fast with contextual setup errors"
+)]
+
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuthError, ProviderOptions};
 use openauth_social_providers::advanced::google::{
     GoogleAccessType, GoogleAuthorizationCodeRequest, GoogleAuthorizationUrlRequest, GoogleDisplay,
     GoogleOptions, GoogleProfile, GoogleProvider,
 };
+use openauth_social_providers::ProviderIdentity;
 
 #[test]
 fn google_provider_exposes_upstream_metadata() {
     let provider = GoogleProvider::new(GoogleOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("google-client")),
-            client_secret: Some("google-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("google-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
         ..GoogleOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(provider.id(), "google");
     assert_eq!(provider.name(), "Google");
@@ -28,7 +36,7 @@ fn authorization_url_includes_google_defaults_and_options() -> Result<(), Box<dy
                 "web-client".to_owned(),
                 "ios-client".to_owned(),
             ])),
-            client_secret: Some("google-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("google-secret").expect("valid client secret")),
             redirect_uri: Some("https://auth.example.com/google/callback".to_owned()),
             scope: vec!["calendar.readonly".to_owned()],
             prompt: Some("select_account consent".to_owned()),
@@ -37,7 +45,8 @@ fn authorization_url_includes_google_defaults_and_options() -> Result<(), Box<dy
         access_type: Some(GoogleAccessType::Offline),
         display: Some(GoogleDisplay::Popup),
         hd: Some("example.com".to_owned()),
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(GoogleAuthorizationUrlRequest {
         state: "state-123".to_owned(),
@@ -92,7 +101,7 @@ fn authorization_url_can_disable_default_scope() -> Result<(), Box<dyn std::erro
     let provider = GoogleProvider::new(GoogleOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("google-client")),
-            client_secret: Some("google-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("google-secret").expect("valid client secret")),
             disable_default_scope: true,
             scope: vec!["calendar.readonly".to_owned()],
             ..ProviderOptions::default()
@@ -100,7 +109,8 @@ fn authorization_url_can_disable_default_scope() -> Result<(), Box<dyn std::erro
         access_type: Some(GoogleAccessType::Online),
         display: Some(GoogleDisplay::Wap),
         ..GoogleOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(GoogleAuthorizationUrlRequest {
         state: "state".to_owned(),
@@ -121,16 +131,18 @@ fn authorization_url_can_disable_default_scope() -> Result<(), Box<dyn std::erro
 
 #[test]
 fn authorization_url_requires_client_id_secret_and_code_verifier() {
-    let missing_client_id = GoogleProvider::new(GoogleOptions {
-        oauth: ProviderOptions {
-            client_secret: Some("google-secret".to_owned()),
-            ..ProviderOptions::default()
-        },
-        ..GoogleOptions::default()
-    });
-    assert!(missing_client_id
-        .create_authorization_url(valid_authorization_request())
-        .is_err());
+    assert!(matches!(
+        GoogleProvider::new(GoogleOptions {
+            oauth: ProviderOptions {
+                client_secret: Some(
+                    ClientSecret::new("google-secret").expect("valid client secret")
+                ),
+                ..ProviderOptions::default()
+            },
+            ..GoogleOptions::default()
+        }),
+        Err(OAuthError::MissingOption("client_id"))
+    ));
 
     let missing_secret = GoogleProvider::new(GoogleOptions {
         oauth: ProviderOptions {
@@ -138,12 +150,13 @@ fn authorization_url_requires_client_id_secret_and_code_verifier() {
             ..ProviderOptions::default()
         },
         ..GoogleOptions::default()
-    });
+    })
+    .expect("provider should construct");
     assert!(missing_secret
         .create_authorization_url(valid_authorization_request())
         .is_err());
 
-    let missing_verifier = GoogleProvider::new(valid_options());
+    let missing_verifier = GoogleProvider::new(valid_options()).expect("provider should construct");
     assert!(missing_verifier
         .create_authorization_url(GoogleAuthorizationUrlRequest {
             code_verifier: None,
@@ -154,7 +167,7 @@ fn authorization_url_requires_client_id_secret_and_code_verifier() {
 
 #[tokio::test]
 async fn google_validate_authorization_code_requires_code_verifier() {
-    let provider = GoogleProvider::new(valid_options());
+    let provider = GoogleProvider::new(valid_options()).expect("provider should construct");
 
     let result = provider
         .validate_authorization_code(GoogleAuthorizationCodeRequest {
@@ -210,7 +223,7 @@ fn valid_options() -> GoogleOptions {
     GoogleOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("google-client")),
-            client_secret: Some("google-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("google-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
         ..GoogleOptions::default()

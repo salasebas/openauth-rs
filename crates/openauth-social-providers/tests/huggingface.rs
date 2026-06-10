@@ -8,7 +8,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthProviderContract, ProviderOptions};
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, ProviderOptions};
 use openauth_social_providers::advanced::huggingface::{
     huggingface, HuggingFaceAuthorizationUrlRequest, HuggingFaceOptions, HuggingFaceOrg,
     HuggingFaceOrgEnterprise, HuggingFaceProfile, HuggingFaceProvider, HuggingFaceResourceGroup,
@@ -18,7 +18,7 @@ use openauth_social_providers::advanced::huggingface::{
 
 #[test]
 fn huggingface_provider_exposes_upstream_metadata() {
-    let provider = huggingface(provider_options());
+    let provider = huggingface(provider_options()).expect("provider should construct");
 
     assert_eq!(
         (provider.id(), provider.name()),
@@ -33,7 +33,8 @@ fn huggingface_authorization_url_uses_default_scopes_custom_scopes_and_pkce(
         client_id: Some(ClientId::from("hf-client")),
         scope: vec!["inference-api".to_owned()],
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(HuggingFaceAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -68,7 +69,8 @@ fn huggingface_authorization_url_can_disable_default_scopes_and_override_redirec
         disable_default_scope: true,
         scope: vec!["profile".to_owned()],
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(HuggingFaceAuthorizationUrlRequest {
         state: "state-2".to_owned(),
@@ -88,7 +90,7 @@ fn huggingface_authorization_url_can_disable_default_scopes_and_override_redirec
 #[test]
 fn huggingface_authorization_code_request_matches_upstream_form_contract(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let provider = huggingface(provider_options());
+    let provider = huggingface(provider_options()).expect("provider should construct");
 
     let request = provider.create_authorization_code_request(
         "auth-code",
@@ -115,7 +117,7 @@ fn huggingface_authorization_code_request_matches_upstream_form_contract(
 #[test]
 fn huggingface_refresh_request_uses_provider_credentials() -> Result<(), Box<dyn std::error::Error>>
 {
-    let provider = huggingface(provider_options());
+    let provider = huggingface(provider_options()).expect("provider should construct");
 
     let request = provider.create_refresh_access_token_request("refresh-token")?;
 
@@ -191,7 +193,8 @@ fn huggingface_partial_mapper_overrides_selected_user_fields() {
             patch
         })),
         ..HuggingFaceOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let user_info = provider.map_profile(profile_without_verified_email());
 
@@ -221,7 +224,8 @@ async fn huggingface_custom_get_user_info_callback_is_used(
             }) as Pin<Box<_>>
         })),
         ..HuggingFaceOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let info = provider
         .get_user_info(&OAuth2Tokens {
@@ -251,7 +255,8 @@ async fn huggingface_custom_refresh_access_token_callback_is_used(
             }) as Pin<Box<_>>
         })),
         ..HuggingFaceOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let tokens = provider.refresh_access_token("refresh-1").await?;
 
@@ -263,7 +268,7 @@ async fn huggingface_custom_refresh_access_token_callback_is_used(
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("hf-client")),
-        client_secret: Some("hf-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("hf-secret").expect("valid client secret")),
         client_key: Some("hf-key".to_owned()),
         ..ProviderOptions::default()
     }

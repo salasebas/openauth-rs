@@ -2,21 +2,22 @@
 
 use std::collections::BTreeMap;
 
+use openauth_oauth::oauth2::ClientAuthentication;
 use openauth_oauth::oauth2::{
-    create_authorization_url, refresh_access_token, validate_authorization_code,
-    AuthorizationCodeRequest, AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest,
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthProviderContract, ProviderOptions,
-    RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const SLACK_ID: &str = "slack";
 pub const SLACK_NAME: &str = "Slack";
 pub const SLACK_AUTHORIZATION_ENDPOINT: &str = "https://slack.com/openid/connect/authorize";
 pub const SLACK_TOKEN_ENDPOINT: &str = "https://slack.com/api/openid.connect.token";
 pub const SLACK_USER_INFO_ENDPOINT: &str = "https://slack.com/api/openid.connect.userInfo";
+const DEFAULT_SCOPES: &[&str] = &["openid", "profile", "email"];
 
 /// Slack-specific OAuth options.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -94,45 +95,48 @@ pub struct SlackUserInfo {
 }
 
 /// Slack OAuth provider.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct SlackProvider {
-    options: SlackOptions,
+    client: OAuth2Client,
 }
 
-pub fn slack(options: SlackOptions) -> SlackProvider {
+pub fn slack(options: SlackOptions) -> Result<SlackProvider, OAuthError> {
     SlackProvider::new(options)
 }
 
 impl SlackProvider {
-    pub fn new(options: SlackOptions) -> Self {
-        Self { options }
+    pub fn new(options: SlackOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(SLACK_ID, options.oauth)
+            .authorization_endpoint(SLACK_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(SLACK_TOKEN_ENDPOINT)?
+            .authentication(ClientAuthentication::Post);
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
+        }
+        Ok(Self {
+            client: builder.build()?,
+        })
     }
 
-    pub fn id(&self) -> &str {
-        SLACK_ID
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
-    pub fn name(&self) -> &str {
-        SLACK_NAME
-    }
-
-    pub fn options(&self) -> &SlackOptions {
-        &self.options
+    pub fn slack_options(&self) -> SlackOptions {
+        SlackOptions {
+            oauth: self.options(),
+        }
     }
 
     pub fn create_authorization_url(
         &self,
         request: SlackAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: SLACK_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: SLACK_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            scopes: self.authorization_scopes(request.scopes),
-            ..AuthorizationUrlRequest::default()
-        })
+        self.client
+            .authorization_url(request.state, request.redirect_uri)?
+            .scopes(request.scopes)
+            .build()
     }
 
     pub async fn validate_authorization_code(
@@ -140,38 +144,14 @@ impl SlackProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: SLACK_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        self.client.exchange_code(code, redirect_uri)?.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: SLACK_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: ProviderOptions {
-                    client_id: self.options.oauth.client_id.clone(),
-                    client_key: self.options.oauth.client_key.clone(),
-                    client_secret: self.options.oauth.client_secret.clone(),
-                    ..ProviderOptions::default()
-                },
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(
@@ -218,28 +198,14 @@ impl SlackProvider {
                 .or_else(|| profile.user_image_512.clone()),
         }
     }
-
-    fn authorization_scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            ["openid", "profile", "email"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect()
-        };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
 }
 
-impl OAuthProviderContract for SlackProvider {
+impl ProviderIdentity for SlackProvider {
     fn id(&self) -> &str {
-        self.id()
+        SLACK_ID
     }
 
     fn name(&self) -> &str {
-        self.name()
+        SLACK_NAME
     }
 }

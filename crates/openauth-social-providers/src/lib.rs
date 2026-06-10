@@ -6,8 +6,11 @@
 //! use openauth_social_providers::providers::github;
 //! use openauth_social_providers::SocialProviderConfig;
 //!
-//! let github = github(SocialProviderConfig::new("client-id", "client-secret"));
+//! # fn example() -> Result<(), openauth_oauth::oauth2::OAuthError> {
+//! let github = github(SocialProviderConfig::new("client-id", "client-secret"))?;
 //! # let _ = github;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! When credentials come from separate sources, use the builder:
@@ -80,6 +83,7 @@ pub mod providers;
 pub use config::{
     CognitoPoolConfig, ProviderId, SocialProviderConfig, SocialProviderConfigBuilder,
 };
+pub use runtime::ProviderIdentity;
 
 pub const PROVIDER_IDS: &[&str] = &[
     "apple",

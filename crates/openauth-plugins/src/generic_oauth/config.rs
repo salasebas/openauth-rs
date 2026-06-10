@@ -1,6 +1,6 @@
 use openauth_oauth::oauth2::{
-    ClientAuthentication, ClientId, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthHttpClient,
-    ProviderOptions, SocialIdTokenRequest,
+    ClientAuthentication, ClientId, ClientSecret, OAuth2Tokens, OAuth2UserInfo, OAuthError,
+    OAuthHttpClient, ProviderOptions, SocialIdTokenRequest,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -211,7 +211,10 @@ impl GenericOAuthConfig {
     pub(crate) fn provider_options(&self) -> ProviderOptions {
         ProviderOptions {
             client_id: Some(ClientId::Single(self.client_id.clone())),
-            client_secret: self.client_secret.clone(),
+            client_secret: self
+                .client_secret
+                .as_ref()
+                .and_then(|secret| ClientSecret::new(secret.clone()).ok()),
             scope: self.scopes.clone(),
             redirect_uri: self.redirect_uri.clone(),
             authorization_endpoint: self.authorization_url.clone(),

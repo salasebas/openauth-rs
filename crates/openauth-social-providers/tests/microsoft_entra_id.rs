@@ -10,20 +10,25 @@ use josekit::jwk::Jwk;
 use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::Rs256;
 use josekit::jws::JwsHeader;
 use josekit::jwt::{self, JwtPayload};
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthProviderContract, ProviderOptions};
+use openauth_oauth::oauth2::{
+    create_authorization_code_request, create_refresh_access_token_request,
+    AuthorizationCodeRequest, ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions,
+    RefreshAccessTokenRequest,
+};
 use openauth_social_providers::advanced::http::ValidationHttpClient;
 use openauth_social_providers::advanced::microsoft_entra_id::{
-    microsoft_entra_id, MicrosoftEntraIdAuthorizationCodeRequest,
-    MicrosoftEntraIdAuthorizationUrlRequest, MicrosoftEntraIdOptions, MicrosoftEntraIdProfile,
-    MicrosoftEntraIdProvider,
+    microsoft_entra_id, MicrosoftEntraIdAuthorizationUrlRequest, MicrosoftEntraIdOptions,
+    MicrosoftEntraIdProfile, MicrosoftEntraIdProvider,
 };
+use openauth_social_providers::ProviderIdentity;
 use serde_json::json;
 use time::OffsetDateTime;
 use url::Url;
 
 #[test]
 fn microsoft_entra_provider_exposes_upstream_metadata_and_default_endpoints() {
-    let provider = microsoft_entra_id(options_with_client_id("ms-client"));
+    let provider =
+        microsoft_entra_id(options_with_client_id("ms-client")).expect("provider should construct");
 
     assert_eq!(provider.id(), "microsoft");
     assert_eq!(provider.name(), "Microsoft EntraID");
@@ -47,7 +52,8 @@ fn microsoft_entra_provider_derives_tenant_and_custom_authority_endpoints() {
         tenant_id: Some("12345678-1234-1234-1234-123456789012".to_owned()),
         authority: Some("https://tenant.ciamlogin.com/".to_owned()),
         ..options_with_client_id("ms-client")
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(
         provider.authorization_endpoint(),
@@ -72,7 +78,8 @@ fn authorization_url_uses_microsoft_defaults_options_and_pkce() {
             ..ProviderOptions::default()
         },
         ..MicrosoftEntraIdOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(MicrosoftEntraIdAuthorizationUrlRequest {
@@ -115,7 +122,8 @@ fn authorization_url_allows_public_client_without_secret_and_can_disable_default
             ..ProviderOptions::default()
         },
         ..MicrosoftEntraIdOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(MicrosoftEntraIdAuthorizationUrlRequest {
@@ -135,15 +143,10 @@ fn authorization_url_allows_public_client_without_secret_and_can_disable_default
 
 #[test]
 fn authorization_url_rejects_missing_client_id() {
-    let provider = microsoft_entra_id(MicrosoftEntraIdOptions::default());
-
-    assert!(provider
-        .create_authorization_url(MicrosoftEntraIdAuthorizationUrlRequest {
-            state: "state".to_owned(),
-            redirect_uri: "https://app.example.com/callback".to_owned(),
-            ..MicrosoftEntraIdAuthorizationUrlRequest::default()
-        })
-        .is_err());
+    assert!(matches!(
+        microsoft_entra_id(MicrosoftEntraIdOptions::default()),
+        Err(OAuthError::MissingOption("client_id"))
+    ));
 }
 
 #[test]
@@ -151,21 +154,24 @@ fn authorization_code_and_refresh_requests_match_microsoft_token_contract() {
     let provider = microsoft_entra_id(MicrosoftEntraIdOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("ms-client")),
-            client_secret: Some("ms-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("ms-secret").expect("valid client secret")),
             scope: vec!["Calendars.Read".to_owned()],
             ..ProviderOptions::default()
         },
         ..MicrosoftEntraIdOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
-    let code_request = provider
-        .authorization_code_request(MicrosoftEntraIdAuthorizationCodeRequest {
-            code: "code-123".to_owned(),
-            redirect_uri: "https://app.example.com/callback".to_owned(),
-            code_verifier: Some("01234567890123456789012345678901234567890123456789".to_owned()),
-            device_id: Some("device-1".to_owned()),
-        })
-        .expect("code request should build");
+    let mut code_input = AuthorizationCodeRequest::try_new(
+        "code-123",
+        "https://app.example.com/callback",
+        provider.options(),
+    )
+    .expect("code request should build")
+    .code_verifier("01234567890123456789012345678901234567890123456789");
+    code_input.device_id = Some("device-1".to_owned());
+    let code_request =
+        create_authorization_code_request(code_input).expect("code request should build");
     assert_eq!(code_request.form_value("client_id"), Some("ms-client"));
     assert_eq!(code_request.form_value("client_secret"), Some("ms-secret"));
     assert_eq!(
@@ -174,9 +180,15 @@ fn authorization_code_and_refresh_requests_match_microsoft_token_contract() {
     );
     assert_eq!(code_request.form_value("device_id"), Some("device-1"));
 
-    let refresh_request = provider
-        .refresh_access_token_request("refresh-123")
-        .expect("refresh request should build");
+    let refresh_request = create_refresh_access_token_request(
+        RefreshAccessTokenRequest::try_new("refresh-123", provider.options())
+            .expect("refresh request should build")
+            .extra_param(
+                "scope",
+                "openid profile email User.Read offline_access Calendars.Read",
+            ),
+    )
+    .expect("refresh request should build");
     assert_eq!(
         refresh_request.form_value("refresh_token"),
         Some("refresh-123")
@@ -228,7 +240,8 @@ fn get_user_info_decodes_id_token_and_returns_none_without_id_token() {
     let provider = microsoft_entra_id(MicrosoftEntraIdOptions {
         disable_profile_photo: true,
         ..options_with_client_id("ms-client")
-    });
+    })
+    .expect("provider should construct");
 
     let info = provider
         .get_user_info_from_tokens(&OAuth2Tokens {
@@ -276,6 +289,7 @@ async fn verify_id_token_accepts_common_tenant_guid_issuer_and_multiple_audience
         },
         ..MicrosoftEntraIdOptions::default()
     })
+    .expect("provider should construct")
     .with_validation_http_client(ValidationHttpClient::permissive());
 
     assert!(provider
@@ -315,6 +329,7 @@ async fn verify_id_token_rejects_common_tenant_foreign_issuers() {
         },
         ..MicrosoftEntraIdOptions::default()
     })
+    .expect("provider should construct")
     .with_validation_http_client(ValidationHttpClient::permissive());
 
     for token in &tokens {
@@ -399,6 +414,7 @@ async fn verify_id_token_builds_accepted_issuer_from_custom_authority() {
         },
         ..MicrosoftEntraIdOptions::default()
     })
+    .expect("provider should construct")
     .with_validation_http_client(ValidationHttpClient::permissive());
 
     assert!(provider
@@ -441,6 +457,7 @@ async fn verify_id_token_respects_disable_sign_in_and_specific_tenant_issuer() {
         },
         ..MicrosoftEntraIdOptions::default()
     })
+    .expect("provider should construct")
     .with_validation_http_client(ValidationHttpClient::permissive());
 
     assert!(provider
@@ -459,7 +476,8 @@ async fn verify_id_token_respects_disable_sign_in_and_specific_tenant_issuer() {
             ..ProviderOptions::default()
         },
         ..MicrosoftEntraIdOptions::default()
-    });
+    })
+    .expect("provider should construct");
     assert!(!disabled
         .verify_id_token_with_jwks_url(valid_token, None, &server.url())
         .await
@@ -499,6 +517,7 @@ async fn verify_id_token_rejects_tokens_missing_standard_claims() {
         },
         ..MicrosoftEntraIdOptions::default()
     })
+    .expect("provider should construct")
     .with_validation_http_client(ValidationHttpClient::permissive());
 
     for (token, missing) in tokens.iter().zip(missing_claims) {
@@ -521,6 +540,7 @@ fn tenant_provider(tenant: &str) -> MicrosoftEntraIdProvider {
         },
         ..MicrosoftEntraIdOptions::default()
     })
+    .expect("provider should construct")
     .with_validation_http_client(ValidationHttpClient::permissive())
 }
 

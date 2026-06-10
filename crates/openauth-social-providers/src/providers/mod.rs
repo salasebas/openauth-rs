@@ -51,14 +51,14 @@ fn oauth_options(config: SocialProviderConfig) -> openauth_oauth::oauth2::Provid
     config.into_provider_options()
 }
 
-pub fn apple(config: SocialProviderConfig) -> AppleProvider {
+pub fn apple(config: SocialProviderConfig) -> Result<AppleProvider, OAuthError> {
     build_apple(AppleOptions {
         provider: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn atlassian(config: SocialProviderConfig) -> AtlassianProvider {
+pub fn atlassian(config: SocialProviderConfig) -> Result<AtlassianProvider, OAuthError> {
     build_atlassian(AtlassianOptions {
         oauth: oauth_options(config),
         ..Default::default()
@@ -72,188 +72,190 @@ pub fn cognito(
     build_cognito(pool.into_cognito_options(config))
 }
 
-pub fn discord(config: SocialProviderConfig) -> DiscordProvider {
+pub fn discord(config: SocialProviderConfig) -> Result<DiscordProvider, OAuthError> {
     build_discord(DiscordOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn dropbox(config: SocialProviderConfig) -> DropboxProvider {
+pub fn dropbox(config: SocialProviderConfig) -> Result<DropboxProvider, OAuthError> {
     DropboxProvider::new(DropboxProviderOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn facebook(config: SocialProviderConfig) -> FacebookProvider {
+pub fn facebook(config: SocialProviderConfig) -> Result<FacebookProvider, OAuthError> {
     build_facebook(FacebookOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn figma(config: SocialProviderConfig) -> FigmaProvider {
+pub fn figma(config: SocialProviderConfig) -> Result<FigmaProvider, OAuthError> {
     build_figma(oauth_options(config))
 }
 
-pub fn github(config: SocialProviderConfig) -> GitHubProvider {
+pub fn github(config: SocialProviderConfig) -> Result<GitHubProvider, OAuthError> {
     build_github(oauth_options(config))
 }
 
-pub fn gitlab(config: SocialProviderConfig) -> GitlabProvider {
+pub fn gitlab(config: SocialProviderConfig) -> Result<GitlabProvider, OAuthError> {
     build_gitlab(GitlabOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn google(config: SocialProviderConfig) -> GoogleProvider {
+pub fn google(config: SocialProviderConfig) -> Result<GoogleProvider, OAuthError> {
     build_google(GoogleOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn huggingface(config: SocialProviderConfig) -> HuggingFaceProvider {
+pub fn huggingface(config: SocialProviderConfig) -> Result<HuggingFaceProvider, OAuthError> {
     build_huggingface(HuggingFaceOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn kakao(config: SocialProviderConfig) -> KakaoProvider {
+pub fn kakao(config: SocialProviderConfig) -> Result<KakaoProvider, OAuthError> {
     build_kakao(oauth_options(config))
 }
 
-pub fn kick(config: SocialProviderConfig) -> KickProvider {
+pub fn kick(config: SocialProviderConfig) -> Result<KickProvider, OAuthError> {
     build_kick(oauth_options(config))
 }
 
-pub fn line(config: SocialProviderConfig) -> LineProvider {
+pub fn line(config: SocialProviderConfig) -> Result<LineProvider, OAuthError> {
     build_line(LineOptions {
         oauth: oauth_options(config),
     })
 }
 
-pub fn linear(config: SocialProviderConfig) -> LinearProvider {
+pub fn linear(config: SocialProviderConfig) -> Result<LinearProvider, OAuthError> {
     build_linear(LinearOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn linkedin(config: SocialProviderConfig) -> LinkedInProvider {
+pub fn linkedin(config: SocialProviderConfig) -> Result<LinkedInProvider, OAuthError> {
     build_linkedin(oauth_options(config))
 }
 
-pub fn microsoft_entra_id(config: SocialProviderConfig) -> MicrosoftEntraIdProvider {
+pub fn microsoft_entra_id(
+    config: SocialProviderConfig,
+) -> Result<MicrosoftEntraIdProvider, OAuthError> {
     build_microsoft_entra_id(MicrosoftEntraIdOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn naver(config: SocialProviderConfig) -> NaverProvider {
+pub fn naver(config: SocialProviderConfig) -> Result<NaverProvider, OAuthError> {
     build_naver(oauth_options(config))
 }
 
-pub fn notion(config: SocialProviderConfig) -> NotionProvider {
+pub fn notion(config: SocialProviderConfig) -> Result<NotionProvider, OAuthError> {
     build_notion(oauth_options(config))
 }
 
-pub fn paybin(config: SocialProviderConfig) -> PaybinProvider {
+pub fn paybin(config: SocialProviderConfig) -> Result<PaybinProvider, OAuthError> {
     build_paybin(PaybinOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn paypal(config: SocialProviderConfig) -> PayPalProvider {
+pub fn paypal(config: SocialProviderConfig) -> Result<PayPalProvider, OAuthError> {
     build_paypal(PayPalOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn polar(config: SocialProviderConfig) -> PolarProvider {
+pub fn polar(config: SocialProviderConfig) -> Result<PolarProvider, OAuthError> {
     build_polar(PolarOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn railway(config: SocialProviderConfig) -> RailwayProvider {
+pub fn railway(config: SocialProviderConfig) -> Result<RailwayProvider, OAuthError> {
     build_railway(oauth_options(config))
 }
 
-pub fn reddit(config: SocialProviderConfig) -> RedditProvider {
+pub fn reddit(config: SocialProviderConfig) -> Result<RedditProvider, OAuthError> {
     build_reddit(RedditOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn roblox(config: SocialProviderConfig) -> RobloxProvider {
+pub fn roblox(config: SocialProviderConfig) -> Result<RobloxProvider, OAuthError> {
     build_roblox(RobloxOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn salesforce(config: SocialProviderConfig) -> SalesforceProvider {
+pub fn salesforce(config: SocialProviderConfig) -> Result<SalesforceProvider, OAuthError> {
     build_salesforce(SalesforceOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn slack(config: SocialProviderConfig) -> SlackProvider {
+pub fn slack(config: SocialProviderConfig) -> Result<SlackProvider, OAuthError> {
     build_slack(SlackOptions {
         oauth: oauth_options(config),
     })
 }
 
-pub fn spotify(config: SocialProviderConfig) -> SpotifyProvider {
+pub fn spotify(config: SocialProviderConfig) -> Result<SpotifyProvider, OAuthError> {
     build_spotify(oauth_options(config))
 }
 
-pub fn tiktok(config: SocialProviderConfig) -> TiktokProvider {
+pub fn tiktok(config: SocialProviderConfig) -> Result<TiktokProvider, OAuthError> {
     build_tiktok(oauth_options(config))
 }
 
-pub fn twitch(config: SocialProviderConfig) -> TwitchProvider {
+pub fn twitch(config: SocialProviderConfig) -> Result<TwitchProvider, OAuthError> {
     build_twitch(TwitchOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn twitter(config: SocialProviderConfig) -> TwitterProvider {
+pub fn twitter(config: SocialProviderConfig) -> Result<TwitterProvider, OAuthError> {
     build_twitter(TwitterOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn vercel(config: SocialProviderConfig) -> VercelProvider {
+pub fn vercel(config: SocialProviderConfig) -> Result<VercelProvider, OAuthError> {
     build_vercel(VercelOptions {
         oauth: oauth_options(config),
         ..Default::default()
     })
 }
 
-pub fn vk(config: SocialProviderConfig) -> VkProvider {
+pub fn vk(config: SocialProviderConfig) -> Result<VkProvider, OAuthError> {
     build_vk(VkOptions {
         oauth: oauth_options(config),
     })
 }
 
-pub fn wechat(config: SocialProviderConfig) -> WeChatProvider {
+pub fn wechat(config: SocialProviderConfig) -> Result<WeChatProvider, OAuthError> {
     build_wechat(oauth_options(config))
 }
 
-pub fn zoom(config: SocialProviderConfig) -> ZoomProvider {
+pub fn zoom(config: SocialProviderConfig) -> Result<ZoomProvider, OAuthError> {
     build_zoom(ZoomOptions {
         oauth: oauth_options(config),
         ..Default::default()

@@ -4,18 +4,17 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{
-    ClientId, OAuth2Tokens, OAuthError, OAuthProviderContract, ProviderOptions,
-};
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions};
 use openauth_social_providers::advanced::spotify::{
     spotify, SpotifyAuthorizationUrlRequest, SpotifyImage, SpotifyProfile, SpotifyProvider,
     SPOTIFY_AUTHORIZATION_ENDPOINT, SPOTIFY_DEFAULT_SCOPE, SPOTIFY_ID, SPOTIFY_NAME,
     SPOTIFY_TOKEN_ENDPOINT,
 };
+use openauth_social_providers::ProviderIdentity;
 
 #[test]
 fn spotify_provider_exposes_upstream_metadata() {
-    let provider = spotify(spotify_options());
+    let provider = spotify(spotify_options()).expect("provider should construct");
 
     assert_eq!((provider.id(), provider.name()), (SPOTIFY_ID, SPOTIFY_NAME));
 }
@@ -26,7 +25,8 @@ fn spotify_authorization_url_includes_default_configured_request_scopes_and_pkce
         client_id: Some(ClientId::from("spotify-client")),
         scope: vec!["playlist-read-private".to_owned()],
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(SpotifyAuthorizationUrlRequest {
@@ -69,7 +69,8 @@ fn spotify_authorization_url_can_disable_default_scope() {
         scope: vec!["playlist-read-private".to_owned()],
         disable_default_scope: true,
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(SpotifyAuthorizationUrlRequest {
@@ -92,7 +93,7 @@ fn spotify_authorization_url_can_disable_default_scope() {
 
 #[test]
 fn spotify_authorization_code_request_uses_post_client_authentication() {
-    let provider = spotify(spotify_options());
+    let provider = spotify(spotify_options()).expect("provider should construct");
     let request = provider
         .authorization_code_request("auth-code", "https://app.example.com/callback/spotify")
         .expect("authorization code request should build");
@@ -111,7 +112,7 @@ fn spotify_authorization_code_request_uses_post_client_authentication() {
 
 #[test]
 fn spotify_refresh_token_request_uses_post_client_authentication() {
-    let provider = spotify(spotify_options());
+    let provider = spotify(spotify_options()).expect("provider should construct");
     let request = provider
         .refresh_access_token_request("refresh-token")
         .expect("refresh token request should build");
@@ -165,7 +166,7 @@ fn spotify_profile_without_images_maps_to_no_image() {
 
 #[tokio::test]
 async fn spotify_get_user_info_returns_none_without_access_token() -> Result<(), OAuthError> {
-    let provider = spotify(spotify_options());
+    let provider = spotify(spotify_options()).expect("provider should construct");
 
     let user_info = provider.get_user_info(&OAuth2Tokens::default()).await?;
 
@@ -176,7 +177,7 @@ async fn spotify_get_user_info_returns_none_without_access_token() -> Result<(),
 fn spotify_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("spotify-client")),
-        client_secret: Some("spotify-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("spotify-secret").expect("valid client secret")),
         ..ProviderOptions::default()
     }
 }

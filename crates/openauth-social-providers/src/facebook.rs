@@ -1,20 +1,18 @@
 //! Facebook OAuth provider.
 
-use std::collections::BTreeMap;
-
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use josekit::jwk::JwkSet;
 use openauth_oauth::oauth2::{
-    create_authorization_url, get_primary_client_id, refresh_access_token,
-    validate_authorization_code, validate_token, verify_jws_with_jwks, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientId, ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo,
-    OAuthError, OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
-    TokenValidationOptions,
+    get_primary_client_id, validate_token, verify_jws_with_jwks, ClientId, OAuth2Client,
+    OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions, TokenValidationOptions,
+    ValidateTokenOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const FACEBOOK_PROVIDER_ID: &str = "facebook";
 pub const FACEBOOK_PROVIDER_NAME: &str = "Facebook";
@@ -26,6 +24,7 @@ pub const FACEBOOK_LIMITED_LOGIN_JWKS_ENDPOINT: &str =
 pub const FACEBOOK_LIMITED_LOGIN_ISSUER: &str = "https://www.facebook.com";
 
 const DEFAULT_PROFILE_FIELDS: &[&str] = &["id", "name", "email", "picture"];
+const DEFAULT_SCOPES: &[&str] = &["email", "public_profile"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FacebookProfile {
@@ -76,18 +75,45 @@ pub struct FacebookUserInfo {
     pub data: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct FacebookProvider {
-    options: FacebookOptions,
+    client: OAuth2Client,
+    fields: Vec<String>,
+    config_id: Option<String>,
+    user_info_endpoint: String,
+    limited_login_jwks_endpoint: String,
 }
 
 impl FacebookProvider {
-    pub fn new(options: FacebookOptions) -> Self {
-        Self { options }
+    pub fn new(options: FacebookOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(FACEBOOK_PROVIDER_ID, options.oauth)
+            .authorization_endpoint(FACEBOOK_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(FACEBOOK_TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
+        }
+        Ok(Self {
+            client: builder.build()?,
+            fields: options.fields,
+            config_id: options.config_id,
+            user_info_endpoint: options.user_info_endpoint,
+            limited_login_jwks_endpoint: options.limited_login_jwks_endpoint,
+        })
     }
 
-    pub fn options(&self) -> &FacebookOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
+    }
+
+    pub fn facebook_options(&self) -> FacebookOptions {
+        FacebookOptions {
+            oauth: self.options(),
+            fields: self.fields.clone(),
+            config_id: self.config_id.clone(),
+            user_info_endpoint: self.user_info_endpoint.clone(),
+            limited_login_jwks_endpoint: self.limited_login_jwks_endpoint.clone(),
+        }
     }
 
     pub fn create_authorization_url<I, S>(
@@ -103,31 +129,17 @@ impl FacebookProvider {
     {
         self.ensure_required_credentials()?;
 
-        let mut resolved_scopes = Vec::new();
-        if !self.options.oauth.disable_default_scope {
-            resolved_scopes.extend(["email".to_owned(), "public_profile".to_owned()]);
+        let mut url = self
+            .client
+            .authorization_url(state, redirect_uri)?
+            .scopes(scopes);
+        if let Some(login_hint) = login_hint {
+            url = url.login_hint(login_hint);
         }
-        resolved_scopes.extend(self.options.oauth.scope.iter().cloned());
-        resolved_scopes.extend(scopes.into_iter().map(Into::into));
-
-        let additional_params = self
-            .options
-            .config_id
-            .as_ref()
-            .map(|config_id| BTreeMap::from([("config_id".to_owned(), config_id.clone())]))
-            .unwrap_or_default();
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: FACEBOOK_PROVIDER_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: FACEBOOK_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: redirect_uri.into(),
-            state: state.into(),
-            scopes: resolved_scopes,
-            login_hint: login_hint.map(str::to_owned),
-            additional_params,
-            ..AuthorizationUrlRequest::default()
-        })
+        if let Some(config_id) = &self.config_id {
+            url = url.param("config_id", config_id.clone());
+        }
+        url.build()
     }
 
     pub async fn validate_authorization_code(
@@ -135,31 +147,14 @@ impl FacebookProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: FACEBOOK_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        self.client.exchange_code(code, redirect_uri)?.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: FACEBOOK_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.oauth.clone(),
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     /// Verifies a Facebook limited-login ID token against the JWKS endpoint.
@@ -170,14 +165,14 @@ impl FacebookProvider {
     /// misleading. Access tokens are still usable for profile lookups through
     /// the userinfo flow, not through this verifier.
     pub async fn verify_id_token(&self, token: &str, nonce: Option<&str>) -> bool {
-        if self.options.oauth.disable_id_token_sign_in || !is_jwt(token) {
+        if self.client.options().disable_id_token_sign_in || !is_jwt(token) {
             return false;
         }
 
         match validate_token(
             token,
-            &self.options.limited_login_jwks_endpoint,
-            self.id_token_validation_options(),
+            &self.limited_login_jwks_endpoint,
+            ValidateTokenOptions::new(self.id_token_validation_options()),
         )
         .await
         {
@@ -192,7 +187,7 @@ impl FacebookProvider {
         nonce: Option<&str>,
         jwk_set: &JwkSet,
     ) -> bool {
-        if self.options.oauth.disable_id_token_sign_in || !is_jwt(token) {
+        if self.client.options().disable_id_token_sign_in || !is_jwt(token) {
             return false;
         }
 
@@ -204,7 +199,7 @@ impl FacebookProvider {
 
     fn id_token_validation_options(&self) -> TokenValidationOptions {
         TokenValidationOptions {
-            audience: client_id_audiences(&self.options.oauth.client_id),
+            audience: client_id_audiences(&self.client.options().client_id),
             issuer: vec![FACEBOOK_LIMITED_LOGIN_ISSUER.to_owned()],
             ..TokenValidationOptions::default().require_standard_claims()
         }
@@ -281,7 +276,7 @@ impl FacebookProvider {
     }
 
     pub fn user_info_url(&self) -> Result<Url, OAuthError> {
-        let mut url = Url::parse(&self.options.user_info_endpoint)?;
+        let mut url = Url::parse(&self.user_info_endpoint)?;
         url.query_pairs_mut()
             .append_pair("fields", &self.profile_fields().join(","));
         Ok(url)
@@ -291,7 +286,7 @@ impl FacebookProvider {
         DEFAULT_PROFILE_FIELDS
             .iter()
             .map(|field| (*field).to_owned())
-            .chain(self.options.fields.iter().cloned())
+            .chain(self.fields.iter().cloned())
             .collect()
     }
 
@@ -319,23 +314,17 @@ impl FacebookProvider {
     }
 
     fn ensure_required_credentials(&self) -> Result<(), OAuthError> {
-        if get_primary_client_id(&self.options.oauth.client_id).is_none() {
+        if get_primary_client_id(&self.client.options().client_id).is_none() {
             return Err(OAuthError::MissingOption("client_id"));
         }
-        if self.options.oauth.client_secret.is_none() {
+        if self.client.options().client_secret.is_none() {
             return Err(OAuthError::MissingOption("client_secret"));
         }
         Ok(())
     }
 }
 
-impl Default for FacebookProvider {
-    fn default() -> Self {
-        Self::new(FacebookOptions::default())
-    }
-}
-
-impl OAuthProviderContract for FacebookProvider {
+impl ProviderIdentity for FacebookProvider {
     fn id(&self) -> &str {
         FACEBOOK_PROVIDER_ID
     }
@@ -345,7 +334,7 @@ impl OAuthProviderContract for FacebookProvider {
     }
 }
 
-pub fn facebook(options: FacebookOptions) -> FacebookProvider {
+pub fn facebook(options: FacebookOptions) -> Result<FacebookProvider, OAuthError> {
     FacebookProvider::new(options)
 }
 

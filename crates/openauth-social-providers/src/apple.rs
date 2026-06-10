@@ -3,23 +3,21 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use openauth_oauth::oauth2::{
-    create_authorization_url, get_primary_client_id, refresh_access_token,
-    validate_authorization_code, validate_token_with_client, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
-    TokenValidationOptions,
+    get_primary_client_id, validate_token, OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError,
+    ProviderOptions, TokenValidationOptions, ValidateTokenOptions,
 };
 
 use crate::http::ValidationHttpClient;
+use crate::runtime::ProviderIdentity;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
-const APPLE_AUTHORIZATION_ENDPOINT: &str = "https://appleid.apple.com/auth/authorize";
-const APPLE_TOKEN_ENDPOINT: &str = "https://appleid.apple.com/auth/token";
-const APPLE_JWKS_ENDPOINT: &str = "https://appleid.apple.com/auth/keys";
-const APPLE_ISSUER: &str = "https://appleid.apple.com";
+const AUTHORIZATION_ENDPOINT: &str = "https://appleid.apple.com/auth/authorize";
+const TOKEN_ENDPOINT: &str = "https://appleid.apple.com/auth/token";
+const JWKS_ENDPOINT: &str = "https://appleid.apple.com/auth/keys";
+const ISSUER: &str = "https://appleid.apple.com";
 const ID_TOKEN_MAX_AGE_SECONDS: i64 = 60 * 60;
 
 /// Apple profile claims decoded from an Apple `id_token`.
@@ -91,19 +89,33 @@ pub struct AppleUserInfo {
 /// Apple OAuth provider.
 #[derive(Debug, Clone)]
 pub struct AppleProvider {
+    client: OAuth2Client,
     options: AppleOptions,
     validation_http_client: ValidationHttpClient,
 }
 
 /// Create an Apple OAuth provider from typed options.
-pub fn apple(options: AppleOptions) -> AppleProvider {
-    AppleProvider {
-        options,
-        validation_http_client: ValidationHttpClient::shared(),
-    }
+pub fn apple(options: AppleOptions) -> Result<AppleProvider, OAuthError> {
+    AppleProvider::new(options)
 }
 
 impl AppleProvider {
+    pub fn new(options: AppleOptions) -> Result<Self, OAuthError> {
+        Self::require_client_id_and_secret(&options)?;
+        let disable_default_scope = options.provider.disable_default_scope;
+        let mut builder = OAuth2Client::builder("apple", options.provider.clone())
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scope("email").default_scope("name");
+        }
+        Ok(Self {
+            client: builder.build()?,
+            options,
+            validation_http_client: ValidationHttpClient::shared(),
+        })
+    }
+
     pub fn options(&self) -> &AppleOptions {
         &self.options
     }
@@ -124,27 +136,13 @@ impl AppleProvider {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.require_client_id_and_secret()?;
-
-        let mut resolved_scopes = Vec::new();
-        if !self.options.provider.disable_default_scope {
-            resolved_scopes.push("email".to_owned());
-            resolved_scopes.push("name".to_owned());
-        }
-        resolved_scopes.extend(self.options.provider.scope.iter().cloned());
-        resolved_scopes.extend(scopes.into_iter().map(Into::into));
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: "apple".to_owned(),
-            options: self.options.provider.clone(),
-            authorization_endpoint: APPLE_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: redirect_uri.to_owned(),
-            state: state.to_owned(),
-            scopes: resolved_scopes,
-            response_mode: Some("form_post".to_owned()),
-            response_type: Some("code id_token".to_owned()),
-            ..AuthorizationUrlRequest::default()
-        })
+        Self::require_client_id_and_secret(&self.options)?;
+        self.client
+            .authorization_url(state, redirect_uri)?
+            .scopes(scopes.into_iter().map(Into::into))
+            .response_mode("form_post")
+            .response_type("code id_token")
+            .build()
     }
 
     pub async fn validate_authorization_code(
@@ -153,36 +151,20 @@ impl AppleProvider {
         code_verifier: Option<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        self.require_client_id_and_secret()?;
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: APPLE_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.provider.clone(),
-                code_verifier,
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        Self::require_client_id_and_secret(&self.options)?;
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        self.require_client_id_and_secret()?;
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: APPLE_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token_value.into(),
-                options: self.options.provider.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        Self::require_client_id_and_secret(&self.options)?;
+        self.client.refresh_token(refresh_token_value)?.send().await
     }
 
     pub async fn verify_id_token(
@@ -190,7 +172,7 @@ impl AppleProvider {
         token: &str,
         nonce: Option<&str>,
     ) -> Result<bool, OAuthError> {
-        self.verify_id_token_with_jwks_url(token, nonce, APPLE_JWKS_ENDPOINT)
+        self.verify_id_token_with_jwks_url(token, nonce, JWKS_ENDPOINT)
             .await
     }
 
@@ -205,15 +187,18 @@ impl AppleProvider {
         }
 
         let audience = self.audience()?;
-        let verified = match validate_token_with_client(
+        let verified = match validate_token(
             token,
             jwks_url,
-            TokenValidationOptions {
-                audience,
-                issuer: vec![APPLE_ISSUER.to_owned()],
-                ..TokenValidationOptions::default().require_standard_claims()
+            ValidateTokenOptions {
+                validation: TokenValidationOptions {
+                    audience,
+                    issuer: vec![ISSUER.to_owned()],
+                    ..TokenValidationOptions::default().require_standard_claims()
+                },
+                http: Some(self.validation_http_client.inner().clone()),
+                ..ValidateTokenOptions::default()
             },
-            self.validation_http_client.inner(),
         )
         .await
         {
@@ -261,11 +246,19 @@ impl AppleProvider {
         }))
     }
 
-    fn require_client_id_and_secret(&self) -> Result<(), OAuthError> {
-        if get_primary_client_id(&self.options.provider.client_id).is_none() {
+    pub fn id(&self) -> &str {
+        "apple"
+    }
+
+    pub fn name(&self) -> &str {
+        "Apple"
+    }
+
+    fn require_client_id_and_secret(options: &AppleOptions) -> Result<(), OAuthError> {
+        if get_primary_client_id(&options.provider.client_id).is_none() {
             return Err(OAuthError::MissingOption("client_id"));
         }
-        if self.options.provider.client_secret.is_none() {
+        if options.provider.client_secret.is_none() {
             return Err(OAuthError::MissingOption("client_secret"));
         }
         Ok(())
@@ -284,13 +277,13 @@ impl AppleProvider {
     }
 }
 
-impl OAuthProviderContract for AppleProvider {
+impl ProviderIdentity for AppleProvider {
     fn id(&self) -> &str {
-        "apple"
+        self.id()
     }
 
     fn name(&self) -> &str {
-        "Apple"
+        self.name()
     }
 }
 

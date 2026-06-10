@@ -3,14 +3,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::runtime::ProviderIdentity;
 use openauth_oauth::oauth2::{
-    create_authorization_url, refresh_access_token_with_client,
-    validate_authorization_code_with_client, AuthorizationCodeRequest, AuthorizationUrlRequest,
-    ClientId, ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthProviderContract,
-    ProviderOptions, RefreshAccessTokenRequest,
+    ClientId, ClientSecret, OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError,
+    OAuthFormRequest, ProviderOptions,
 };
-
-use crate::http::ValidationHttpClient;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
@@ -34,7 +31,7 @@ impl AtlassianOptions {
         Self {
             oauth: ProviderOptions {
                 client_id: Some(ClientId::Single(client_id.into())),
-                client_secret: Some(client_secret.into()),
+                client_secret: ClientSecret::new(client_secret).ok(),
                 ..ProviderOptions::default()
             },
             map_profile_to_user: None,
@@ -100,28 +97,33 @@ pub struct AtlassianUserInfo {
 
 #[derive(Clone)]
 pub struct AtlassianProvider {
+    client: OAuth2Client,
     options: AtlassianOptions,
-    authorization_endpoint: &'static str,
-    token_endpoint: String,
     user_info_endpoint: String,
     http_client: reqwest::Client,
-    token_http_client: ValidationHttpClient,
 }
 
-pub fn atlassian(options: AtlassianOptions) -> AtlassianProvider {
+pub fn atlassian(options: AtlassianOptions) -> Result<AtlassianProvider, OAuthError> {
     AtlassianProvider::new(options)
 }
 
 impl AtlassianProvider {
-    pub fn new(options: AtlassianOptions) -> Self {
-        Self {
+    pub fn new(options: AtlassianOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder("atlassian", options.oauth.clone())
+            .authorization_endpoint(ATLASSIAN_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(ATLASSIAN_TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder
+                .default_scope("read:jira-user")
+                .default_scope("offline_access");
+        }
+        Ok(Self {
+            client: builder.build()?,
             options,
-            authorization_endpoint: ATLASSIAN_AUTHORIZATION_ENDPOINT,
-            token_endpoint: ATLASSIAN_TOKEN_ENDPOINT.to_owned(),
             user_info_endpoint: ATLASSIAN_USER_INFO_ENDPOINT.to_owned(),
             http_client: crate::http::shared_client(),
-            token_http_client: ValidationHttpClient::shared(),
-        }
+        })
     }
 
     #[cfg(test)]
@@ -129,15 +131,26 @@ impl AtlassianProvider {
         options: AtlassianOptions,
         token_endpoint: impl Into<String>,
         user_info_endpoint: impl Into<String>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, OAuthError> {
+        use openauth_oauth::oauth2::OAuthHttpClient;
+
+        let token_endpoint = token_endpoint.into();
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder("atlassian", options.oauth.clone())
+            .authorization_endpoint(ATLASSIAN_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(&token_endpoint)?
+            .http_client(OAuthHttpClient::new(reqwest::Client::new()));
+        if !disable_default_scope {
+            builder = builder
+                .default_scope("read:jira-user")
+                .default_scope("offline_access");
+        }
+        Ok(Self {
+            client: builder.build()?,
             options,
-            authorization_endpoint: ATLASSIAN_AUTHORIZATION_ENDPOINT,
-            token_endpoint: token_endpoint.into(),
             user_info_endpoint: user_info_endpoint.into(),
             http_client: reqwest::Client::new(),
-            token_http_client: ValidationHttpClient::permissive(),
-        }
+        })
     }
 
     pub fn options(&self) -> &AtlassianOptions {
@@ -152,29 +165,29 @@ impl AtlassianProvider {
         let code_verifier = request
             .code_verifier
             .ok_or(OAuthError::MissingOption("code_verifier"))?;
-        let mut scopes = Vec::new();
-        if !self.options.oauth.disable_default_scope {
-            scopes.push("read:jira-user".to_owned());
-            scopes.push("offline_access".to_owned());
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?
+            .code_verifier(code_verifier)
+            .scopes(request.scopes)
+            .param("audience", "api.atlassian.com");
+        if let Some(prompt) = self.options.oauth.prompt.clone() {
+            url = url.prompt(prompt);
         }
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request.scopes);
+        url.build()
+    }
 
-        create_authorization_url(AuthorizationUrlRequest {
-            id: ATLASSIAN_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: self.authorization_endpoint.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: Some(code_verifier),
-            scopes,
-            prompt: self.options.oauth.prompt.clone(),
-            additional_params: BTreeMap::from([(
-                "audience".to_owned(),
-                "api.atlassian.com".to_owned(),
-            )]),
-            ..AuthorizationUrlRequest::default()
-        })
+    pub fn authorization_code_request(
+        &self,
+        code: impl Into<String>,
+        redirect_uri: impl Into<String>,
+        code_verifier: Option<String>,
+    ) -> Result<OAuthFormRequest, OAuthError> {
+        let code_verifier = code_verifier.ok_or(OAuthError::MissingOption("code_verifier"))?;
+        self.client
+            .exchange_code(code, redirect_uri)?
+            .code_verifier(code_verifier)
+            .into_form_request()
     }
 
     pub async fn validate_authorization_code(
@@ -184,39 +197,27 @@ impl AtlassianProvider {
         code_verifier: Option<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
         let code_verifier = code_verifier.ok_or(OAuthError::MissingOption("code_verifier"))?;
+        self.client
+            .exchange_code(code, redirect_uri)?
+            .code_verifier(code_verifier)
+            .send()
+            .await
+    }
 
-        validate_authorization_code_with_client(
-            ClientTokenRequest {
-                token_endpoint: self.token_endpoint.to_owned(),
-                request: AuthorizationCodeRequest {
-                    code: code.into(),
-                    redirect_uri: redirect_uri.into(),
-                    options: self.options.oauth.clone(),
-                    code_verifier: Some(code_verifier),
-                    ..AuthorizationCodeRequest::default()
-                },
-            },
-            self.token_http_client.inner(),
-        )
-        .await
+    pub fn refresh_access_token_request(
+        &self,
+        refresh_token_value: impl Into<String>,
+    ) -> Result<OAuthFormRequest, OAuthError> {
+        self.client
+            .refresh_token(refresh_token_value)?
+            .into_form_request()
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token_with_client(
-            ClientTokenRequest {
-                token_endpoint: self.token_endpoint.to_owned(),
-                request: RefreshAccessTokenRequest {
-                    refresh_token: refresh_token_value.into(),
-                    options: self.options.oauth.clone(),
-                    ..RefreshAccessTokenRequest::default()
-                },
-            },
-            self.token_http_client.inner(),
-        )
-        .await
+        self.client.refresh_token(refresh_token_value)?.send().await
     }
 
     pub async fn get_user_info(
@@ -259,6 +260,14 @@ impl AtlassianProvider {
         }))
     }
 
+    pub fn id(&self) -> &str {
+        ATLASSIAN_ID
+    }
+
+    pub fn name(&self) -> &str {
+        ATLASSIAN_NAME
+    }
+
     fn validate_authorization_options(&self) -> Result<(), OAuthError> {
         if self
             .options
@@ -273,10 +282,9 @@ impl AtlassianProvider {
         if self
             .options
             .oauth
-            .client_secret
-            .as_deref()
-            .unwrap_or("")
-            .is_empty()
+            .client_secret_str()
+            .filter(|secret| !secret.is_empty())
+            .is_none()
         {
             return Err(OAuthError::MissingOption("client_secret"));
         }
@@ -284,13 +292,13 @@ impl AtlassianProvider {
     }
 }
 
-impl OAuthProviderContract for AtlassianProvider {
+impl ProviderIdentity for AtlassianProvider {
     fn id(&self) -> &str {
-        ATLASSIAN_ID
+        self.id()
     }
 
     fn name(&self) -> &str {
-        ATLASSIAN_NAME
+        self.name()
     }
 }
 
@@ -304,7 +312,8 @@ mod tests {
 
     #[test]
     fn atlassian_provider_contract_and_authorization_url_match_upstream_behavior() {
-        let provider = AtlassianProvider::new(AtlassianOptions::new("client-id", "client-secret"));
+        let provider = AtlassianProvider::new(AtlassianOptions::new("client-id", "client-secret"))
+            .expect("provider");
 
         assert_eq!(provider.id(), "atlassian");
         assert_eq!(provider.name(), "Atlassian");
@@ -351,7 +360,7 @@ mod tests {
         let mut options = AtlassianOptions::new("client-id", "client-secret");
         options.oauth.scope = vec!["configured:scope".to_owned()];
         options.oauth.prompt = Some("consent".to_owned());
-        let provider = AtlassianProvider::new(options);
+        let provider = AtlassianProvider::new(options).expect("provider");
 
         let url = provider
             .create_authorization_url(AtlassianAuthorizationUrlRequest {
@@ -373,21 +382,21 @@ mod tests {
 
     #[test]
     fn authorization_url_validates_required_options() {
-        let provider = AtlassianProvider::new(AtlassianOptions::default());
-        let err = provider
-            .create_authorization_url(valid_authorization_request())
-            .expect_err("missing client id should fail");
-        assert!(matches!(err, OAuthError::MissingOption("client_id")));
+        assert!(matches!(
+            AtlassianProvider::new(AtlassianOptions::default()),
+            Err(OAuthError::MissingOption("client_id"))
+        ));
 
         let mut options = AtlassianOptions::default();
         options.oauth.client_id = Some(ClientId::Single("client-id".to_owned()));
-        let provider = AtlassianProvider::new(options);
+        let provider = AtlassianProvider::new(options).expect("provider");
         let err = provider
             .create_authorization_url(valid_authorization_request())
             .expect_err("missing client secret should fail");
         assert!(matches!(err, OAuthError::MissingOption("client_secret")));
 
-        let provider = AtlassianProvider::new(AtlassianOptions::new("client-id", "client-secret"));
+        let provider = AtlassianProvider::new(AtlassianOptions::new("client-id", "client-secret"))
+            .expect("provider");
         let mut request = valid_authorization_request();
         request.code_verifier = None;
         let err = provider
@@ -401,7 +410,7 @@ mod tests {
         let mut options = AtlassianOptions::new("client-id", "client-secret");
         options.oauth.disable_default_scope = true;
         options.oauth.scope = vec!["configured:scope".to_owned()];
-        let provider = AtlassianProvider::new(options);
+        let provider = AtlassianProvider::new(options).expect("provider");
 
         let url = provider
             .create_authorization_url(AtlassianAuthorizationUrlRequest {
@@ -418,7 +427,8 @@ mod tests {
 
     #[tokio::test]
     async fn validate_authorization_code_requires_code_verifier() {
-        let provider = AtlassianProvider::new(AtlassianOptions::new("client-id", "client-secret"));
+        let provider = AtlassianProvider::new(AtlassianOptions::new("client-id", "client-secret"))
+            .expect("provider");
 
         let error = provider
             .validate_authorization_code("code-123", "https://app.example.com/callback", None)
@@ -435,7 +445,8 @@ mod tests {
             AtlassianOptions::new("client-id", "client-secret"),
             code_server.url(),
             "http://127.0.0.1/unused",
-        );
+        )
+        .expect("provider");
 
         let tokens = provider
             .validate_authorization_code(
@@ -460,7 +471,8 @@ mod tests {
             AtlassianOptions::new("client-id", "client-secret"),
             refresh_server.url(),
             "http://127.0.0.1/unused",
-        );
+        )
+        .expect("provider");
 
         let tokens = provider
             .refresh_access_token("refresh-token")
@@ -496,7 +508,8 @@ mod tests {
             AtlassianOptions::new("client-id", "client-secret"),
             "http://127.0.0.1/unused",
             user_server.url(),
-        );
+        )
+        .expect("provider");
 
         let info = provider
             .get_user_info(&OAuth2Tokens {
@@ -523,7 +536,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_user_info_returns_none_without_access_token_and_allows_mapper_override() {
-        let provider = AtlassianProvider::new(AtlassianOptions::new("client-id", "client-secret"));
+        let provider = AtlassianProvider::new(AtlassianOptions::new("client-id", "client-secret"))
+            .expect("provider");
         assert_eq!(
             provider
                 .get_user_info(&OAuth2Tokens::default())
@@ -551,7 +565,8 @@ mod tests {
             options,
             "http://127.0.0.1/unused",
             user_server.url(),
-        );
+        )
+        .expect("provider");
 
         let info = provider
             .get_user_info(&OAuth2Tokens {

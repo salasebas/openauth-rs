@@ -5,17 +5,23 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, ProviderOptions};
+use openauth_oauth::oauth2::{
+    create_authorization_code_request, create_refresh_access_token_request,
+    AuthorizationCodeRequest, ClientId, ClientSecret, OAuth2Tokens, ProviderOptions,
+    RefreshAccessTokenRequest,
+};
 use openauth_social_providers::advanced::naver::{
     naver, NaverAuthorizationUrlRequest, NaverProfile, NaverProfileResponse, NaverProvider,
     NaverProviderOptions, NAVER_AUTHORIZATION_ENDPOINT, NAVER_ID, NAVER_NAME, NAVER_TOKEN_ENDPOINT,
 };
+use openauth_social_providers::ProviderIdentity;
 
 #[test]
 fn naver_provider_exposes_upstream_metadata() {
     let provider = NaverProvider::new(NaverProviderOptions {
         oauth: provider_options(),
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(provider.id(), NAVER_ID);
     assert_eq!(provider.name(), NAVER_NAME);
@@ -23,7 +29,7 @@ fn naver_provider_exposes_upstream_metadata() {
 
 #[test]
 fn authorization_url_includes_upstream_default_scopes() {
-    let provider = naver(provider_options());
+    let provider = naver(provider_options()).expect("provider should construct");
 
     let url = provider
         .create_authorization_url(NaverAuthorizationUrlRequest {
@@ -56,7 +62,8 @@ fn authorization_url_appends_configured_and_request_scopes() {
     let provider = naver(ProviderOptions {
         scope: vec!["name".to_owned()],
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(NaverAuthorizationUrlRequest {
@@ -79,7 +86,8 @@ fn authorization_url_can_disable_default_scope() {
         disable_default_scope: true,
         scope: vec!["name".to_owned()],
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(NaverAuthorizationUrlRequest {
@@ -95,15 +103,18 @@ fn authorization_url_can_disable_default_scope() {
 
 #[test]
 fn token_requests_use_naver_token_endpoint_and_post_auth() {
-    let provider = naver(provider_options());
+    let provider = naver(provider_options()).expect("provider should construct");
 
-    let code_request = provider
-        .authorization_code_request(
+    let code_request = create_authorization_code_request(
+        AuthorizationCodeRequest::try_new(
             "code-1",
-            Some("01234567890123456789012345678901234567890123456789"),
             "https://app.example.com/auth/naver/callback",
+            provider.options(),
         )
-        .expect("authorization code request should build");
+        .expect("authorization code request should build")
+        .code_verifier("01234567890123456789012345678901234567890123456789"),
+    )
+    .expect("authorization code request should build");
 
     assert_eq!(provider.token_endpoint(), NAVER_TOKEN_ENDPOINT);
     assert_eq!(code_request.header("authorization"), None);
@@ -123,9 +134,11 @@ fn token_requests_use_naver_token_endpoint_and_post_auth() {
     );
     assert_eq!(code_request.form_value("client_key"), Some("naver-key"));
 
-    let refresh_request = provider
-        .refresh_access_token_request("refresh-1")
-        .expect("refresh token request should build");
+    let refresh_request = create_refresh_access_token_request(
+        RefreshAccessTokenRequest::try_new("refresh-1", provider.options())
+            .expect("refresh token request should build"),
+    )
+    .expect("refresh token request should build");
 
     assert_eq!(refresh_request.header("authorization"), None);
     assert_eq!(
@@ -206,7 +219,13 @@ fn invalid_naver_result_code_maps_to_none() {
 
 #[tokio::test]
 async fn naver_get_user_info_returns_none_when_access_token_is_missing() {
-    let provider = NaverProvider::default();
+    let provider = NaverProvider::new(NaverProviderOptions {
+        oauth: ProviderOptions {
+            client_id: Some(ClientId::from("naver-client")),
+            ..ProviderOptions::default()
+        },
+    })
+    .expect("naver provider should construct");
 
     let info = provider
         .get_user_info(&OAuth2Tokens::default())
@@ -227,7 +246,7 @@ fn success_profile(response: NaverProfileResponse) -> NaverProfile {
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("naver-client")),
-        client_secret: Some("naver-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("naver-secret").expect("valid client secret")),
         client_key: Some("naver-key".to_owned()),
         ..ProviderOptions::default()
     }

@@ -7,6 +7,18 @@ Versioning while the API is still pre-1.0.
 
 ## Unreleased
 
+### Changed
+
+- **Breaking:** `openauth-oauth` replaces free-function token exchange with
+  [`OAuth2Client`](crates/openauth-oauth/src/oauth2/client.rs) and flow builders;
+  removes `OAuthProviderContract`, `ClientTokenRequest`, and related aliases;
+  types `ProviderOptions.client_secret` as `ClientSecret`; consolidates JWT/JWKS
+  verification behind options structs.
+- **Breaking:** `openauth-social-providers` provider factories return
+  `Result<_, OAuthError>` and embed `OAuth2Client`; exports `ProviderIdentity`.
+- `openauth-plugins` (`generic_oauth`, `one_tap`) and `openauth-sso` (OIDC
+  routes) updated for the new OAuth client surface.
+
 ## [0.1.1] - 2026-06-09
 
 ### Added

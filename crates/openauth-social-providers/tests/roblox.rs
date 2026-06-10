@@ -5,9 +5,7 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{
-    ClientId, OAuth2Tokens, OAuthError, OAuthProviderContract, ProviderOptions,
-};
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, OAuthError, ProviderOptions};
 use openauth_social_providers::advanced::roblox::{
     roblox, RobloxAuthorizationUrlRequest, RobloxOptions, RobloxProfile, RobloxPrompt,
     RobloxProvider, ROBLOX_AUTHORIZATION_ENDPOINT, ROBLOX_ID, ROBLOX_NAME, ROBLOX_TOKEN_ENDPOINT,
@@ -21,7 +19,8 @@ fn roblox_provider_exposes_upstream_metadata() {
             ..ProviderOptions::default()
         },
         ..RobloxOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(provider.id(), ROBLOX_ID);
     assert_eq!(provider.name(), ROBLOX_NAME);
@@ -37,7 +36,8 @@ fn roblox_authorization_url_uses_default_scopes_prompt_and_redirect_override() {
             ..ProviderOptions::default()
         },
         ..RobloxOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(RobloxAuthorizationUrlRequest {
@@ -75,7 +75,8 @@ fn roblox_authorization_url_can_disable_default_scope_and_choose_prompt() {
             ..ProviderOptions::default()
         },
         prompt: RobloxPrompt::Login,
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(RobloxAuthorizationUrlRequest {
@@ -94,7 +95,7 @@ fn roblox_authorization_url_can_disable_default_scope_and_choose_prompt() {
 
 #[test]
 fn roblox_authorization_code_request_uses_post_client_authentication() {
-    let provider = roblox(provider_options());
+    let provider = roblox(provider_options()).expect("provider should construct");
 
     let request = provider
         .create_authorization_code_request("auth-code", "https://app.example.com/callback")
@@ -113,7 +114,7 @@ fn roblox_authorization_code_request_uses_post_client_authentication() {
 
 #[test]
 fn roblox_refresh_access_token_request_uses_post_client_authentication() {
-    let provider = roblox(provider_options());
+    let provider = roblox(provider_options()).expect("provider should construct");
 
     let request = provider
         .refresh_access_token_request("refresh-token")
@@ -172,7 +173,7 @@ fn roblox_profile_name_falls_back_to_preferred_username() {
 
 #[tokio::test]
 async fn roblox_get_user_info_returns_none_without_access_token() -> Result<(), OAuthError> {
-    let provider = roblox(provider_options());
+    let provider = roblox(provider_options()).expect("provider should construct");
 
     let user_info = provider.get_user_info(&OAuth2Tokens::default()).await?;
 
@@ -184,7 +185,7 @@ fn provider_options() -> RobloxOptions {
     RobloxOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("roblox-client")),
-            client_secret: Some("roblox-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("roblox-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
         ..RobloxOptions::default()

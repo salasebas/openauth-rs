@@ -1,6 +1,6 @@
 //! Application-facing social provider configuration.
 
-use openauth_oauth::oauth2::{ClientId, OAuthError, ProviderOptions};
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuthError, ProviderOptions};
 
 /// Stable provider identifier used by OpenAuth social sign-in routes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -175,7 +175,7 @@ impl SocialProviderConfig {
     pub fn into_provider_options(self) -> ProviderOptions {
         ProviderOptions {
             client_id: Some(ClientId::Single(self.client_id)),
-            client_secret: Some(self.client_secret),
+            client_secret: ClientSecret::new(self.client_secret).ok(),
             client_key: self.client_key,
             scope: self.scope,
             disable_default_scope: self.disable_default_scope,
@@ -343,7 +343,11 @@ impl CognitoPoolConfig {
         let oauth = config.into_provider_options();
         crate::cognito::CognitoOptions {
             client_id: oauth.client_id.unwrap_or(ClientId::Single(String::new())),
-            client_secret: oauth.client_secret,
+            client_secret: oauth
+                .client_secret
+                .as_ref()
+                .map(ClientSecret::expose_secret)
+                .map(str::to_owned),
             client_key: oauth.client_key,
             domain: self.domain,
             region: self.region,
@@ -419,7 +423,13 @@ mod tests {
             options.client_id,
             Some(ClientId::Single("client-id".to_owned()))
         );
-        assert_eq!(options.client_secret, Some("client-secret".to_owned()));
+        assert_eq!(
+            options
+                .client_secret
+                .as_ref()
+                .map(ClientSecret::expose_secret),
+            Some("client-secret")
+        );
         assert_eq!(options.client_key, Some("client-key".to_owned()));
         assert_eq!(
             options.scope,
