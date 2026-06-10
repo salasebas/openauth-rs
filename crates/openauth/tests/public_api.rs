@@ -27,9 +27,9 @@ use openauth::plugin::{
     PluginRequestAction, PluginSchemaContribution,
 };
 use openauth::prelude::*;
-use openauth::user::UpdateUserInput;
 #[cfg(feature = "telemetry")]
-use openauth::{CustomTrackFn, TelemetryContext, TelemetryTestHooks};
+use openauth::telemetry::{CustomTrackFn, TelemetryContext};
+use openauth::user::UpdateUserInput;
 use openauth_core::auth::session::{SessionAuth, SignOutResult};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -145,10 +145,6 @@ async fn openauth_async_builder_wires_context_telemetry_publisher(
         .telemetry_context(TelemetryContext {
             skip_test_check: true,
             custom_track: Some(custom_track),
-            test_hooks: Some(TelemetryTestHooks {
-                anonymous_id: Some("stable-context-id".to_owned()),
-                ..TelemetryTestHooks::default()
-            }),
             ..TelemetryContext::default()
         })
         .build()
@@ -172,8 +168,17 @@ async fn openauth_async_builder_wires_context_telemetry_publisher(
         .find(|event| event.event_type == "custom_event")
         .ok_or("missing custom telemetry event")?;
 
-    assert_eq!(init.anonymous_id.as_deref(), Some("stable-context-id"));
-    assert_eq!(custom.anonymous_id.as_deref(), Some("stable-context-id"));
+    let init_id = init
+        .anonymous_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("missing init anonymous_id")?;
+    let custom_id = custom
+        .anonymous_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("missing custom anonymous_id")?;
+    assert_eq!(init_id, custom_id);
     assert_eq!(custom.payload["server"], true);
     Ok(())
 }

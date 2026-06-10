@@ -101,7 +101,6 @@ separate steps. Low-level provider types remain under
 
 ## Feature Flags
 
-- `i18n`: re-export `openauth-i18n`.
 - `plugins`: re-export `openauth-plugins`.
 - `oauth-provider`: re-export `openauth-oauth-provider` as `openauth::oauth_provider`.
 - `passkey`: re-export `openauth-passkey`.
@@ -112,14 +111,16 @@ separate steps. Low-level provider types remain under
 - `saml` and `saml-signed`: enable SAML routes on `openauth-sso` (does not add a
   top-level `openauth::saml` re-export).
 - `scim`: re-export server-side SCIM provisioning.
-- `stripe`: re-export server-side Stripe billing integration.
-- `telemetry`: re-export the telemetry surface from
-  [`openauth-telemetry`](../openauth-telemetry/README.md) (`create_telemetry`,
-  `get_telemetry_auth_config`, `TelemetryContext`, `TelemetryEvent`,
-  `TelemetryPublisher`, `TelemetryTestHooks`, `CustomTrackFn`) and wire the
+- `stripe`: re-export [`openauth-stripe`](../openauth-stripe/README.md) as
+  `openauth::stripe` (`stripe`, `StripeOptions`, `StripeClient`, …).
+- `i18n`: re-export [`openauth-i18n`](../openauth-i18n/README.md) as
+  `openauth::i18n`.
+- `telemetry`: re-export [`openauth-telemetry`](../openauth-telemetry/README.md)
+  under `openauth::telemetry` (`create_telemetry`, `TelemetryContext`,
+  `TelemetryEvent`, `TelemetryPublisher`, `CustomTrackFn`, …) and wire the
   publisher during [`OpenAuthBuilder::build`](crate::OpenAuthBuilder::build).
-  This feature also enables `openauth-telemetry/oauth` so social-provider config
-  snapshots match Better Auth parity.
+  This feature also enables `openauth-telemetry/oauth` so social-provider
+  config snapshots match Better Auth parity.
 - `sqlx-sqlite`, `sqlx-postgres`, `sqlx-mysql`: SQLx adapters.
 - `tokio-postgres` and `deadpool-postgres`: Postgres adapters.
 
