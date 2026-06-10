@@ -10,10 +10,8 @@ mod url;
 
 pub use bundle::{FredOpenAuthOptions, FredOpenAuthStores};
 pub use config::{FredRateLimitOptions, FredSecondaryStorageOptions};
-pub use script::{parse_rate_limit_script_result, RateLimitScriptResult};
 pub use storage::FredSecondaryStorage;
 pub use store::FredRateLimitStore;
-pub use url::normalize_fred_url;
 
 /// Current crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

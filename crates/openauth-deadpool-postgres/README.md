@@ -10,36 +10,66 @@ management and reuses OpenAuth's shared Postgres SQL planning.
 
 ## What It Provides
 
-- `DeadpoolPostgresAdapter` for OpenAuth primary storage.
-- `DeadpoolPostgresRateLimitStore` for SQL-backed rate limiting.
-- Connection URL, custom config, schema, and TLS constructors.
+- `DeadpoolPostgresStores`: bundled adapter + SQL-backed rate-limit store
+  sharing one pool (recommended entry point).
+- `DeadpoolPostgresAdapter` and `DeadpoolPostgresRateLimitStore` for BYO-pool
+  setups.
+- `DeadpoolPostgresBuilder` for connection URL, custom config, schema, pool
+  size, TLS, and startup validation.
 - Additive migration planning and execution.
 - Native Postgres arrays for OpenAuth array fields.
+
+Migration planning types live in `openauth_core::db`.
 
 ## Quick Start
 
 ```rust
-use openauth::OpenAuth;
-use openauth_deadpool_postgres::DeadpoolPostgresAdapter;
+use openauth::{OpenAuth, OpenAuthOptions};
+use openauth_core::db::{auth_schema, AuthSchemaOptions, RateLimitStorage};
+use openauth_deadpool_postgres::DeadpoolPostgresStores;
 
-let adapter = DeadpoolPostgresAdapter::connect_checked(
+let schema = auth_schema(AuthSchemaOptions {
+    rate_limit_storage: RateLimitStorage::Database,
+    ..AuthSchemaOptions::default()
+})?;
+
+let stores = DeadpoolPostgresStores::connect_with_schema_checked(
     "postgres://user:password@localhost:5432/openauth",
+    schema.clone(),
 )
 .await?;
 
 let auth = OpenAuth::builder()
-    .secret("secret-a-at-least-32-chars-long!!")
-    .adapter(adapter)
+    .options(stores.apply_to_options(
+        OpenAuthOptions::new().secret("secret-a-at-least-32-chars-long!!"),
+    ))
+    .adapter(stores.adapter)
     .build()?;
 
 auth.run_migrations().await?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Use `connect_checked` or `validate_connection()` when startup should fail fast
-if the pool cannot check out a working database connection. The unchecked
-constructors create pools lazily and may report connection errors on the first
-operation.
+### Builder
+
+```rust
+use openauth_deadpool_postgres::DeadpoolPostgresAdapter;
+
+let adapter = DeadpoolPostgresAdapter::builder()
+    .database_url("postgres://user:password@localhost:5432/openauth")
+    .schema(schema)
+    .checked(true)
+    .max_size(16)
+    .connect()
+    .await?;
+```
+
+Use `.checked(true)` or `validate_connection()` when startup should fail fast if
+the pool cannot check out a working database connection. Unchecked builds create
+pools lazily and may report connection errors on the first operation.
+
+Applications that already own a `deadpool_postgres::Pool` can pass it to
+`DeadpoolPostgresAdapter::new(pool)` or `with_schema(pool, schema)`.
 
 ## Notes
 
@@ -47,8 +77,6 @@ operation.
   error instead of creating a savepoint.
 - Existing experimental JSONB-backed array columns should be migrated manually;
   the planner reports those as type mismatches.
-- Applications that already own a `deadpool_postgres::Pool` can pass it to
-  `DeadpoolPostgresAdapter::new`.
 
 ## Status
 

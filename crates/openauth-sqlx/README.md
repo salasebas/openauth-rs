@@ -13,26 +13,36 @@ For Postgres production deployments that do not otherwise use SQLx,
 
 ## What It Provides
 
-- `SqliteAdapter` behind the `sqlite` feature.
-- `PostgresAdapter` behind the `postgres` feature.
-- `MySqlAdapter` behind the `mysql` feature.
-- SQL-backed rate-limit stores for supported dialects.
+- `SqliteStores`, `PostgresStores`, `MySqlStores`: bundled adapter +
+  SQL-backed rate-limit store sharing one pool (recommended entry point).
+- `SqliteAdapter`, `PostgresAdapter`, `MySqlAdapter` behind feature flags.
+- Matching `*RateLimitStore` types for BYO-pool setups.
 - Schema creation, migration planning, and additive migration execution.
 - SQL filter, sort, pagination, and transaction support used by OpenAuth core
   and plugins.
 
+Migration planning types (`SchemaMigrationPlan`, `MigrationStatementKind`, …)
+live in `openauth_core::db`, not in this crate.
+
 ## Quick Start
 
 ```rust
-use openauth::OpenAuth;
-use openauth_sqlx::SqliteAdapter;
+use openauth::{OpenAuth, OpenAuthOptions};
+use openauth_core::db::{auth_schema, AuthSchemaOptions, RateLimitStorage};
+use openauth_sqlx::SqliteStores;
 
-let adapter = SqliteAdapter::connect("sqlite://openauth.db").await?;
+let schema = auth_schema(AuthSchemaOptions {
+    rate_limit_storage: RateLimitStorage::Database,
+    ..AuthSchemaOptions::default()
+})?;
+
+let stores = SqliteStores::connect_with_schema("sqlite://openauth.db", schema).await?;
 
 let auth = OpenAuth::builder()
-    .secret("secret-a-at-least-32-chars-long!!")
-    .base_url("https://app.example.com/api/auth")
-    .adapter(adapter)
+    .options(stores.apply_to_options(
+        OpenAuthOptions::new().secret("secret-a-at-least-32-chars-long!!"),
+    ))
+    .adapter(stores.adapter)
     .build()?;
 
 auth.run_migrations().await?;
@@ -43,7 +53,18 @@ Enable the matching crate feature for your dialect:
 
 ```toml
 [dependencies]
-openauth-sqlx = { version = "0.1.0", features = ["sqlite"] }
+openauth-sqlx = { version = "0.1.1", features = ["sqlite"] }
+```
+
+### BYO pool
+
+When the application already owns a `SqlitePool` / `PgPool` / `MySqlPool`:
+
+```rust
+use openauth_sqlx::{SqliteAdapter, SqliteRateLimitStore};
+
+let adapter = SqliteAdapter::with_schema(pool, schema);
+let rate_limit = SqliteRateLimitStore::from(&adapter);
 ```
 
 ## Migration Notes
@@ -53,10 +74,8 @@ openauth-sqlx = { version = "0.1.0", features = ["sqlite"] }
   reported as warnings/errors instead of being applied automatically.
 - `plan_migrations` and `compile_migrations` let you inspect generated SQL
   before applying it.
-- `SqliteAdapter::connect` and [`sqlite_pool_options`](crate::sqlite_pool_options)
-  enable `PRAGMA foreign_keys = ON` on every pooled connection. `new(pool)` also
-  enforces foreign keys on each checkout even when the caller omitted pool
-  options; prefer `sqlite_pool_options()` when building pools yourself.
+- `SqliteAdapter::connect` enables `PRAGMA foreign_keys = ON` on every pooled
+  connection. `new(pool)` also enforces foreign keys on each checkout.
 
 ### Atomic schema application
 
