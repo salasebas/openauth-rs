@@ -5,11 +5,12 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthProviderContract, ProviderOptions};
-use openauth_social_providers::discord::{
+use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, ProviderOptions};
+use openauth_social_providers::advanced::discord::{
     discord, DiscordAuthorizationUrlRequest, DiscordOptions, DiscordProfile, DiscordPrompt,
     DiscordProvider,
 };
+use openauth_social_providers::ProviderIdentity;
 
 #[test]
 fn discord_provider_exposes_upstream_metadata() {
@@ -19,7 +20,8 @@ fn discord_provider_exposes_upstream_metadata() {
             ..ProviderOptions::default()
         },
         ..DiscordOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(provider.id(), "discord");
     assert_eq!(provider.name(), "Discord");
@@ -34,7 +36,8 @@ fn discord_authorization_url_uses_default_scopes_prompt_and_redirect_override() 
             ..ProviderOptions::default()
         },
         ..DiscordOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(DiscordAuthorizationUrlRequest {
@@ -78,7 +81,8 @@ fn discord_authorization_url_adds_bot_permissions_only_for_bot_scope() {
         },
         permissions: Some(8),
         prompt: DiscordPrompt::Consent,
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(DiscordAuthorizationUrlRequest {
@@ -92,7 +96,7 @@ fn discord_authorization_url_adds_bot_permissions_only_for_bot_scope() {
         url.query_pairs()
             .find(|(key, _)| key == "scope")
             .map(|(_, value)| value.into_owned()),
-        Some("identify+email+guilds+bot".to_owned())
+        Some("identify+email+bot+guilds".to_owned())
     );
     assert_eq!(
         url.query_pairs()
@@ -156,7 +160,14 @@ fn discord_profile_with_animated_avatar_maps_to_gif_cdn_url() {
 
 #[tokio::test]
 async fn discord_get_user_info_returns_none_when_access_token_is_missing() {
-    let provider = DiscordProvider::default();
+    let provider = DiscordProvider::new(DiscordOptions {
+        oauth: ProviderOptions {
+            client_id: Some(ClientId::Single("client-id".to_owned())),
+            ..ProviderOptions::default()
+        },
+        ..DiscordOptions::default()
+    })
+    .expect("discord provider should construct");
 
     let info = provider
         .get_user_info(&OAuth2Tokens::default())

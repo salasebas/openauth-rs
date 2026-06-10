@@ -1,19 +1,14 @@
 //! Zoom OAuth provider.
 
-use std::collections::BTreeMap;
-
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token,
-    refresh_access_token_request, validate_authorization_code, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract, ProviderOptions,
-    RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
 use crate::http::ProviderHttpClient;
+use crate::runtime::ProviderIdentity;
 
 pub const ZOOM_ID: &str = "zoom";
 pub const ZOOM_NAME: &str = "Zoom";
@@ -119,7 +114,7 @@ pub struct ZoomProfile {
     pub verified: i64,
     pub zoom_one_type: Option<i64>,
     #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub extra: std::collections::BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -130,33 +125,37 @@ pub struct ZoomUserInfo {
 
 #[derive(Debug, Clone)]
 pub struct ZoomProvider {
-    options: ZoomOptions,
+    client: OAuth2Client,
+    pkce: bool,
     user_info_endpoint: String,
     http_client: ProviderHttpClient,
 }
 
-pub fn zoom(options: ZoomOptions) -> ZoomProvider {
+pub fn zoom(options: ZoomOptions) -> Result<ZoomProvider, OAuthError> {
     ZoomProvider::new(options)
 }
 
 impl ZoomProvider {
-    pub fn new(options: ZoomOptions) -> Self {
-        Self {
-            options,
+    pub fn new(options: ZoomOptions) -> Result<Self, OAuthError> {
+        let pkce = options.pkce;
+        Ok(Self {
+            client: OAuth2Client::builder(ZOOM_ID, options.oauth)
+                .authorization_endpoint(ZOOM_AUTHORIZATION_ENDPOINT)?
+                .token_endpoint(ZOOM_TOKEN_ENDPOINT)?
+                .build()?,
+            pkce,
             user_info_endpoint: ZOOM_USER_INFO_ENDPOINT.to_owned(),
             http_client: ProviderHttpClient::shared(),
-        }
+        })
     }
 
     pub fn new_with_user_info_endpoint(
         options: ZoomOptions,
         user_info_endpoint: impl Into<String>,
-    ) -> Self {
-        Self {
-            options,
-            user_info_endpoint: user_info_endpoint.into(),
-            http_client: ProviderHttpClient::shared(),
-        }
+    ) -> Result<Self, OAuthError> {
+        let mut provider = Self::new(options)?;
+        provider.user_info_endpoint = user_info_endpoint.into();
+        Ok(provider)
     }
 
     /// Overrides the HTTP client used for userinfo requests. Use
@@ -166,8 +165,8 @@ impl ZoomProvider {
         self
     }
 
-    pub fn options(&self) -> &ZoomOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn token_endpoint(&self) -> &str {
@@ -182,7 +181,7 @@ impl ZoomProvider {
         &self,
         request: ZoomAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        let code_verifier = if self.options.pkce {
+        let code_verifier = if self.pkce {
             Some(
                 request
                     .code_verifier
@@ -193,31 +192,13 @@ impl ZoomProvider {
             None
         };
 
-        create_authorization_url(AuthorizationUrlRequest {
-            id: ZOOM_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: ZOOM_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier,
-            ..AuthorizationUrlRequest::default()
-        })
-    }
-
-    pub fn authorization_code_request(
-        &self,
-        request: ZoomAuthorizationCodeRequest,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        let code_verifier = self.resolve_authorization_code_verifier(request.code_verifier)?;
-
-        authorization_code_request(AuthorizationCodeRequest {
-            code: request.code,
-            redirect_uri: request.redirect_uri,
-            options: self.options.oauth.clone(),
-            code_verifier,
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        url.build()
     }
 
     pub async fn validate_authorization_code(
@@ -225,71 +206,24 @@ impl ZoomProvider {
         request: ZoomAuthorizationCodeRequest,
     ) -> Result<OAuth2Tokens, OAuthError> {
         let code_verifier = self.resolve_authorization_code_verifier(request.code_verifier)?;
-
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: ZOOM_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: request.code,
-                redirect_uri: request.redirect_uri,
-                options: self.options.oauth.clone(),
-                code_verifier,
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
-    }
-
-    pub fn refresh_access_token_request(
-        &self,
-        refresh_token: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: ProviderOptions {
-                client_id: self.options.oauth.client_id.clone(),
-                client_key: self.options.oauth.client_key.clone(),
-                client_secret: self.options.oauth.client_secret.clone(),
-                ..ProviderOptions::default()
-            },
-            authentication: ClientAuthentication::Post,
-            extra_params: self
-                .options
-                .oauth
-                .client_key
-                .clone()
-                .map(|client_key| BTreeMap::from([("client_key".to_owned(), client_key)]))
-                .unwrap_or_default(),
-            ..RefreshAccessTokenRequest::default()
-        })
+        let mut exchange = self
+            .client
+            .exchange_code(request.code, request.redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: ZOOM_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: ProviderOptions {
-                    client_id: self.options.oauth.client_id.clone(),
-                    client_key: self.options.oauth.client_key.clone(),
-                    client_secret: self.options.oauth.client_secret.clone(),
-                    ..ProviderOptions::default()
-                },
-                authentication: ClientAuthentication::Post,
-                extra_params: self
-                    .options
-                    .oauth
-                    .client_key
-                    .clone()
-                    .map(|client_key| BTreeMap::from([("client_key".to_owned(), client_key)]))
-                    .unwrap_or_default(),
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        let mut refresh = self.client.refresh_token(refresh_token)?;
+        if let Some(client_key) = self.client.options().client_key.clone() {
+            refresh = refresh.extra_param("client_key", client_key);
+        }
+        refresh.send().await
     }
 
     pub async fn get_user_info(
@@ -345,7 +279,7 @@ impl ZoomProvider {
         &self,
         code_verifier: Option<String>,
     ) -> Result<Option<String>, OAuthError> {
-        if !self.options.pkce {
+        if !self.pkce {
             return Ok(code_verifier);
         }
 
@@ -356,13 +290,7 @@ impl ZoomProvider {
     }
 }
 
-impl Default for ZoomProvider {
-    fn default() -> Self {
-        Self::new(ZoomOptions::default())
-    }
-}
-
-impl OAuthProviderContract for ZoomProvider {
+impl ProviderIdentity for ZoomProvider {
     fn id(&self) -> &str {
         ZOOM_ID
     }

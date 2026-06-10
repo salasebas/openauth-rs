@@ -7,8 +7,8 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use openauth_oauth::oauth2::{ClientId, OAuth2Tokens, OAuthProviderContract, ProviderOptions};
-use openauth_social_providers::twitter::{
+use openauth_oauth::oauth2::{ClientId, ClientSecret, OAuth2Tokens, ProviderOptions};
+use openauth_social_providers::advanced::twitter::{
     twitter, TwitterAuthorizationUrlRequest, TwitterOptions, TwitterProfile, TwitterProfileData,
     TwitterProvider, TwitterUserInfo, TwitterUserPatch, TwitterValidateAuthorizationCodeRequest,
     TWITTER_AUTHORIZATION_ENDPOINT, TWITTER_DEFAULT_SCOPES, TWITTER_ID, TWITTER_NAME,
@@ -17,7 +17,7 @@ use openauth_social_providers::twitter::{
 
 #[test]
 fn twitter_provider_exposes_upstream_metadata() {
-    let provider = twitter(provider_options());
+    let provider = twitter(provider_options()).expect("provider should construct");
 
     assert_eq!((provider.id(), provider.name()), (TWITTER_ID, TWITTER_NAME));
 }
@@ -29,7 +29,8 @@ fn twitter_authorization_url_uses_default_configured_request_scopes_and_pkce(
         client_id: Some(ClientId::from("twitter-client")),
         scope: vec!["like.read".to_owned()],
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(TwitterAuthorizationUrlRequest {
         state: "state-1".to_owned(),
@@ -77,7 +78,8 @@ fn twitter_authorization_url_can_disable_default_scopes() -> Result<(), Box<dyn 
         disable_default_scope: true,
         scope: vec!["users.read".to_owned()],
         ..ProviderOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider.create_authorization_url(TwitterAuthorizationUrlRequest {
         state: "state-2".to_owned(),
@@ -95,7 +97,7 @@ fn twitter_authorization_url_can_disable_default_scopes() -> Result<(), Box<dyn 
 
 #[test]
 fn twitter_authorization_code_request_uses_basic_auth() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = twitter(provider_options());
+    let provider = twitter(provider_options()).expect("provider should construct");
 
     let request =
         provider.create_authorization_code_request(TwitterValidateAuthorizationCodeRequest {
@@ -126,7 +128,7 @@ fn twitter_authorization_code_request_uses_basic_auth() -> Result<(), Box<dyn st
 
 #[test]
 fn twitter_refresh_token_request_uses_basic_auth() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = twitter(provider_options());
+    let provider = twitter(provider_options()).expect("provider should construct");
 
     let request = provider.create_refresh_access_token_request("refresh-token")?;
 
@@ -206,7 +208,8 @@ fn twitter_partial_mapper_overrides_selected_user_fields() {
             ..TwitterUserPatch::default()
         })),
         ..TwitterOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let user_info = provider.map_profile(profile_with_email(None), None);
 
@@ -234,7 +237,8 @@ async fn twitter_custom_get_user_info_callback_is_used() -> Result<(), Box<dyn s
             }) as Pin<Box<_>>
         })),
         ..TwitterOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let info = provider
         .get_user_info(&OAuth2Tokens {
@@ -264,7 +268,8 @@ async fn twitter_custom_refresh_access_token_callback_is_used(
             }) as Pin<Box<_>>
         })),
         ..TwitterOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let tokens = provider.refresh_access_token("refresh-1").await?;
 
@@ -276,7 +281,7 @@ async fn twitter_custom_refresh_access_token_callback_is_used(
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::from("twitter-client")),
-        client_secret: Some("twitter-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("twitter-secret").expect("valid client secret")),
         client_key: Some("twitter-key".to_owned()),
         ..ProviderOptions::default()
     }

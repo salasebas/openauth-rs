@@ -6,25 +6,28 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use openauth_oauth::oauth2::{
-    create_authorization_code_request, create_authorization_url,
-    create_refresh_access_token_request, refresh_access_token, validate_authorization_code,
-    AuthorizationCodeRequest, AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest,
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract,
-    ProviderOptions, RefreshAccessTokenRequest,
+    ClientAuthentication, OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest,
+    ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
+use crate::runtime::ProviderIdentity;
+
+const AUTHORIZATION_ENDPOINT: &str = "https://x.com/i/oauth2/authorize";
+const TOKEN_ENDPOINT: &str = "https://api.x.com/2/oauth2/token";
+const PROFILE_ENDPOINT: &str = "https://api.x.com/2/users/me?user.fields=profile_image_url";
+const EMAIL_ENDPOINT: &str = "https://api.x.com/2/users/me?user.fields=confirmed_email";
+const DEFAULT_SCOPES: &[&str] = &["users.read", "tweet.read", "offline.access", "users.email"];
+
 pub const TWITTER_ID: &str = "twitter";
 pub const TWITTER_NAME: &str = "Twitter";
-pub const TWITTER_AUTHORIZATION_ENDPOINT: &str = "https://x.com/i/oauth2/authorize";
-pub const TWITTER_TOKEN_ENDPOINT: &str = "https://api.x.com/2/oauth2/token";
-pub const TWITTER_PROFILE_ENDPOINT: &str =
-    "https://api.x.com/2/users/me?user.fields=profile_image_url";
-pub const TWITTER_EMAIL_ENDPOINT: &str = "https://api.x.com/2/users/me?user.fields=confirmed_email";
-pub const TWITTER_DEFAULT_SCOPES: &[&str] =
-    &["users.read", "tweet.read", "offline.access", "users.email"];
+pub const TWITTER_AUTHORIZATION_ENDPOINT: &str = AUTHORIZATION_ENDPOINT;
+pub const TWITTER_TOKEN_ENDPOINT: &str = TOKEN_ENDPOINT;
+pub const TWITTER_PROFILE_ENDPOINT: &str = PROFILE_ENDPOINT;
+pub const TWITTER_EMAIL_ENDPOINT: &str = EMAIL_ENDPOINT;
+pub const TWITTER_DEFAULT_SCOPES: &[&str] = DEFAULT_SCOPES;
 
 pub type TwitterUserInfoFuture =
     Pin<Box<dyn Future<Output = Result<Option<TwitterUserInfo>, OAuthError>> + Send>>;
@@ -223,16 +226,27 @@ impl From<ProviderOptions> for TwitterOptions {
 }
 
 /// Twitter OAuth provider.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct TwitterProvider {
+    client: OAuth2Client,
     options: TwitterOptions,
 }
 
 impl TwitterProvider {
-    pub fn new(options: impl Into<TwitterOptions>) -> Self {
-        Self {
-            options: options.into(),
+    pub fn new(options: impl Into<TwitterOptions>) -> Result<Self, OAuthError> {
+        let options = options.into();
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder("twitter", options.oauth.clone())
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(TOKEN_ENDPOINT)?
+            .authentication(ClientAuthentication::Basic);
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
         }
+        Ok(Self {
+            client: builder.build()?,
+            options,
+        })
     }
 
     pub fn options(&self) -> &TwitterOptions {
@@ -240,79 +254,63 @@ impl TwitterProvider {
     }
 
     pub fn provider_options(&self) -> &ProviderOptions {
-        &self.options.oauth
+        self.client.options()
     }
 
     pub fn token_endpoint(&self) -> &str {
-        TWITTER_TOKEN_ENDPOINT
+        self.client.token_endpoint().as_str()
     }
 
     pub fn profile_endpoint(&self) -> &str {
-        TWITTER_PROFILE_ENDPOINT
+        PROFILE_ENDPOINT
     }
 
     pub fn email_endpoint(&self) -> &str {
-        TWITTER_EMAIL_ENDPOINT
+        EMAIL_ENDPOINT
     }
 
     pub fn create_authorization_url(
         &self,
         input: TwitterAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: self.id().to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: TWITTER_AUTHORIZATION_ENDPOINT.to_owned(),
-            scopes: self.authorization_scopes(input.scopes),
-            state: input.state,
-            code_verifier: input.code_verifier,
-            redirect_uri: input.redirect_uri,
-            ..AuthorizationUrlRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(input.state, input.redirect_uri)?;
+        if let Some(code_verifier) = input.code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        url.scopes(input.scopes).build()
     }
 
     pub fn create_authorization_code_request(
         &self,
         input: TwitterValidateAuthorizationCodeRequest,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        create_authorization_code_request(AuthorizationCodeRequest {
-            code: input.code,
-            code_verifier: input.code_verifier,
-            redirect_uri: input.redirect_uri,
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Basic,
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut exchange = self.client.exchange_code(input.code, input.redirect_uri)?;
+        if let Some(code_verifier) = input.code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.into_form_request()
     }
 
     pub async fn validate_authorization_code(
         &self,
         input: TwitterValidateAuthorizationCodeRequest,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: TWITTER_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: input.code,
-                code_verifier: input.code_verifier,
-                redirect_uri: input.redirect_uri,
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Basic,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        let mut exchange = self.client.exchange_code(input.code, input.redirect_uri)?;
+        if let Some(code_verifier) = input.code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub fn create_refresh_access_token_request(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        create_refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token_value.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Basic,
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .refresh_token(refresh_token_value)?
+            .into_form_request()
     }
 
     pub async fn refresh_access_token(
@@ -324,16 +322,7 @@ impl TwitterProvider {
             return refresh_access_token(refresh_token_value).await;
         }
 
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: TWITTER_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token_value,
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Basic,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token_value)?.send().await
     }
 
     pub async fn get_user_info(
@@ -397,32 +386,26 @@ impl TwitterProvider {
         user_info
     }
 
-    fn authorization_scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = Vec::new();
-        if !self.options.oauth.disable_default_scope {
-            scopes.extend(
-                TWITTER_DEFAULT_SCOPES
-                    .iter()
-                    .map(|scope| (*scope).to_owned()),
-            );
-        }
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
-}
-
-impl OAuthProviderContract for TwitterProvider {
-    fn id(&self) -> &str {
+    pub fn id(&self) -> &str {
         TWITTER_ID
     }
 
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         TWITTER_NAME
     }
 }
 
-pub fn twitter(options: impl Into<TwitterOptions>) -> TwitterProvider {
+impl ProviderIdentity for TwitterProvider {
+    fn id(&self) -> &str {
+        self.id()
+    }
+
+    fn name(&self) -> &str {
+        self.name()
+    }
+}
+
+pub fn twitter(options: impl Into<TwitterOptions>) -> Result<TwitterProvider, OAuthError> {
     TwitterProvider::new(options)
 }
 
@@ -431,7 +414,7 @@ async fn fetch_twitter_profile(
     access_token: &str,
 ) -> Option<TwitterProfile> {
     client
-        .get(TWITTER_PROFILE_ENDPOINT)
+        .get(PROFILE_ENDPOINT)
         .bearer_auth(access_token)
         .send()
         .await
@@ -448,7 +431,7 @@ async fn fetch_twitter_confirmed_email(
     access_token: &str,
 ) -> Option<String> {
     client
-        .get(TWITTER_EMAIL_ENDPOINT)
+        .get(EMAIL_ENDPOINT)
         .bearer_auth(access_token)
         .send()
         .await

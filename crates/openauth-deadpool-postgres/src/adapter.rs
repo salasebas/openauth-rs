@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use deadpool_postgres::{Config, Pool};
+use deadpool_postgres::Pool;
+use openauth_core::db::SchemaMigrationPlan;
 use openauth_core::db::{
     auth_schema, AdapterCapabilities, AdapterFuture, AuthSchemaOptions, Count, Create, DbAdapter,
     DbRecord, DbSchema, Delete, DeleteMany, FindMany, FindOne, SchemaCreation, TransactionCallback,
@@ -9,18 +10,11 @@ use openauth_core::db::{
 use openauth_core::error::OpenAuthError;
 use openauth_tokio_postgres::driver::{postgres_error, PostgresSqlState};
 use tokio::sync::Mutex;
-use tokio_postgres::{
-    tls::{MakeTlsConnect, TlsConnect},
-    Socket,
-};
 
-use crate::config::{
-    apply_default_pool_config, create_pool, create_pool_no_tls, deadpool_error, pg_client,
-    DEFAULT_POOL_MAX_SIZE,
-};
+use crate::builder::DeadpoolPostgresBuilder;
+use crate::config::{deadpool_error, pg_client};
 use crate::transaction::DeadpoolPostgresTxAdapter;
 use crate::tx_guard::PooledClientRollbackGuard;
-use crate::SchemaMigrationPlan;
 
 /// Production-oriented Postgres adapter backed by a `deadpool-postgres` pool.
 #[derive(Clone)]
@@ -54,137 +48,8 @@ impl DeadpoolPostgresAdapter {
         &self.pool
     }
 
-    pub async fn connect(database_url: &str) -> Result<Self, OpenAuthError> {
-        Self::connect_with_schema(database_url, auth_schema(AuthSchemaOptions::default())).await
-    }
-
-    pub async fn connect_checked(database_url: &str) -> Result<Self, OpenAuthError> {
-        let adapter = Self::connect(database_url).await?;
-        adapter.validate_connection().await?;
-        Ok(adapter)
-    }
-
-    pub async fn connect_with_schema(
-        database_url: &str,
-        schema: DbSchema,
-    ) -> Result<Self, OpenAuthError> {
-        let mut config = Config::new();
-        config.url = Some(database_url.to_owned());
-        Self::from_config_with_schema(config, schema, DEFAULT_POOL_MAX_SIZE)
-    }
-
-    pub async fn connect_with_schema_checked(
-        database_url: &str,
-        schema: DbSchema,
-    ) -> Result<Self, OpenAuthError> {
-        let adapter = Self::connect_with_schema(database_url, schema).await?;
-        adapter.validate_connection().await?;
-        Ok(adapter)
-    }
-
-    pub async fn connect_tls<T>(database_url: &str, tls: T) -> Result<Self, OpenAuthError>
-    where
-        T: MakeTlsConnect<Socket> + Clone + Sync + Send + 'static,
-        T::Stream: Sync + Send,
-        T::TlsConnect: Sync + Send,
-        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
-    {
-        Self::connect_with_schema_tls(database_url, auth_schema(AuthSchemaOptions::default()), tls)
-            .await
-    }
-
-    pub async fn connect_tls_checked<T>(database_url: &str, tls: T) -> Result<Self, OpenAuthError>
-    where
-        T: MakeTlsConnect<Socket> + Clone + Sync + Send + 'static,
-        T::Stream: Sync + Send,
-        T::TlsConnect: Sync + Send,
-        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
-    {
-        let adapter = Self::connect_tls(database_url, tls).await?;
-        adapter.validate_connection().await?;
-        Ok(adapter)
-    }
-
-    pub async fn connect_with_schema_tls<T>(
-        database_url: &str,
-        schema: DbSchema,
-        tls: T,
-    ) -> Result<Self, OpenAuthError>
-    where
-        T: MakeTlsConnect<Socket> + Clone + Sync + Send + 'static,
-        T::Stream: Sync + Send,
-        T::TlsConnect: Sync + Send,
-        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
-    {
-        let mut config = Config::new();
-        config.url = Some(database_url.to_owned());
-        Self::from_config_with_schema_tls(config, schema, DEFAULT_POOL_MAX_SIZE, tls)
-    }
-
-    pub async fn connect_with_schema_tls_checked<T>(
-        database_url: &str,
-        schema: DbSchema,
-        tls: T,
-    ) -> Result<Self, OpenAuthError>
-    where
-        T: MakeTlsConnect<Socket> + Clone + Sync + Send + 'static,
-        T::Stream: Sync + Send,
-        T::TlsConnect: Sync + Send,
-        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
-    {
-        let adapter = Self::connect_with_schema_tls(database_url, schema, tls).await?;
-        adapter.validate_connection().await?;
-        Ok(adapter)
-    }
-
-    pub fn from_config(config: Config, max_size: usize) -> Result<Self, OpenAuthError> {
-        Self::from_config_with_schema(config, auth_schema(AuthSchemaOptions::default()), max_size)
-    }
-
-    pub fn from_config_tls<T>(
-        config: Config,
-        max_size: usize,
-        tls: T,
-    ) -> Result<Self, OpenAuthError>
-    where
-        T: MakeTlsConnect<Socket> + Clone + Sync + Send + 'static,
-        T::Stream: Sync + Send,
-        T::TlsConnect: Sync + Send,
-        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
-    {
-        Self::from_config_with_schema_tls(
-            config,
-            auth_schema(AuthSchemaOptions::default()),
-            max_size,
-            tls,
-        )
-    }
-
-    pub fn from_config_with_schema(
-        mut config: Config,
-        schema: DbSchema,
-        max_size: usize,
-    ) -> Result<Self, OpenAuthError> {
-        apply_default_pool_config(&mut config, max_size);
-        let pool = create_pool_no_tls(config)?;
-        Ok(Self::with_schema(pool, schema))
-    }
-
-    pub fn from_config_with_schema_tls<T>(
-        mut config: Config,
-        schema: DbSchema,
-        max_size: usize,
-        tls: T,
-    ) -> Result<Self, OpenAuthError>
-    where
-        T: MakeTlsConnect<Socket> + Clone + Sync + Send + 'static,
-        T::Stream: Sync + Send,
-        T::TlsConnect: Sync + Send,
-        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
-    {
-        apply_default_pool_config(&mut config, max_size);
-        let pool = create_pool(config, tls)?;
-        Ok(Self::with_schema(pool, schema))
+    pub fn builder() -> DeadpoolPostgresBuilder {
+        DeadpoolPostgresBuilder::new()
     }
 
     pub async fn plan_migrations(

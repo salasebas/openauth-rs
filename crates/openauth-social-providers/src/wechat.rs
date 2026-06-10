@@ -1,15 +1,15 @@
 //! WeChat social OAuth provider.
 
-use std::collections::BTreeMap;
-
 use openauth_oauth::oauth2::{
-    get_primary_client_id, validate_authorization_url_invariants, OAuth2Tokens, OAuth2UserInfo,
-    OAuthError, OAuthProviderContract, ProviderOptions,
+    get_primary_client_id, validate_authorization_url_invariants, OAuth2Client, OAuth2Tokens,
+    OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const WECHAT_ID: &str = "wechat";
 pub const WECHAT_NAME: &str = "WeChat";
@@ -66,7 +66,7 @@ pub struct WeChatProfile {
     pub privilege: Vec<String>,
     pub unionid: Option<String>,
     #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub extra: std::collections::BTreeMap<String, Value>,
 }
 
 /// WeChat token response payload.
@@ -81,7 +81,7 @@ pub struct WeChatTokenResponse {
     pub errcode: Option<i64>,
     pub errmsg: Option<String>,
     #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub extra: std::collections::BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -98,12 +98,13 @@ pub struct WeChatUserInfo {
 }
 
 /// WeChat OAuth provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct WeChatProvider {
-    options: WeChatProviderOptions,
+    client: OAuth2Client,
+    lang: Option<WeChatLang>,
 }
 
-pub fn wechat(oauth: ProviderOptions) -> WeChatProvider {
+pub fn wechat(oauth: ProviderOptions) -> Result<WeChatProvider, OAuthError> {
     WeChatProvider::new(WeChatProviderOptions {
         oauth,
         ..WeChatProviderOptions::default()
@@ -111,20 +112,23 @@ pub fn wechat(oauth: ProviderOptions) -> WeChatProvider {
 }
 
 impl WeChatProvider {
-    pub fn new(options: WeChatProviderOptions) -> Self {
-        Self { options }
+    pub fn new(options: WeChatProviderOptions) -> Result<Self, OAuthError> {
+        let WeChatProviderOptions { oauth, lang } = options;
+        let disable_default_scope = oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(WECHAT_ID, oauth)
+            .authorization_endpoint(WECHAT_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(WECHAT_TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scope(DEFAULT_SCOPE);
+        }
+        Ok(Self {
+            client: builder.build()?,
+            lang,
+        })
     }
 
-    pub fn id(&self) -> &str {
-        WECHAT_ID
-    }
-
-    pub fn name(&self) -> &str {
-        WECHAT_NAME
-    }
-
-    pub fn options(&self) -> &WeChatProviderOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn create_authorization_url(
@@ -133,7 +137,7 @@ impl WeChatProvider {
     ) -> Result<Url, OAuthError> {
         validate_authorization_url_invariants(
             &request.state,
-            self.options.oauth.redirect_uri.as_deref(),
+            self.client.options().redirect_uri.as_deref(),
             &request.redirect_uri,
         )?;
         let mut url = Url::parse(WECHAT_AUTHORIZATION_ENDPOINT)?;
@@ -144,14 +148,14 @@ impl WeChatProvider {
             query.append_pair("appid", self.client_id()?);
             query.append_pair(
                 "redirect_uri",
-                self.options
-                    .oauth
+                self.client
+                    .options()
                     .redirect_uri
                     .as_deref()
                     .unwrap_or(&request.redirect_uri),
             );
             query.append_pair("state", &request.state);
-            query.append_pair("lang", self.options.lang.unwrap_or_default().as_str());
+            query.append_pair("lang", self.lang.unwrap_or_default().as_str());
         }
         url.set_fragment(Some("wechat_redirect"));
         Ok(url)
@@ -325,26 +329,25 @@ impl WeChatProvider {
     }
 
     fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
+        let mut scopes = if self.client.options().disable_default_scope {
             Vec::new()
         } else {
             vec![DEFAULT_SCOPE.to_owned()]
         };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
+        scopes.extend(self.client.options().scope.iter().cloned());
         scopes.extend(request_scopes);
         scopes
     }
 
     fn client_id(&self) -> Result<&str, OAuthError> {
-        get_primary_client_id(&self.options.oauth.client_id)
+        get_primary_client_id(&self.client.options().client_id)
             .ok_or(OAuthError::MissingOption("client_id"))
     }
 
     fn client_secret(&self) -> Result<&str, OAuthError> {
-        self.options
-            .oauth
-            .client_secret
-            .as_deref()
+        self.client
+            .options()
+            .client_secret_str()
             .ok_or(OAuthError::MissingOption("client_secret"))
     }
 }
@@ -360,19 +363,13 @@ impl WeChatTokenResponse {
     }
 }
 
-impl Default for WeChatProvider {
-    fn default() -> Self {
-        Self::new(WeChatProviderOptions::default())
-    }
-}
-
-impl OAuthProviderContract for WeChatProvider {
+impl ProviderIdentity for WeChatProvider {
     fn id(&self) -> &str {
-        self.id()
+        WECHAT_ID
     }
 
     fn name(&self) -> &str {
-        self.name()
+        WECHAT_NAME
     }
 }
 

@@ -4,6 +4,12 @@ All notable changes to `openauth-sso` are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- OIDC SSO token exchange and refresh use `exchange_authorization_code` and
+  `refresh_access_token_at` from `openauth-oauth`.
+- Sign-in routes map client secrets through `openauth_oauth::oauth2::ClientSecret`.
+
 ## [0.1.0] - 2026-06-08
 
 

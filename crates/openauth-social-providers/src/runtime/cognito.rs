@@ -2,7 +2,7 @@ use super::*;
 
 impl_social_oauth_provider!(
     crate::cognito::CognitoProvider,
-    options | provider | { cognito_provider_options(provider.options()) },
+    options | provider | { provider.provider_options() },
     authorization | provider,
     input | {
         provider

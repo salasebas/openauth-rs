@@ -5,23 +5,25 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use openauth_oauth::oauth2::{
-    create_authorization_code_request, create_authorization_url,
-    create_refresh_access_token_request, refresh_access_token, validate_authorization_code,
-    AuthorizationCodeRequest, AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest,
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract,
-    ProviderOptions, RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, ProviderOptions,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url::Url;
 
 use crate::http::ProviderHttpClient;
+use crate::runtime::ProviderIdentity;
+
+const AUTHORIZATION_ENDPOINT: &str = "https://huggingface.co/oauth/authorize";
+const TOKEN_ENDPOINT: &str = "https://huggingface.co/oauth/token";
+const USERINFO_ENDPOINT: &str = "https://huggingface.co/oauth/userinfo";
+const DEFAULT_SCOPES: &[&str] = &["openid", "profile", "email"];
 
 pub const HUGGINGFACE_ID: &str = "huggingface";
 pub const HUGGINGFACE_NAME: &str = "Hugging Face";
-pub const HUGGINGFACE_AUTHORIZATION_ENDPOINT: &str = "https://huggingface.co/oauth/authorize";
-pub const HUGGINGFACE_TOKEN_ENDPOINT: &str = "https://huggingface.co/oauth/token";
-pub const HUGGINGFACE_USERINFO_ENDPOINT: &str = "https://huggingface.co/oauth/userinfo";
-pub const HUGGINGFACE_DEFAULT_SCOPES: &[&str] = &["openid", "profile", "email"];
+pub const HUGGINGFACE_AUTHORIZATION_ENDPOINT: &str = AUTHORIZATION_ENDPOINT;
+pub const HUGGINGFACE_TOKEN_ENDPOINT: &str = TOKEN_ENDPOINT;
+pub const HUGGINGFACE_USERINFO_ENDPOINT: &str = USERINFO_ENDPOINT;
+pub const HUGGINGFACE_DEFAULT_SCOPES: &[&str] = DEFAULT_SCOPES;
 
 pub type HuggingFaceUserInfoFuture =
     Pin<Box<dyn Future<Output = Result<Option<HuggingFaceUserInfo>, OAuthError>> + Send>>;
@@ -199,24 +201,28 @@ impl From<ProviderOptions> for HuggingFaceOptions {
 /// Hugging Face OAuth provider.
 #[derive(Clone)]
 pub struct HuggingFaceProvider {
+    client: OAuth2Client,
     options: HuggingFaceOptions,
     userinfo_endpoint: String,
     http_client: ProviderHttpClient,
 }
 
-impl Default for HuggingFaceProvider {
-    fn default() -> Self {
-        Self::new(HuggingFaceOptions::default())
-    }
-}
-
 impl HuggingFaceProvider {
-    pub fn new(options: impl Into<HuggingFaceOptions>) -> Self {
-        Self {
-            options: options.into(),
-            userinfo_endpoint: HUGGINGFACE_USERINFO_ENDPOINT.to_owned(),
-            http_client: ProviderHttpClient::shared(),
+    pub fn new(options: impl Into<HuggingFaceOptions>) -> Result<Self, OAuthError> {
+        let options = options.into();
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder("huggingface", options.oauth.clone())
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
         }
+        Ok(Self {
+            client: builder.build()?,
+            options,
+            userinfo_endpoint: USERINFO_ENDPOINT.to_owned(),
+            http_client: ProviderHttpClient::shared(),
+        })
     }
 
     /// Overrides the HTTP client used for userinfo requests. Use
@@ -231,11 +237,11 @@ impl HuggingFaceProvider {
     }
 
     pub fn provider_options(&self) -> &ProviderOptions {
-        &self.options.oauth
+        self.client.options()
     }
 
     pub fn token_endpoint(&self) -> &str {
-        HUGGINGFACE_TOKEN_ENDPOINT
+        self.client.token_endpoint().as_str()
     }
 
     pub fn userinfo_endpoint(&self) -> &str {
@@ -246,18 +252,19 @@ impl HuggingFaceProvider {
         &self,
         input: HuggingFaceAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: self.id().to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: HUGGINGFACE_AUTHORIZATION_ENDPOINT.to_owned(),
-            scopes: self.authorization_scopes(input.scopes),
-            state: input.state,
-            code_verifier: input.code_verifier,
-            redirect_uri: input.redirect_uri,
-            prompt: self.options.oauth.prompt.clone(),
-            response_mode: self.options.oauth.response_mode.clone(),
-            ..AuthorizationUrlRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(input.state, input.redirect_uri)?;
+        if let Some(code_verifier) = input.code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        if let Some(prompt) = self.client.options().prompt.clone() {
+            url = url.prompt(prompt);
+        }
+        if let Some(response_mode) = self.client.options().response_mode.clone() {
+            url = url.response_mode(response_mode);
+        }
+        url.scopes(input.scopes).build()
     }
 
     pub fn create_authorization_code_request(
@@ -266,14 +273,11 @@ impl HuggingFaceProvider {
         code_verifier: Option<impl Into<String>>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        create_authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            code_verifier: code_verifier.map(Into::into),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier.into());
+        }
+        exchange.into_form_request()
     }
 
     pub async fn validate_authorization_code(
@@ -282,30 +286,20 @@ impl HuggingFaceProvider {
         code_verifier: Option<impl Into<String>>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: HUGGINGFACE_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                code_verifier: code_verifier.map(Into::into),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier.into());
+        }
+        exchange.send().await
     }
 
     pub fn create_refresh_access_token_request(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        create_refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token_value.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .refresh_token(refresh_token_value)?
+            .into_form_request()
     }
 
     pub async fn refresh_access_token(
@@ -317,16 +311,7 @@ impl HuggingFaceProvider {
             return refresh_access_token(refresh_token_value).await;
         }
 
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: HUGGINGFACE_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token_value,
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token_value)?.send().await
     }
 
     pub async fn get_user_info(
@@ -389,32 +374,28 @@ impl HuggingFaceProvider {
         user_info
     }
 
-    fn authorization_scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = Vec::new();
-        if !self.options.oauth.disable_default_scope {
-            scopes.extend(
-                HUGGINGFACE_DEFAULT_SCOPES
-                    .iter()
-                    .map(|scope| (*scope).to_owned()),
-            );
-        }
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
-}
-
-impl OAuthProviderContract for HuggingFaceProvider {
-    fn id(&self) -> &str {
+    pub fn id(&self) -> &str {
         HUGGINGFACE_ID
     }
 
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         HUGGINGFACE_NAME
     }
 }
 
-pub fn huggingface(options: impl Into<HuggingFaceOptions>) -> HuggingFaceProvider {
+impl ProviderIdentity for HuggingFaceProvider {
+    fn id(&self) -> &str {
+        self.id()
+    }
+
+    fn name(&self) -> &str {
+        self.name()
+    }
+}
+
+pub fn huggingface(
+    options: impl Into<HuggingFaceOptions>,
+) -> Result<HuggingFaceProvider, OAuthError> {
     HuggingFaceProvider::new(options)
 }
 
@@ -435,6 +416,19 @@ mod tests {
     async fn get_user_info_returns_none_for_invalid_json() {
         let server = RawServer::spawn("not-json");
         let provider = HuggingFaceProvider {
+            client: OAuth2Client::builder(
+                "huggingface",
+                ProviderOptions {
+                    client_id: Some("client".into()),
+                    ..ProviderOptions::default()
+                },
+            )
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)
+            .expect("authorization endpoint")
+            .token_endpoint(TOKEN_ENDPOINT)
+            .expect("token endpoint")
+            .build()
+            .expect("client"),
             options: HuggingFaceOptions::default(),
             userinfo_endpoint: server.url(),
             http_client: ProviderHttpClient::permissive(),

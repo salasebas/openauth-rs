@@ -30,12 +30,11 @@ use openauth::rate_limit::GovernorMemoryRateLimitStore;
 use openauth::OpenAuth;
 use openauth_axum::OpenAuthAxumExt;
 use openauth_core::context::create_auth_context_with_adapter;
-use openauth_deadpool_postgres::{DeadpoolPostgresAdapter, DeadpoolPostgresRateLimitStore};
+use openauth_deadpool_postgres::{DeadpoolPostgresAdapter, DeadpoolPostgresStores};
 use openauth_fred::FredOpenAuthStores;
-use openauth_redis::RedisRateLimitStore;
+use openauth_redis::RedisOpenAuthStores;
 use openauth_sqlx::{
-    MySqlAdapter, MySqlRateLimitStore, PostgresAdapter, PostgresRateLimitStore, SqliteAdapter,
-    SqliteRateLimitStore,
+    MySqlAdapter, MySqlStores, PostgresAdapter, PostgresStores, SqliteAdapter, SqliteStores,
 };
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
@@ -644,17 +643,19 @@ pub async fn build_app(config: ExampleConfig) -> Result<Router, ExampleError> {
             Ok(router_with_auth(auth, &config, memory_rate_limit_store).await?)
         }
         DbBackend::Sqlite => {
-            let adapter = open_sqlite_adapter(&config.database_url).await?;
+            let stores =
+                SqliteStores::connect_with_schema(&config.database_url, example_auth_schema()?)
+                    .await?;
             let rate_limit = match config.rate_limit {
-                RateLimitBackend::Database => Some(RateLimitOptions::database(
-                    SqliteRateLimitStore::from(&adapter),
-                )),
+                RateLimitBackend::Database => {
+                    Some(RateLimitOptions::database(stores.rate_limit.clone()))
+                }
                 _ => None,
             };
             let auth = build_auth(
                 config.clone(),
                 AUTH_BASE_PATH.to_owned(),
-                adapter,
+                stores.adapter,
                 rate_limit,
                 memory_rate_limit_store.clone(),
             )
@@ -663,17 +664,19 @@ pub async fn build_app(config: ExampleConfig) -> Result<Router, ExampleError> {
             Ok(router_with_auth(auth, &config, memory_rate_limit_store).await?)
         }
         DbBackend::PostgresSqlx => {
-            let adapter = open_postgres_sqlx_adapter(&config.database_url).await?;
+            let stores =
+                PostgresStores::connect_with_schema(&config.database_url, example_auth_schema()?)
+                    .await?;
             let rate_limit = match config.rate_limit {
-                RateLimitBackend::Database => Some(RateLimitOptions::database(
-                    PostgresRateLimitStore::from(&adapter),
-                )),
+                RateLimitBackend::Database => {
+                    Some(RateLimitOptions::database(stores.rate_limit.clone()))
+                }
                 _ => None,
             };
             let auth = build_auth(
                 config.clone(),
                 AUTH_BASE_PATH.to_owned(),
-                adapter,
+                stores.adapter,
                 rate_limit,
                 memory_rate_limit_store.clone(),
             )
@@ -682,17 +685,21 @@ pub async fn build_app(config: ExampleConfig) -> Result<Router, ExampleError> {
             Ok(router_with_auth(auth, &config, memory_rate_limit_store).await?)
         }
         DbBackend::PostgresDeadpool => {
-            let adapter = open_postgres_deadpool_adapter(&config.database_url).await?;
+            let stores = DeadpoolPostgresStores::connect_with_schema_checked(
+                &config.database_url,
+                example_auth_schema()?,
+            )
+            .await?;
             let rate_limit = match config.rate_limit {
-                RateLimitBackend::Database => Some(RateLimitOptions::database(
-                    DeadpoolPostgresRateLimitStore::from(&adapter),
-                )),
+                RateLimitBackend::Database => {
+                    Some(RateLimitOptions::database(stores.rate_limit.clone()))
+                }
                 _ => None,
             };
             let auth = build_auth(
                 config.clone(),
                 AUTH_BASE_PATH.to_owned(),
-                adapter,
+                stores.adapter,
                 rate_limit,
                 memory_rate_limit_store.clone(),
             )
@@ -701,17 +708,19 @@ pub async fn build_app(config: ExampleConfig) -> Result<Router, ExampleError> {
             Ok(router_with_auth(auth, &config, memory_rate_limit_store).await?)
         }
         DbBackend::MysqlSqlx => {
-            let adapter = open_mysql_sqlx_adapter(&config.database_url).await?;
+            let stores =
+                MySqlStores::connect_with_schema(&config.database_url, example_auth_schema()?)
+                    .await?;
             let rate_limit = match config.rate_limit {
-                RateLimitBackend::Database => Some(RateLimitOptions::database(
-                    MySqlRateLimitStore::from(&adapter),
-                )),
+                RateLimitBackend::Database => {
+                    Some(RateLimitOptions::database(stores.rate_limit.clone()))
+                }
                 _ => None,
             };
             let auth = build_auth(
                 config.clone(),
                 AUTH_BASE_PATH.to_owned(),
-                adapter,
+                stores.adapter,
                 rate_limit,
                 memory_rate_limit_store.clone(),
             )
@@ -725,6 +734,7 @@ pub async fn build_app(config: ExampleConfig) -> Result<Router, ExampleError> {
 fn example_plugins(
     adapter: Arc<dyn openauth::db::DbAdapter>,
 ) -> Result<Vec<AuthPlugin>, ExampleError> {
+    use openauth::oauth_provider::{oauth_provider, McpOptions, OAuthProviderOptions};
     use openauth::passkey::{passkey, PasskeyOptions};
     use openauth::plugins::{
         admin::{admin, AdminOptions},
@@ -754,7 +764,6 @@ fn example_plugins(
     use openauth::stripe::{
         stripe, OrganizationStripeOptions, StripeClient, StripeOptions, SubscriptionOptions,
     };
-    use openauth_oauth_provider::{oauth_provider, McpOptions, OAuthProviderOptions};
     use std::future;
 
     Ok(vec![
@@ -784,8 +793,7 @@ fn example_plugins(
             mcp: Some(McpOptions::default()),
             ..OAuthProviderOptions::default()
         })
-        .map_err(|error| ExampleError::InvalidConfig(error.to_string()))?
-        .into_auth_plugin(),
+        .map_err(|error| ExampleError::InvalidConfig(error.to_string()))?,
         multi_session(),
         oauth_proxy_default(),
         one_tap(OneTapOptions::default()),
@@ -849,10 +857,12 @@ async fn open_postgres_sqlx_adapter(database_url: &str) -> Result<PostgresAdapte
 async fn open_postgres_deadpool_adapter(
     database_url: &str,
 ) -> Result<DeadpoolPostgresAdapter, ExampleError> {
-    Ok(
-        DeadpoolPostgresAdapter::connect_with_schema_checked(database_url, example_auth_schema()?)
-            .await?,
-    )
+    Ok(DeadpoolPostgresAdapter::builder()
+        .database_url(database_url)
+        .schema(example_auth_schema()?)
+        .checked(true)
+        .connect()
+        .await?)
 }
 
 async fn open_mysql_sqlx_adapter(database_url: &str) -> Result<MySqlAdapter, ExampleError> {
@@ -971,7 +981,7 @@ async fn shared_redis_rate_limit(
 ) -> Result<RateLimitOptions, ExampleError> {
     Ok(rate_limit_defaults(
         config,
-        RateLimitOptions::secondary_storage(RedisRateLimitStore::connect(url).await?),
+        RateLimitOptions::secondary_storage(RedisOpenAuthStores::connect(url).await?.rate_limit),
     ))
 }
 
@@ -1463,55 +1473,61 @@ async fn build_profile_auth(
             .await
         }
         DbBackend::Sqlite => {
-            let adapter = open_sqlite_adapter(&config.database_url).await?;
-            let database_rate_limit =
-                RateLimitOptions::database(SqliteRateLimitStore::from(&adapter));
+            let stores =
+                SqliteStores::connect_with_schema(&config.database_url, example_auth_schema()?)
+                    .await?;
+            let database_rate_limit = RateLimitOptions::database(stores.rate_limit.clone());
             // Schema work is intentionally not done on the request path; the
             // configured backend is migrated at startup and the gated reset
             // action handles explicit (re)initialization.
             build_auth(
                 config,
                 auth_base_path,
-                adapter,
+                stores.adapter,
                 Some(database_rate_limit),
                 memory_rate_limit_store,
             )
             .await
         }
         DbBackend::PostgresSqlx => {
-            let adapter = open_postgres_sqlx_adapter(&config.database_url).await?;
-            let database_rate_limit =
-                RateLimitOptions::database(PostgresRateLimitStore::from(&adapter));
+            let stores =
+                PostgresStores::connect_with_schema(&config.database_url, example_auth_schema()?)
+                    .await?;
+            let database_rate_limit = RateLimitOptions::database(stores.rate_limit.clone());
             build_auth(
                 config,
                 auth_base_path,
-                adapter,
+                stores.adapter,
                 Some(database_rate_limit),
                 memory_rate_limit_store,
             )
             .await
         }
         DbBackend::PostgresDeadpool => {
-            let adapter = open_postgres_deadpool_adapter(&config.database_url).await?;
-            let database_rate_limit =
-                RateLimitOptions::database(DeadpoolPostgresRateLimitStore::from(&adapter));
+            let stores = DeadpoolPostgresStores::connect_with_schema_checked(
+                &config.database_url,
+                example_auth_schema()?,
+            )
+            .await?;
+            let database_rate_limit = RateLimitOptions::database(stores.rate_limit.clone());
             build_auth(
                 config,
                 auth_base_path,
-                adapter,
+                stores.adapter,
                 Some(database_rate_limit),
                 memory_rate_limit_store,
             )
             .await
         }
         DbBackend::MysqlSqlx => {
-            let adapter = open_mysql_sqlx_adapter(&config.database_url).await?;
-            let database_rate_limit =
-                RateLimitOptions::database(MySqlRateLimitStore::from(&adapter));
+            let stores =
+                MySqlStores::connect_with_schema(&config.database_url, example_auth_schema()?)
+                    .await?;
+            let database_rate_limit = RateLimitOptions::database(stores.rate_limit.clone());
             build_auth(
                 config,
                 auth_base_path,
-                adapter,
+                stores.adapter,
                 Some(database_rate_limit),
                 memory_rate_limit_store,
             )

@@ -32,22 +32,6 @@ impl OAuthProviderMetadata {
     }
 }
 
-/// Minimal public contract shared by OAuth provider implementations.
-pub trait OAuthProviderContract {
-    fn id(&self) -> &str;
-    fn name(&self) -> &str;
-}
-
-impl OAuthProviderContract for OAuthProviderMetadata {
-    fn id(&self) -> &str {
-        self.id()
-    }
-
-    fn name(&self) -> &str {
-        self.name()
-    }
-}
-
 pub type SocialProviderFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, OAuthError>> + Send + 'a>>;
 

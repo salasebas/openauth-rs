@@ -1,7 +1,8 @@
 use super::*;
 use openauth_oauth::oauth2::{
-    OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions, SocialAuthorizationCodeRequest,
-    SocialAuthorizationUrlRequest, SocialIdTokenRequest, SocialOAuthProvider, SocialProviderFuture,
+    ClientSecret, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
+    SocialAuthorizationCodeRequest, SocialAuthorizationUrlRequest, SocialIdTokenRequest,
+    SocialOAuthProvider, SocialProviderFuture,
 };
 use std::sync::Arc;
 use url::Url;
@@ -1054,7 +1055,7 @@ impl FakeProvider {
             email_verified: true,
             options: ProviderOptions {
                 client_id: Some("client-id".into()),
-                client_secret: Some("client-secret".to_owned()),
+                client_secret: ClientSecret::new("client-secret").ok(),
                 ..ProviderOptions::default()
             },
         }

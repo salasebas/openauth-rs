@@ -1,12 +1,10 @@
 use std::collections::BTreeMap;
 
 use super::error::OAuthError;
-use super::http::{default_http_client, OAuthHttpClient};
 use super::request::{
-    apply_client_authentication, is_protected_oauth_param, post_form_with_client,
-    ClientAuthentication, OAuthFormRequest,
+    apply_client_authentication, is_protected_oauth_param, ClientAuthentication, OAuthFormRequest,
 };
-use super::tokens::{get_oauth2_tokens, OAuth2Tokens, ProviderOptions};
+use super::tokens::ProviderOptions;
 use super::utils::validate_code_verifier;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,12 +98,6 @@ impl AuthorizationCodeRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClientTokenRequest<T> {
-    pub token_endpoint: String,
-    pub request: T,
-}
-
 pub fn create_authorization_code_request(
     input: AuthorizationCodeRequest,
 ) -> Result<OAuthFormRequest, OAuthError> {
@@ -168,25 +160,4 @@ fn validate_authorization_code_request(input: &AuthorizationCodeRequest) -> Resu
         validate_code_verifier(code_verifier)?;
     }
     Ok(())
-}
-
-pub fn authorization_code_request(
-    input: AuthorizationCodeRequest,
-) -> Result<OAuthFormRequest, OAuthError> {
-    create_authorization_code_request(input)
-}
-
-pub async fn validate_authorization_code(
-    input: ClientTokenRequest<AuthorizationCodeRequest>,
-) -> Result<OAuth2Tokens, OAuthError> {
-    validate_authorization_code_with_client(input, &default_http_client()?).await
-}
-
-pub async fn validate_authorization_code_with_client(
-    input: ClientTokenRequest<AuthorizationCodeRequest>,
-    client: &OAuthHttpClient,
-) -> Result<OAuth2Tokens, OAuthError> {
-    let request = authorization_code_request(input.request)?;
-    let data = post_form_with_client(&input.token_endpoint, request, client).await?;
-    get_oauth2_tokens(data)
 }

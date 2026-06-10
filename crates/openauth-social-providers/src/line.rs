@@ -1,18 +1,15 @@
 //! LINE Login v2.1 social OAuth provider.
 
-use std::collections::BTreeMap;
-
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use openauth_oauth::oauth2::{
-    create_authorization_url, get_primary_client_id, refresh_access_token,
-    validate_authorization_code, AuthorizationCodeRequest, AuthorizationUrlRequest,
-    ClientAuthentication, ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError,
-    OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
+    get_primary_client_id, OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const LINE_ID: &str = "line";
 pub const LINE_NAME: &str = "LINE";
@@ -54,7 +51,7 @@ pub struct LineIdTokenPayload {
     pub amr: Vec<String>,
     pub nonce: Option<String>,
     #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub extra: std::collections::BTreeMap<String, Value>,
 }
 
 /// LINE UserInfo payload returned by `/userinfo`.
@@ -65,7 +62,7 @@ pub struct LineUserInfo {
     pub picture: Option<String>,
     pub email: Option<String>,
     #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
+    pub extra: std::collections::BTreeMap<String, Value>,
 }
 
 /// Raw LINE profile source used to build normalized user info.
@@ -84,39 +81,47 @@ pub struct LineUserProfile {
 }
 
 /// LINE OAuth provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct LineProvider {
-    options: LineOptions,
+    client: OAuth2Client,
 }
 
-pub fn line(options: LineOptions) -> LineProvider {
+pub fn line(options: LineOptions) -> Result<LineProvider, OAuthError> {
     LineProvider::new(options)
 }
 
 impl LineProvider {
-    pub fn new(options: LineOptions) -> Self {
-        Self { options }
+    pub fn new(options: LineOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(LINE_ID, options.oauth)
+            .authorization_endpoint(LINE_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(LINE_TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
+        }
+        Ok(Self {
+            client: builder.build()?,
+        })
     }
 
-    pub fn options(&self) -> &LineOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn create_authorization_url(
         &self,
         request: LineAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: LINE_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: LINE_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: request.code_verifier,
-            scopes: self.scopes(request.scopes),
-            login_hint: request.login_hint,
-            ..AuthorizationUrlRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?;
+        if let Some(code_verifier) = request.code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        if let Some(login_hint) = request.login_hint {
+            url = url.login_hint(login_hint);
+        }
+        url.scopes(request.scopes).build()
     }
 
     pub async fn validate_authorization_code(
@@ -125,34 +130,18 @@ impl LineProvider {
         code_verifier: Option<impl Into<String>>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: LINE_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                code_verifier: code_verifier.map(Into::into),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: LINE_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn verify_id_token(
@@ -160,10 +149,10 @@ impl LineProvider {
         token: &str,
         nonce: Option<&str>,
     ) -> Result<bool, OAuthError> {
-        if self.options.oauth.disable_id_token_sign_in {
+        if self.client.options().disable_id_token_sign_in {
             return Ok(false);
         }
-        let Some(client_id) = get_primary_client_id(&self.options.oauth.client_id) else {
+        let Some(client_id) = get_primary_client_id(&self.client.options().client_id) else {
             return Ok(false);
         };
 
@@ -261,10 +250,10 @@ impl LineProvider {
         payload: &LineIdTokenPayload,
         nonce: Option<&str>,
     ) -> bool {
-        if self.options.oauth.disable_id_token_sign_in {
+        if self.client.options().disable_id_token_sign_in {
             return false;
         }
-        let Some(client_id) = get_primary_client_id(&self.options.oauth.client_id) else {
+        let Some(client_id) = get_primary_client_id(&self.client.options().client_id) else {
             return false;
         };
         if payload.aud != client_id {
@@ -277,29 +266,9 @@ impl LineProvider {
         }
         true
     }
-
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            DEFAULT_SCOPES
-                .iter()
-                .map(|scope| (*scope).to_owned())
-                .collect()
-        };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
 }
 
-impl Default for LineProvider {
-    fn default() -> Self {
-        Self::new(LineOptions::default())
-    }
-}
-
-impl OAuthProviderContract for LineProvider {
+impl ProviderIdentity for LineProvider {
     fn id(&self) -> &str {
         LINE_ID
     }

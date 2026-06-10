@@ -12,14 +12,14 @@ use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::{Rs256, Rs384, Rs512};
 use josekit::jws::JwsHeader;
 use josekit::jwt;
 use openauth_oauth::oauth2::{
-    create_authorization_url, get_jwks, get_primary_client_id, parse_numeric_timestamp_claim,
-    refresh_access_token, validate_authorization_code, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
+    get_jwks, get_primary_client_id, parse_numeric_timestamp_claim, ClientId, OAuth2Client,
+    OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const GOOGLE_ID: &str = "google";
 pub const GOOGLE_NAME: &str = "Google";
@@ -29,6 +29,7 @@ pub const GOOGLE_JWKS_ENDPOINT: &str = "https://www.googleapis.com/oauth2/v3/cer
 pub const GOOGLE_ISSUER_HTTPS: &str = "https://accounts.google.com";
 pub const GOOGLE_ISSUER_BARE: &str = "accounts.google.com";
 const GOOGLE_ID_TOKEN_MAX_AGE_SECONDS: i64 = 60 * 60;
+const DEFAULT_SCOPES: &[&str] = &["email", "profile", "openid"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoogleAccessType {
@@ -121,20 +122,47 @@ pub struct GoogleUserInfo {
 
 #[derive(Debug, Clone)]
 pub struct GoogleProvider {
-    options: GoogleOptions,
+    client: OAuth2Client,
+    access_type: Option<GoogleAccessType>,
+    display: Option<GoogleDisplay>,
+    hd: Option<String>,
 }
 
-pub fn google(options: GoogleOptions) -> GoogleProvider {
+pub fn google(options: GoogleOptions) -> Result<GoogleProvider, OAuthError> {
     GoogleProvider::new(options)
 }
 
 impl GoogleProvider {
-    pub fn new(options: GoogleOptions) -> Self {
-        Self { options }
+    pub fn new(options: GoogleOptions) -> Result<Self, OAuthError> {
+        let access_type = options.access_type;
+        let display = options.display;
+        let hd = options.hd;
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(GOOGLE_ID, options.oauth)
+            .authorization_endpoint(GOOGLE_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(GOOGLE_TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
+        }
+        Ok(Self {
+            client: builder.build()?,
+            access_type,
+            display,
+            hd,
+        })
     }
 
-    pub fn options(&self) -> &GoogleOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
+    }
+
+    pub fn google_options(&self) -> GoogleOptions {
+        GoogleOptions {
+            oauth: self.options(),
+            access_type: self.access_type,
+            display: self.display,
+            hd: self.hd.clone(),
+        }
     }
 
     pub fn create_authorization_url(
@@ -143,42 +171,27 @@ impl GoogleProvider {
     ) -> Result<Url, OAuthError> {
         self.ensure_authorization_options(request.code_verifier.as_deref())?;
 
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            ["email", "profile", "openid"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect()
-        };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request.scopes);
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: GOOGLE_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: GOOGLE_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: request.code_verifier,
-            scopes,
-            prompt: self.options.oauth.prompt.clone(),
-            access_type: self
-                .options
-                .access_type
-                .map(|value| value.as_str().to_owned()),
-            display: request
-                .display
-                .or(self.options.display)
-                .map(|value| value.as_str().to_owned()),
-            login_hint: request.login_hint,
-            hd: self.options.hd.clone(),
-            additional_params: BTreeMap::from([(
-                "include_granted_scopes".to_owned(),
-                "true".to_owned(),
-            )]),
-            ..AuthorizationUrlRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?;
+        if let Some(code_verifier) = request.code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        if let Some(login_hint) = request.login_hint {
+            url = url.login_hint(login_hint);
+        }
+        if let Some(access_type) = self.access_type {
+            url = url.access_type(access_type.as_str());
+        }
+        let display = request.display.or(self.display);
+        if let Some(display) = display {
+            url = url.param("display", display.as_str());
+        }
+        if let Some(hd) = &self.hd {
+            url = url.param("hd", hd.as_str());
+        }
+        url = url.param("include_granted_scopes", "true");
+        url.scopes(request.scopes).build()
     }
 
     pub async fn validate_authorization_code(
@@ -187,39 +200,23 @@ impl GoogleProvider {
     ) -> Result<OAuth2Tokens, OAuthError> {
         self.ensure_authorization_options(request.code_verifier.as_deref())?;
 
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: GOOGLE_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: request.code,
-                redirect_uri: request.redirect_uri,
-                code_verifier: request.code_verifier,
-                device_id: request.device_id,
-                options: self.options.oauth.clone(),
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        let mut exchange = self
+            .client
+            .exchange_code(request.code, request.redirect_uri)?;
+        if let Some(code_verifier) = request.code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        if let Some(device_id) = request.device_id {
+            exchange = exchange.device_id(device_id);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: GOOGLE_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token_value.into(),
-                options: ProviderOptions {
-                    client_id: self.options.oauth.client_id.clone(),
-                    client_key: self.options.oauth.client_key.clone(),
-                    client_secret: self.options.oauth.client_secret.clone(),
-                    ..ProviderOptions::default()
-                },
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token_value)?.send().await
     }
 
     pub async fn verify_id_token(
@@ -274,7 +271,7 @@ impl GoogleProvider {
         nonce: Option<&str>,
         jwk_set: &JwkSet,
     ) -> Result<bool, OAuthError> {
-        if self.options.oauth.disable_id_token_sign_in {
+        if self.client.options().disable_id_token_sign_in {
             return Ok(false);
         }
 
@@ -299,11 +296,9 @@ impl GoogleProvider {
     }
 
     fn client_id_audiences(&self) -> Vec<String> {
-        match &self.options.oauth.client_id {
-            Some(openauth_oauth::oauth2::ClientId::Single(value)) if !value.is_empty() => {
-                vec![value.clone()]
-            }
-            Some(openauth_oauth::oauth2::ClientId::Multiple(values)) => values
+        match &self.client.options().client_id {
+            Some(ClientId::Single(value)) if !value.is_empty() => vec![value.clone()],
+            Some(ClientId::Multiple(values)) => values
                 .iter()
                 .filter(|value| !value.is_empty())
                 .cloned()
@@ -313,14 +308,13 @@ impl GoogleProvider {
     }
 
     fn ensure_authorization_options(&self, code_verifier: Option<&str>) -> Result<(), OAuthError> {
-        if get_primary_client_id(&self.options.oauth.client_id).is_none() {
+        if get_primary_client_id(&self.client.options().client_id).is_none() {
             return Err(OAuthError::MissingOption("client_id"));
         }
         if self
-            .options
-            .oauth
-            .client_secret
-            .as_deref()
+            .client
+            .options()
+            .client_secret_str()
             .unwrap_or("")
             .is_empty()
         {
@@ -333,7 +327,7 @@ impl GoogleProvider {
     }
 }
 
-impl OAuthProviderContract for GoogleProvider {
+impl ProviderIdentity for GoogleProvider {
     fn id(&self) -> &str {
         GOOGLE_ID
     }
@@ -463,6 +457,7 @@ mod tests {
     use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::Rs256;
     use josekit::jws::JwsHeader;
     use josekit::jwt::{self, JwtPayload};
+    use openauth_oauth::oauth2::ClientSecret;
     use serde_json::json;
 
     #[tokio::test]
@@ -471,16 +466,17 @@ mod tests {
         let jwks = jwks_with_key(jwk);
         let provider = GoogleProvider::new(GoogleOptions {
             oauth: ProviderOptions {
-                client_id: Some(openauth_oauth::oauth2::ClientId::Multiple(vec![
+                client_id: Some(ClientId::Multiple(vec![
                     "web-client".to_owned(),
                     "ios-client".to_owned(),
                     "android-client".to_owned(),
                 ])),
-                client_secret: Some("secret".to_owned()),
+                client_secret: Some(ClientSecret::new("secret").expect("client secret")),
                 ..ProviderOptions::default()
             },
             ..GoogleOptions::default()
-        });
+        })
+        .expect("provider should build");
 
         assert!(provider
             .verify_id_token_with_jwk_set(&token, Some("n"), &jwks)
@@ -565,13 +561,14 @@ mod tests {
     fn test_provider(disable_id_token_sign_in: bool) -> GoogleProvider {
         GoogleProvider::new(GoogleOptions {
             oauth: ProviderOptions {
-                client_id: Some(openauth_oauth::oauth2::ClientId::from("web-client")),
-                client_secret: Some("secret".to_owned()),
+                client_id: Some(ClientId::from("web-client")),
+                client_secret: Some(ClientSecret::new("secret").expect("client secret")),
                 disable_id_token_sign_in,
                 ..ProviderOptions::default()
             },
             ..GoogleOptions::default()
         })
+        .expect("provider should build")
     }
 
     fn signed_google_id_token_with_claims(

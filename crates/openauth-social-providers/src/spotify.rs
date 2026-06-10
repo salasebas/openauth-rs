@@ -1,14 +1,12 @@
 //! Spotify social OAuth provider.
 
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token,
-    refresh_access_token_request, validate_authorization_code, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError,
-    OAuthFormRequest, OAuthProviderContract, OAuthProviderMetadata, ProviderOptions,
-    RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const SPOTIFY_ID: &str = "spotify";
 pub const SPOTIFY_NAME: &str = "Spotify";
@@ -50,26 +48,31 @@ pub struct SpotifyUserInfo {
 }
 
 /// Spotify OAuth provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct SpotifyProvider {
-    options: ProviderOptions,
-    metadata: OAuthProviderMetadata,
+    client: OAuth2Client,
 }
 
-pub fn spotify(options: ProviderOptions) -> SpotifyProvider {
+pub fn spotify(options: ProviderOptions) -> Result<SpotifyProvider, OAuthError> {
     SpotifyProvider::new(options)
 }
 
 impl SpotifyProvider {
-    pub fn new(options: ProviderOptions) -> Self {
-        Self {
-            options,
-            metadata: OAuthProviderMetadata::new(SPOTIFY_ID, SPOTIFY_NAME),
+    pub fn new(options: ProviderOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.disable_default_scope;
+        let mut builder = OAuth2Client::builder(SPOTIFY_ID, options)
+            .authorization_endpoint(SPOTIFY_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(SPOTIFY_TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scope(SPOTIFY_DEFAULT_SCOPE);
         }
+        Ok(Self {
+            client: builder.build()?,
+        })
     }
 
-    pub fn options(&self) -> &ProviderOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn token_endpoint(&self) -> &str {
@@ -84,16 +87,14 @@ impl SpotifyProvider {
         &self,
         request: SpotifyAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: self.id().to_owned(),
-            options: self.options.clone(),
-            authorization_endpoint: SPOTIFY_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: request.code_verifier,
-            scopes: self.scopes(request.scopes),
-            ..AuthorizationUrlRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?
+            .scopes(request.scopes);
+        if let Some(code_verifier) = request.code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        url.build()
     }
 
     pub fn authorization_code_request(
@@ -101,12 +102,9 @@ impl SpotifyProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.clone(),
-            ..AuthorizationCodeRequest::default()
-        })
+        self.client
+            .exchange_code(code, redirect_uri)?
+            .into_form_request()
     }
 
     pub async fn validate_authorization_code(
@@ -115,43 +113,27 @@ impl SpotifyProvider {
         code_verifier: Option<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: SPOTIFY_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                code_verifier,
-                redirect_uri: redirect_uri.into(),
-                options: self.options.clone(),
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub fn refresh_access_token_request(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.clone(),
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .refresh_token(refresh_token)?
+            .into_form_request()
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: SPOTIFY_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.clone(),
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(
@@ -194,30 +176,14 @@ impl SpotifyProvider {
             data: profile,
         }
     }
-
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = Vec::new();
-        if !self.options.disable_default_scope {
-            scopes.push(SPOTIFY_DEFAULT_SCOPE.to_owned());
-        }
-        scopes.extend(self.options.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
 }
 
-impl Default for SpotifyProvider {
-    fn default() -> Self {
-        Self::new(ProviderOptions::default())
-    }
-}
-
-impl OAuthProviderContract for SpotifyProvider {
+impl ProviderIdentity for SpotifyProvider {
     fn id(&self) -> &str {
-        self.metadata.id()
+        SPOTIFY_ID
     }
 
     fn name(&self) -> &str {
-        self.metadata.name()
+        SPOTIFY_NAME
     }
 }

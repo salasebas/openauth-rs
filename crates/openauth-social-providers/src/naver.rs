@@ -1,16 +1,12 @@
 //! Naver social OAuth provider.
 
-use std::collections::BTreeMap;
-
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token,
-    refresh_access_token_request, validate_authorization_code, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract, ProviderOptions,
-    RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const NAVER_ID: &str = "naver";
 pub const NAVER_NAME: &str = "Naver";
@@ -75,30 +71,31 @@ pub struct NaverUserInfo {
 }
 
 /// Naver OAuth provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct NaverProvider {
-    options: NaverProviderOptions,
+    client: OAuth2Client,
 }
 
-pub fn naver(oauth: ProviderOptions) -> NaverProvider {
+pub fn naver(oauth: ProviderOptions) -> Result<NaverProvider, OAuthError> {
     NaverProvider::new(NaverProviderOptions { oauth })
 }
 
 impl NaverProvider {
-    pub fn new(options: NaverProviderOptions) -> Self {
-        Self { options }
+    pub fn new(options: NaverProviderOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(NAVER_ID, options.oauth)
+            .authorization_endpoint(NAVER_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(NAVER_TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
+        }
+        Ok(Self {
+            client: builder.build()?,
+        })
     }
 
-    pub fn id(&self) -> &str {
-        NAVER_ID
-    }
-
-    pub fn name(&self) -> &str {
-        NAVER_NAME
-    }
-
-    pub fn options(&self) -> &NaverProviderOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn token_endpoint(&self) -> &str {
@@ -113,32 +110,13 @@ impl NaverProvider {
         &self,
         request: NaverAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: NAVER_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: NAVER_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: request.code_verifier,
-            scopes: self.scopes(request.scopes),
-            ..AuthorizationUrlRequest::default()
-        })
-    }
-
-    pub fn authorization_code_request(
-        &self,
-        code: impl Into<String>,
-        code_verifier: Option<impl Into<String>>,
-        redirect_uri: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.oauth.clone(),
-            code_verifier: code_verifier.map(Into::into),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?;
+        if let Some(code_verifier) = request.code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        url.scopes(request.scopes).build()
     }
 
     pub async fn validate_authorization_code(
@@ -147,48 +125,22 @@ impl NaverProvider {
         code_verifier: Option<impl Into<String>>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: NAVER_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                code_verifier: code_verifier.map(Into::into),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
-    }
-
-    pub fn refresh_access_token_request(
-        &self,
-        refresh_token: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            extra_params: self.refresh_extra_params(),
-            ..RefreshAccessTokenRequest::default()
-        })
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: NAVER_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                extra_params: self.refresh_extra_params(),
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        let mut refresh = self.client.refresh_token(refresh_token)?;
+        if let Some(client_key) = self.client.options().client_key.clone() {
+            refresh = refresh.extra_param("client_key", client_key);
+        }
+        refresh.send().await
     }
 
     pub async fn get_user_info(
@@ -238,44 +190,15 @@ impl NaverProvider {
             email_verified: false,
         }
     }
-
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            DEFAULT_SCOPES
-                .iter()
-                .map(|scope| (*scope).to_owned())
-                .collect()
-        };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
-
-    fn refresh_extra_params(&self) -> BTreeMap<String, String> {
-        self.options
-            .oauth
-            .client_key
-            .as_ref()
-            .map(|client_key| BTreeMap::from([("client_key".to_owned(), client_key.clone())]))
-            .unwrap_or_default()
-    }
 }
 
-impl Default for NaverProvider {
-    fn default() -> Self {
-        Self::new(NaverProviderOptions::default())
-    }
-}
-
-impl OAuthProviderContract for NaverProvider {
+impl ProviderIdentity for NaverProvider {
     fn id(&self) -> &str {
-        self.id()
+        NAVER_ID
     }
 
     fn name(&self) -> &str {
-        self.name()
+        NAVER_NAME
     }
 }
 

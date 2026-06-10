@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "integration tests intentionally fail fast with contextual setup errors"
+)]
+
 #[path = "access/mod.rs"]
 mod access;
 #[path = "additional_fields/mod.rs"]

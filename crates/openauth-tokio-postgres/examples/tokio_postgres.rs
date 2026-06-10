@@ -1,5 +1,5 @@
 use openauth_core::db::{auth_schema, AuthSchemaOptions, DbAdapter, RateLimitStorage};
-use openauth_tokio_postgres::TokioPostgresAdapter;
+use openauth_tokio_postgres::TokioPostgresStores;
 
 #[tokio::main]
 async fn main() -> Result<(), openauth_core::error::OpenAuthError> {
@@ -7,13 +7,13 @@ async fn main() -> Result<(), openauth_core::error::OpenAuthError> {
         rate_limit_storage: RateLimitStorage::Database,
         ..AuthSchemaOptions::default()
     });
-    let adapter = TokioPostgresAdapter::connect_with_schema(
+    let stores = TokioPostgresStores::connect_with_schema(
         "postgres://user:password@localhost/openauth",
         schema.clone(),
     )
     .await?;
 
-    adapter.run_migrations(&schema).await?;
-    let _rate_limit_store = adapter.rate_limit_store();
+    stores.adapter_ref().run_migrations(&schema).await?;
+    let _options = stores.apply_to_options(openauth_core::options::OpenAuthOptions::default());
     Ok(())
 }

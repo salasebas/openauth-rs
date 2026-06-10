@@ -11,21 +11,43 @@ client ecosystem.
 
 ## What It Provides
 
+- `FredOpenAuthStores`: one shared `fred` client for rate limiting and secondary
+  storage (recommended entry point).
 - `FredRateLimitStore`: distributed atomic rate limiting through Lua.
 - `FredSecondaryStorage`: secondary key-value storage for sessions,
   verification state, SSO state, and plugin data.
-- `FredOpenAuthStores`: one shared `fred` client for both stores.
 - `list_keys()` / `clear()` on secondary storage (`SCAN`, not `KEYS`).
-- Redis and Valkey URL normalization.
+- Redis and Valkey URL normalization (internal; pass `valkey://` URLs directly
+  to `connect`).
 - Optional `native-tls` and `rustls` feature flags forwarded to `fred`.
 
 ## Quick Start
 
 ```rust
+use openauth::{OpenAuth, OpenAuthOptions};
+use openauth_fred::FredOpenAuthStores;
+
+let stores = FredOpenAuthStores::connect("valkey://127.0.0.1:6379").await?;
+
+let auth = OpenAuth::builder()
+    .options(stores.apply_to_options(
+        OpenAuthOptions::new().secret("secret-a-at-least-32-chars-long!!"),
+    ))
+    .build()?;
+# let _ = auth;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`apply_to_options` wires both `secondary_storage` and distributed rate limiting
+in one call.
+
+### Individual store
+
+```rust
 use openauth::{OpenAuth, RateLimitOptions};
 use openauth_fred::FredRateLimitStore;
 
-let store = FredRateLimitStore::connect_valkey("valkey://127.0.0.1:6379").await?;
+let store = FredRateLimitStore::connect("redis://127.0.0.1:6379").await?;
 
 let auth = OpenAuth::builder()
     .secret("secret-a-at-least-32-chars-long!!")
@@ -42,22 +64,6 @@ let auth = OpenAuth::builder()
 
 Secondary storage uses raw string values and TTLs in seconds. Operational
 helpers such as `list_keys()` and `clear()` use `SCAN` instead of `KEYS`.
-
-Shared client:
-
-```rust
-use openauth::{OpenAuth, OpenAuthOptions};
-use openauth_fred::FredOpenAuthStores;
-
-let stores = FredOpenAuthStores::connect("redis://127.0.0.1:6379").await?;
-let auth = OpenAuth::builder()
-    .options(stores.apply_to_options(
-        OpenAuthOptions::new().secret("secret-a-at-least-32-chars-long!!"),
-    ))
-    .build()?;
-# let _ = auth;
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
 
 ## Status
 
