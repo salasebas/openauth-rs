@@ -9,6 +9,11 @@ Versioning while the API is still pre-1.0.
 
 ### Changed
 
+- **Breaking:** public API cleanup for plugin crates on the 0.1.1 line:
+  `openauth-stripe` (`stripe()` is fallible, narrower public surface),
+  `openauth-i18n` (`I18nOptions::new()` + `.locale()`), and
+  `openauth-telemetry` / umbrella `openauth` (namespaced `openauth::telemetry`
+  re-exports). See per-crate `CHANGELOG.md` files for migration detail.
 - **Breaking:** `openauth-oauth` replaces free-function token exchange with
   [`OAuth2Client`](crates/openauth-oauth/src/oauth2/client.rs) and flow builders;
   removes `OAuthProviderContract`, `ClientTokenRequest`, and related aliases;
