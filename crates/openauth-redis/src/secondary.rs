@@ -31,14 +31,6 @@ impl RedisSecondaryStorage {
         Self::connect_with_options(redis_url, RedisSecondaryStorageOptions::default()).await
     }
 
-    pub async fn connect_redis(redis_url: &str) -> Result<Self, OpenAuthError> {
-        Self::connect(redis_url).await
-    }
-
-    pub async fn connect_valkey(redis_url: &str) -> Result<Self, OpenAuthError> {
-        Self::connect(redis_url).await
-    }
-
     pub async fn connect_with_options(
         redis_url: &str,
         options: RedisSecondaryStorageOptions,

@@ -3,23 +3,27 @@
 use std::collections::BTreeMap;
 
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token,
-    refresh_access_token_request, validate_authorization_code, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract, ProviderOptions,
-    RefreshAccessTokenRequest,
+    ClientAuthentication, ExchangeCodeBuilder, OAuth2Client, OAuth2Tokens, OAuth2UserInfo,
+    OAuthError, OAuthFormRequest, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
+use crate::runtime::ProviderIdentity;
+
+const AUTHORIZATION_ENDPOINT: &str = "https://www.reddit.com/api/v1/authorize";
+const TOKEN_ENDPOINT: &str = "https://www.reddit.com/api/v1/access_token";
+const USERINFO_ENDPOINT: &str = "https://oauth.reddit.com/api/v1/me";
+const DEFAULT_SCOPE: &str = "identity";
+const USER_AGENT: &str = "better-auth";
+
 pub const REDDIT_ID: &str = "reddit";
 pub const REDDIT_NAME: &str = "Reddit";
-pub const REDDIT_AUTHORIZATION_ENDPOINT: &str = "https://www.reddit.com/api/v1/authorize";
-pub const REDDIT_TOKEN_ENDPOINT: &str = "https://www.reddit.com/api/v1/access_token";
-pub const REDDIT_USERINFO_ENDPOINT: &str = "https://oauth.reddit.com/api/v1/me";
-pub const REDDIT_DEFAULT_SCOPE: &str = "identity";
-const USER_AGENT: &str = "better-auth";
+pub const REDDIT_AUTHORIZATION_ENDPOINT: &str = AUTHORIZATION_ENDPOINT;
+pub const REDDIT_TOKEN_ENDPOINT: &str = TOKEN_ENDPOINT;
+pub const REDDIT_USERINFO_ENDPOINT: &str = USERINFO_ENDPOINT;
+pub const REDDIT_DEFAULT_SCOPE: &str = DEFAULT_SCOPE;
 
 /// Reddit provider configuration.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -63,46 +67,59 @@ pub struct RedditUserInfo {
 }
 
 /// Reddit OAuth provider.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RedditProvider {
-    options: RedditOptions,
+    client: OAuth2Client,
+    duration: Option<String>,
 }
 
-pub fn reddit(options: RedditOptions) -> RedditProvider {
+pub fn reddit(options: RedditOptions) -> Result<RedditProvider, OAuthError> {
     RedditProvider::new(options)
 }
 
 impl RedditProvider {
-    pub fn new(options: RedditOptions) -> Self {
-        Self { options }
+    pub fn new(options: RedditOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder("reddit", options.oauth)
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(TOKEN_ENDPOINT)?
+            .authentication(ClientAuthentication::Basic);
+        if !disable_default_scope {
+            builder = builder.default_scope(DEFAULT_SCOPE);
+        }
+        Ok(Self {
+            client: builder.build()?,
+            duration: options.duration,
+        })
     }
 
-    pub fn options(&self) -> &RedditOptions {
-        &self.options
+    pub fn options(&self) -> RedditOptions {
+        RedditOptions {
+            oauth: self.client.options().clone(),
+            duration: self.duration.clone(),
+        }
     }
 
     pub fn token_endpoint(&self) -> &str {
-        REDDIT_TOKEN_ENDPOINT
+        self.client.token_endpoint().as_str()
     }
 
     pub fn userinfo_endpoint(&self) -> &str {
-        REDDIT_USERINFO_ENDPOINT
+        USERINFO_ENDPOINT
     }
 
     pub fn create_authorization_url(
         &self,
         request: RedditAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: REDDIT_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: REDDIT_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            scopes: self.scopes(request.scopes),
-            duration: self.options.duration.clone(),
-            ..AuthorizationUrlRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?
+            .scopes(request.scopes);
+        if let Some(duration) = &self.duration {
+            url = url.duration(duration.clone());
+        }
+        url.build()
     }
 
     pub fn authorization_code_request(
@@ -110,14 +127,8 @@ impl RedditProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Basic,
-            headers: reddit_token_headers(),
-            ..AuthorizationCodeRequest::default()
-        })
+        apply_reddit_token_headers(self.client.exchange_code(code, redirect_uri)?)
+            .into_form_request()
     }
 
     pub async fn validate_authorization_code(
@@ -125,46 +136,25 @@ impl RedditProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: REDDIT_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Basic,
-                headers: reddit_token_headers(),
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        apply_reddit_token_headers(self.client.exchange_code(code, redirect_uri)?)
+            .send()
+            .await
     }
 
     pub fn refresh_access_token_request(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Basic,
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .refresh_token(refresh_token)?
+            .into_form_request()
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: REDDIT_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Basic,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(
@@ -175,7 +165,7 @@ impl RedditProvider {
             return Ok(None);
         };
         let response = match crate::http::shared_client()
-            .get(REDDIT_USERINFO_ENDPOINT)
+            .get(USERINFO_ENDPOINT)
             .bearer_auth(access_token)
             .header("User-Agent", USER_AGENT)
             .send()
@@ -215,25 +205,32 @@ impl RedditProvider {
         }
     }
 
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = Vec::new();
-        if !self.options.oauth.disable_default_scope {
-            scopes.push(REDDIT_DEFAULT_SCOPE.to_owned());
-        }
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
-}
-
-impl OAuthProviderContract for RedditProvider {
-    fn id(&self) -> &str {
+    pub fn id(&self) -> &str {
         REDDIT_ID
     }
 
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         REDDIT_NAME
     }
+}
+
+impl ProviderIdentity for RedditProvider {
+    fn id(&self) -> &str {
+        self.id()
+    }
+
+    fn name(&self) -> &str {
+        self.name()
+    }
+}
+
+fn apply_reddit_token_headers<'a>(
+    mut exchange: ExchangeCodeBuilder<'a>,
+) -> ExchangeCodeBuilder<'a> {
+    for (key, value) in reddit_token_headers() {
+        exchange = exchange.header(key, value);
+    }
+    exchange
 }
 
 fn reddit_token_headers() -> BTreeMap<String, String> {

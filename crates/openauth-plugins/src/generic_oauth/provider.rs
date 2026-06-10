@@ -1,10 +1,10 @@
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token_request,
-    refresh_access_token_with_client, validate_authorization_code_with_client,
-    AuthorizationCodeRequest, AuthorizationUrlRequest, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthHttpClient, ProviderOptions,
-    RefreshAccessTokenRequest, SocialAuthorizationCodeRequest, SocialAuthorizationUrlRequest,
-    SocialIdTokenRequest, SocialOAuthProvider, SocialProviderFuture,
+    create_authorization_code_request, create_authorization_url,
+    create_refresh_access_token_request, exchange_authorization_code, refresh_access_token_at,
+    AuthorizationCodeRequest, AuthorizationUrlRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError,
+    OAuthFormRequest, OAuthHttpClient, ProviderOptions, RefreshAccessTokenRequest,
+    SocialAuthorizationCodeRequest, SocialAuthorizationUrlRequest, SocialIdTokenRequest,
+    SocialOAuthProvider, SocialProviderFuture,
 };
 use url::Url;
 
@@ -55,14 +55,14 @@ impl GenericOAuthProvider {
         &self,
         input: SocialAuthorizationCodeRequest,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(self.authorization_code_input(input)?)
+        create_authorization_code_request(self.authorization_code_input(input)?)
     }
 
     pub fn refresh_access_token_request(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
+        create_refresh_access_token_request(RefreshAccessTokenRequest {
             refresh_token: refresh_token.into(),
             options: self.config.provider_options(),
             authentication: self.config.authentication,
@@ -185,11 +185,9 @@ impl SocialOAuthProvider for GenericOAuthProvider {
                 .await;
             }
             let token_endpoint = self.token_endpoint().await?;
-            validate_authorization_code_with_client(
-                ClientTokenRequest {
-                    token_endpoint,
-                    request: self.authorization_code_input(input)?,
-                },
+            exchange_authorization_code(
+                &token_endpoint,
+                self.authorization_code_input(input)?,
                 &self.http_client,
             )
             .await
@@ -240,16 +238,14 @@ impl SocialOAuthProvider for GenericOAuthProvider {
                 return refresh_access_token(refresh_token_value).await;
             }
             let token_endpoint = self.token_endpoint().await?;
-            refresh_access_token_with_client(
-                ClientTokenRequest {
-                    token_endpoint,
-                    request: RefreshAccessTokenRequest {
-                        refresh_token: refresh_token_value,
-                        options: self.config.provider_options(),
-                        authentication: self.config.authentication,
-                        extra_params: self.config.token_url_params.clone(),
-                        ..RefreshAccessTokenRequest::default()
-                    },
+            refresh_access_token_at(
+                &token_endpoint,
+                RefreshAccessTokenRequest {
+                    refresh_token: refresh_token_value,
+                    options: self.config.provider_options(),
+                    authentication: self.config.authentication,
+                    extra_params: self.config.token_url_params.clone(),
+                    ..RefreshAccessTokenRequest::default()
                 },
                 &self.http_client,
             )

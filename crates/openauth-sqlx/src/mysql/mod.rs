@@ -27,8 +27,8 @@ use self::schema::{
     create_schema, execute_migration_plan_on_pool, plan_migrations as plan_schema_migrations,
 };
 use self::state::{MySqlExecutor, MySqlState};
-use crate::migration::SchemaMigrationPlan;
 use crate::{consume_record, count_from_i64, count_to_i64, RateLimitSqlNames};
+use openauth_core::db::SchemaMigrationPlan;
 
 #[derive(Debug, Clone)]
 pub struct MySqlAdapter {

@@ -21,6 +21,7 @@ use openauth_core::db::{
     DeleteMany, FindMany, FindOne, ForeignKey, HookedAdapter, IdGeneration, IdPolicy, JoinOption,
     OnDelete, RateLimitStorage, Sort, SortDirection, TableOptions, Update, Where, WhereOperator,
 };
+use openauth_core::db::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     AdvancedOptions, OpenAuthOptions, RateLimitConsumeInput, RateLimitRule, RateLimitStore,
@@ -30,7 +31,6 @@ use openauth_core::plugin::{
     PluginMigrationBody, PluginMigrationStep,
 };
 use openauth_core::test_utils::fast_verify_password;
-use openauth_sqlx::migration::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_sqlx::{MySqlAdapter, MySqlRateLimitStore};
 use serde_json::Value;
 use sqlx::mysql::MySqlPoolOptions;

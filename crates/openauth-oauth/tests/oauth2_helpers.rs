@@ -18,20 +18,19 @@ use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::Rs256;
 use josekit::jws::JwsHeader;
 use josekit::jwt::{self, JwtPayload};
 use openauth_oauth::oauth2::{
-    clear_jwks_cache, client_credentials_token_with_client, create_authorization_code_request,
-    create_authorization_url, create_client_credentials_token_request,
-    create_refresh_access_token_request, generate_code_challenge, get_oauth2_tokens,
-    get_primary_client_id, refresh_access_token_with_client, validate_code_verifier,
-    validate_token_with_client, verify_access_token_with_client,
-    verify_jws_access_token_with_client, verify_jws_access_token_with_client_and_cache_config,
-    verify_jws_with_jwks, AuthorizationCodeRequest, AuthorizationEndpoint, AuthorizationUrlRequest,
-    ClientAuthentication, ClientCredentialsGrant, ClientCredentialsTokenRequest, ClientId,
-    ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest,
-    OAuthHttpClient, OAuthHttpClientConfig, OAuthJwksCacheConfig, ProviderOptions, RedirectUri,
-    RefreshAccessTokenRequest, SocialAuthorizationCodeRequest, SocialAuthorizationUrlRequest,
-    SocialIdTokenRequest, SocialOAuthProvider, SocialProviderFuture, TokenEndpoint,
-    TokenValidationOptions, TokenValidationResult, VerifyAccessTokenOptions,
-    VerifyAccessTokenRemote,
+    clear_jwks_cache, create_authorization_code_request, create_authorization_url,
+    create_client_credentials_token_request, create_refresh_access_token_request,
+    generate_code_challenge, get_oauth2_tokens, get_primary_client_id, refresh_access_token_at,
+    submit_token_form, validate_code_verifier, validate_token as oauth_validate_token,
+    verify_access_token as oauth_verify_access_token,
+    verify_jws_access_token as oauth_verify_jws_access_token, verify_jws_with_jwks,
+    AuthorizationCodeRequest, AuthorizationEndpoint, AuthorizationUrlRequest, ClientAuthentication,
+    ClientCredentialsTokenRequest, ClientId, ClientSecret, JwksVerifyOptions, OAuth2Tokens,
+    OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthHttpClient, OAuthHttpClientConfig,
+    OAuthJwksCacheConfig, ProviderOptions, RedirectUri, RefreshAccessTokenRequest,
+    SocialAuthorizationCodeRequest, SocialAuthorizationUrlRequest, SocialIdTokenRequest,
+    SocialOAuthProvider, SocialProviderFuture, TokenEndpoint, TokenValidationOptions,
+    TokenValidationResult, ValidateTokenOptions, VerifyAccessTokenOptions, VerifyAccessTokenRemote,
 };
 use serde_json::{json, Number, Value};
 use std::str::FromStr;
@@ -206,7 +205,7 @@ fn request_builders_support_post_and_basic_authentication() {
         redirect_uri: "https://app.example.com/callback".to_owned(),
         options: ProviderOptions {
             client_id: Some(ClientId::Single("client-id".to_owned())),
-            client_secret: Some("client-secret".to_owned()),
+            client_secret: Some(test_client_secret("client-secret")),
             ..ProviderOptions::default()
         },
         code_verifier: Some("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk".to_owned()),
@@ -233,7 +232,7 @@ fn request_builders_support_post_and_basic_authentication() {
         refresh_token: "refresh-token".to_owned(),
         options: ProviderOptions {
             client_id: Some(ClientId::Single("client-id".to_owned())),
-            client_secret: Some("client-secret".to_owned()),
+            client_secret: Some(test_client_secret("client-secret")),
             ..ProviderOptions::default()
         },
         authentication: ClientAuthentication::Basic,
@@ -251,7 +250,7 @@ fn request_builders_support_post_and_basic_authentication() {
         create_client_credentials_token_request(ClientCredentialsTokenRequest {
             options: ProviderOptions {
                 client_id: Some(ClientId::Single("client-id".to_owned())),
-                client_secret: Some("client-secret".to_owned()),
+                client_secret: Some(test_client_secret("client-secret")),
                 ..ProviderOptions::default()
             },
             scope: Some("admin".to_owned()),
@@ -293,7 +292,7 @@ fn basic_authentication_form_encodes_reserved_and_non_ascii_credentials() {
         refresh_token: "refresh-token".to_owned(),
         options: ProviderOptions {
             client_id: Some(ClientId::Single("a:b c".to_owned())),
-            client_secret: Some("é+&=%".to_owned()),
+            client_secret: Some(test_client_secret("é+&=%")),
             ..ProviderOptions::default()
         },
         authentication: ClientAuthentication::Basic,
@@ -317,7 +316,7 @@ fn basic_authentication_form_encodes_reserved_and_non_ascii_credentials() {
         refresh_token: "refresh-token".to_owned(),
         options: ProviderOptions {
             client_id: Some(ClientId::Single("client-id".to_owned())),
-            client_secret: Some("client-secret".to_owned()),
+            client_secret: Some(test_client_secret("client-secret")),
             ..ProviderOptions::default()
         },
         authentication: ClientAuthentication::Basic,
@@ -334,7 +333,7 @@ fn authorization_code_additional_params_cannot_replace_existing_body_fields() {
         redirect_uri: "https://app.example.com/callback".to_owned(),
         options: ProviderOptions {
             client_id: Some(ClientId::Single("client-id".to_owned())),
-            client_secret: Some("client-secret".to_owned()),
+            client_secret: Some(test_client_secret("client-secret")),
             ..ProviderOptions::default()
         },
         additional_params: BTreeMap::from([("grant_type".to_owned(), "refresh_token".to_owned())]),
@@ -352,7 +351,7 @@ fn authorization_code_additional_params_do_not_overwrite_standard_fields() {
         redirect_uri: "https://app.example.com/callback".to_owned(),
         options: ProviderOptions {
             client_id: Some(ClientId::Single("client-id".to_owned())),
-            client_secret: Some("client-secret".to_owned()),
+            client_secret: Some(test_client_secret("client-secret")),
             ..ProviderOptions::default()
         },
         additional_params: BTreeMap::from([
@@ -428,7 +427,7 @@ fn authorization_code_override_params_cannot_replace_security_critical_fields() 
         redirect_uri: "https://app.example.com/callback".to_owned(),
         options: ProviderOptions {
             client_id: Some(ClientId::Single("client-id".to_owned())),
-            client_secret: Some("client-secret".to_owned()),
+            client_secret: Some(test_client_secret("client-secret")),
             client_key: Some("client-key".to_owned()),
             ..ProviderOptions::default()
         },
@@ -489,7 +488,7 @@ fn refresh_extra_params_cannot_replace_security_critical_fields() {
         refresh_token: "real-refresh-token".to_owned(),
         options: ProviderOptions {
             client_id: Some(ClientId::Single("client-id".to_owned())),
-            client_secret: Some("client-secret".to_owned()),
+            client_secret: Some(test_client_secret("client-secret")),
             client_key: Some("client-key".to_owned()),
             ..ProviderOptions::default()
         },
@@ -528,7 +527,7 @@ fn client_credentials_requires_client_id_and_secret() {
     let missing_client_id =
         create_client_credentials_token_request(ClientCredentialsTokenRequest {
             options: ProviderOptions {
-                client_secret: Some("client-secret".to_owned()),
+                client_secret: Some(test_client_secret("client-secret")),
                 ..ProviderOptions::default()
             },
             ..ClientCredentialsTokenRequest::default()
@@ -621,7 +620,7 @@ fn client_authentication_matrix_handles_public_and_confidential_clients() {
     let missing_basic_client = create_refresh_access_token_request(RefreshAccessTokenRequest {
         refresh_token: "refresh-token".to_owned(),
         options: ProviderOptions {
-            client_secret: Some("secret".to_owned()),
+            client_secret: Some(test_client_secret("secret")),
             ..ProviderOptions::default()
         },
         authentication: ClientAuthentication::Basic,
@@ -633,7 +632,7 @@ fn client_authentication_matrix_handles_public_and_confidential_clients() {
     let empty_secret = create_client_credentials_token_request(ClientCredentialsTokenRequest {
         options: ProviderOptions {
             client_id: Some(ClientId::Single("client-id".to_owned())),
-            client_secret: Some(String::new()),
+            client_secret: None,
             ..ProviderOptions::default()
         },
         ..ClientCredentialsTokenRequest::default()
@@ -813,14 +812,14 @@ async fn network_token_helpers_redact_structured_and_plaintext_sensitive_errors(
             "device_code": "secret-device-code"
         }),
     );
-    let json_error = refresh_access_token(ClientTokenRequest {
-        token_endpoint: json_server.url(),
-        request: RefreshAccessTokenRequest {
+    let json_error = refresh_access_token(
+        &json_server.url(),
+        RefreshAccessTokenRequest {
             refresh_token: "secret-refresh-token".to_owned(),
             options: provider_options(),
             ..RefreshAccessTokenRequest::default()
         },
-    })
+    )
     .await
     .expect_err("structured OAuth error should be redacted")
     .to_string();
@@ -836,14 +835,14 @@ async fn network_token_helpers_redact_structured_and_plaintext_sensitive_errors(
         "text/plain",
         "device_code=secret-device-code&token=secret-token",
     );
-    let text_error = refresh_access_token(ClientTokenRequest {
-        token_endpoint: text_server.url(),
-        request: RefreshAccessTokenRequest {
+    let text_error = refresh_access_token(
+        &text_server.url(),
+        RefreshAccessTokenRequest {
             refresh_token: "secret-refresh-token".to_owned(),
             options: provider_options(),
             ..RefreshAccessTokenRequest::default()
         },
-    })
+    )
     .await
     .expect_err("plaintext OAuth error should be redacted")
     .to_string();
@@ -854,14 +853,14 @@ async fn network_token_helpers_redact_structured_and_plaintext_sensitive_errors(
 #[tokio::test]
 async fn network_token_helpers_reject_invalid_success_json() {
     let server = RawServer::spawn_status(200, "application/json", "{not-json");
-    let error = refresh_access_token(ClientTokenRequest {
-        token_endpoint: server.url(),
-        request: RefreshAccessTokenRequest {
+    let error = refresh_access_token(
+        &server.url(),
+        RefreshAccessTokenRequest {
             refresh_token: "refresh-token".to_owned(),
             options: provider_options(),
             ..RefreshAccessTokenRequest::default()
         },
-    })
+    )
     .await
     .expect_err("invalid success JSON should be rejected");
 
@@ -878,15 +877,15 @@ async fn network_token_helpers_post_form_requests_and_parse_responses() {
         "token_type": "Bearer",
         "scope": "openid email"
     }));
-    let refreshed = refresh_access_token(ClientTokenRequest {
-        token_endpoint: refresh_server.url(),
-        request: RefreshAccessTokenRequest {
+    let refreshed = refresh_access_token(
+        &refresh_server.url(),
+        RefreshAccessTokenRequest {
             refresh_token: "old-refresh".to_owned(),
             options: provider_options(),
             authentication: ClientAuthentication::Post,
             ..RefreshAccessTokenRequest::default()
         },
-    })
+    )
     .await
     .expect("refresh token should parse response");
 
@@ -903,19 +902,19 @@ async fn network_token_helpers_post_form_requests_and_parse_responses() {
         "token_type": "Bearer",
         "scope": "admin"
     }));
-    let client_tokens = client_credentials_token(ClientCredentialsGrant {
-        token_endpoint: client_server.url(),
-        request: ClientCredentialsTokenRequest {
+    let client_tokens = client_credentials_token(
+        &client_server.url(),
+        ClientCredentialsTokenRequest {
             options: ProviderOptions {
                 client_id: Some(ClientId::Single("client-id".to_owned())),
-                client_secret: Some("client-secret".to_owned()),
+                client_secret: Some(test_client_secret("client-secret")),
                 ..ProviderOptions::default()
             },
             scope: Some("admin".to_owned()),
             authentication: ClientAuthentication::Post,
             resource: Vec::new(),
         },
-    })
+    )
     .await
     .expect("client credentials should parse response");
 
@@ -934,18 +933,18 @@ async fn network_token_helpers_parse_oauth_error_without_leaking_secrets() {
         }),
     );
 
-    let error = client_credentials_token(ClientCredentialsGrant {
-        token_endpoint: server.url(),
-        request: ClientCredentialsTokenRequest {
+    let error = client_credentials_token(
+        &server.url(),
+        ClientCredentialsTokenRequest {
             options: ProviderOptions {
                 client_id: Some(ClientId::Single("client-id".to_owned())),
-                client_secret: Some("client-secret".to_owned()),
+                client_secret: Some(test_client_secret("client-secret")),
                 ..ProviderOptions::default()
             },
             authentication: ClientAuthentication::Post,
             ..ClientCredentialsTokenRequest::default()
         },
-    })
+    )
     .await
     .expect_err("OAuth error body should become a typed error");
 
@@ -963,14 +962,14 @@ async fn network_token_helpers_redact_sensitive_oauth_error_descriptions() {
         }),
     );
 
-    let error = refresh_access_token(ClientTokenRequest {
-        token_endpoint: server.url(),
-        request: RefreshAccessTokenRequest {
+    let error = refresh_access_token(
+        &server.url(),
+        RefreshAccessTokenRequest {
             refresh_token: "secret-refresh-token".to_owned(),
             options: provider_options(),
             ..RefreshAccessTokenRequest::default()
         },
-    })
+    )
     .await
     .expect_err("OAuth error description should be redacted");
 
@@ -1099,6 +1098,7 @@ async fn verify_access_token_remote_fallback_only_for_opaque_or_malformed_jws() 
             }),
             verify_options: TokenValidationOptions::default().allow_hmac_algorithms(),
             scopes: vec!["read".to_owned()],
+            ..VerifyAccessTokenOptions::default()
         },
     )
     .await
@@ -1141,6 +1141,7 @@ async fn verify_access_token_rejects_remote_missing_active_and_missing_audience(
             },
             scopes: vec!["read".to_owned()],
             jwks_url: None,
+            ..VerifyAccessTokenOptions::default()
         },
     )
     .await
@@ -1170,6 +1171,7 @@ async fn verify_access_token_rejects_remote_missing_active_and_missing_audience(
             },
             scopes: vec!["read".to_owned()],
             jwks_url: None,
+            ..VerifyAccessTokenOptions::default()
         },
     )
     .await
@@ -1316,7 +1318,7 @@ async fn validate_token_rejects_required_exp_with_unparseable_numeric_value() {
     );
     let server = JsonServer::spawn(json!({ "keys": [jwk] }));
 
-    let error = validate_token_with_client(
+    let error = validate_token(
         &token,
         &server.url(),
         TokenValidationOptions {
@@ -1325,7 +1327,6 @@ async fn validate_token_rejects_required_exp_with_unparseable_numeric_value() {
             ..TokenValidationOptions::default().require_standard_claims()
         }
         .allow_hmac_algorithms(),
-        &permissive_client(),
     )
     .await
     .expect_err("required exp with fractional value should be rejected");
@@ -1405,6 +1406,7 @@ async fn verify_access_token_rejects_required_claims_with_wrong_types() {
                 client_secret: "secret".to_owned(),
                 force: true,
             }),
+            ..VerifyAccessTokenOptions::default()
         },
     )
     .await
@@ -1568,6 +1570,7 @@ async fn verify_access_token_validates_remote_audience_issuer_and_scopes() {
                 client_secret: "secret".to_owned(),
                 force: true,
             }),
+            ..VerifyAccessTokenOptions::default()
         },
     )
     .await
@@ -1663,6 +1666,7 @@ async fn verify_access_token_falls_back_to_remote_for_opaque_tokens() {
             scopes: vec!["read".to_owned()],
             jwks_url: Some("http://127.0.0.1:1/jwks".to_owned()),
             remote_verify: Some(remote_verify),
+            ..VerifyAccessTokenOptions::default()
         },
     )
     .await
@@ -1681,13 +1685,11 @@ async fn verify_access_token_accepts_injected_http_client_for_introspection() {
     }));
     let client = permissive_client();
 
-    let payload = verify_access_token_with_client(
-        "opaque-token",
-        remote_verify_options(remote.url(), vec!["read".to_owned()]),
-        &client,
-    )
-    .await
-    .expect("injected client should verify token");
+    let mut options = remote_verify_options(remote.url(), vec!["read".to_owned()]);
+    options.http = Some(client);
+    let payload = oauth_verify_access_token("opaque-token", options)
+        .await
+        .expect("injected client should verify token");
 
     assert_eq!(payload["active"], true);
 }
@@ -1770,10 +1772,14 @@ fn form_urldecode(value: &str) -> String {
         .unwrap_or_default()
 }
 
+fn test_client_secret(value: &str) -> ClientSecret {
+    ClientSecret::new(value).expect("test client secret must not be empty")
+}
+
 fn provider_options() -> ProviderOptions {
     ProviderOptions {
         client_id: Some(ClientId::Single("client-id".to_owned())),
-        client_secret: Some("client-secret".to_owned()),
+        client_secret: Some(test_client_secret("client-secret")),
         ..ProviderOptions::default()
     }
 }
@@ -1793,15 +1799,18 @@ fn permissive_client() -> OAuthHttpClient {
 // permissive client so they can keep exercising loopback test servers, while
 // the default-client SSRF behavior is covered by dedicated tests below.
 async fn refresh_access_token(
-    input: ClientTokenRequest<RefreshAccessTokenRequest>,
+    token_endpoint: &str,
+    request: RefreshAccessTokenRequest,
 ) -> Result<OAuth2Tokens, OAuthError> {
-    refresh_access_token_with_client(input, &permissive_client()).await
+    refresh_access_token_at(token_endpoint, request, &permissive_client()).await
 }
 
 async fn client_credentials_token(
-    input: ClientCredentialsGrant,
+    token_endpoint: &str,
+    request: ClientCredentialsTokenRequest,
 ) -> Result<OAuth2Tokens, OAuthError> {
-    client_credentials_token_with_client(input, &permissive_client()).await
+    let form = create_client_credentials_token_request(request)?;
+    submit_token_form(token_endpoint, form, &permissive_client()).await
 }
 
 async fn validate_token(
@@ -1809,14 +1818,27 @@ async fn validate_token(
     jwks_endpoint: &str,
     options: TokenValidationOptions,
 ) -> Result<TokenValidationResult, OAuthError> {
-    validate_token_with_client(token, jwks_endpoint, options, &permissive_client()).await
+    oauth_validate_token(
+        token,
+        jwks_endpoint,
+        ValidateTokenOptions {
+            validation: options,
+            http: Some(permissive_client()),
+            ..ValidateTokenOptions::default()
+        },
+    )
+    .await
 }
 
 async fn verify_access_token(
     token: &str,
     options: VerifyAccessTokenOptions,
 ) -> Result<serde_json::Value, OAuthError> {
-    verify_access_token_with_client(token, options, &permissive_client()).await
+    let mut options = options;
+    if options.http.is_none() {
+        options.http = Some(permissive_client());
+    }
+    oauth_verify_access_token(token, options).await
 }
 
 async fn verify_jws_access_token(
@@ -1824,7 +1846,16 @@ async fn verify_jws_access_token(
     jwks_url: &str,
     verify_options: TokenValidationOptions,
 ) -> Result<TokenValidationResult, OAuthError> {
-    verify_jws_access_token_with_client(token, jwks_url, verify_options, &permissive_client()).await
+    oauth_verify_jws_access_token(
+        token,
+        jwks_url,
+        JwksVerifyOptions {
+            verify_options,
+            http: Some(permissive_client()),
+            ..JwksVerifyOptions::default()
+        },
+    )
+    .await
 }
 
 async fn verify_jws_access_token_with_cache_config(
@@ -1833,12 +1864,14 @@ async fn verify_jws_access_token_with_cache_config(
     verify_options: TokenValidationOptions,
     cache_config: OAuthJwksCacheConfig,
 ) -> Result<TokenValidationResult, OAuthError> {
-    verify_jws_access_token_with_client_and_cache_config(
+    oauth_verify_jws_access_token(
         token,
         jwks_url,
-        verify_options,
-        &permissive_client(),
-        cache_config,
+        JwksVerifyOptions {
+            verify_options,
+            cache: cache_config,
+            http: Some(permissive_client()),
+        },
     )
     .await
 }
@@ -1858,6 +1891,7 @@ fn remote_verify_options(introspect_url: String, scopes: Vec<String>) -> VerifyA
             client_secret: "secret".to_owned(),
             force: true,
         }),
+        ..VerifyAccessTokenOptions::default()
     }
 }
 

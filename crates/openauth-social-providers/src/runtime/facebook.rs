@@ -2,7 +2,7 @@ use super::*;
 
 impl_social_oauth_provider!(
     crate::facebook::FacebookProvider,
-    options | provider | { provider.options().oauth.clone() },
+    options | provider | { provider.options().clone() },
     authorization | provider,
     input | {
         provider.create_authorization_url(

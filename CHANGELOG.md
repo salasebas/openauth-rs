@@ -14,10 +14,26 @@ Versioning while the API is still pre-1.0.
   `openauth-i18n` (`I18nOptions::new()` + `.locale()`), and
   `openauth-telemetry` / umbrella `openauth` (namespaced `openauth::telemetry`
   re-exports). See per-crate `CHANGELOG.md` files for migration detail.
+- **Breaking:** `openauth-oauth` replaces free-function token exchange with
+  [`OAuth2Client`](crates/openauth-oauth/src/oauth2/client.rs) and flow builders;
+  removes `OAuthProviderContract`, `ClientTokenRequest`, and related aliases;
+  types `ProviderOptions.client_secret` as `ClientSecret`; consolidates JWT/JWKS
+  verification behind options structs.
+- **Breaking:** `openauth-social-providers` provider factories return
+  `Result<_, OAuthError>` and embed `OAuth2Client`; exports `ProviderIdentity`.
+- `openauth-plugins` (`generic_oauth`, `one_tap`) and `openauth-sso` (OIDC
+  routes) updated for the new OAuth client surface.
 
 ## [0.1.1] - 2026-06-09
 
 ### Added
+
+- `openauth-social-providers`: application-facing catalog under `providers::*`,
+  with `SocialProviderConfig`, `SocialProviderConfigBuilder`, `ProviderId`, and
+  `CognitoPoolConfig` for registering built-in social OAuth providers with
+  `OpenAuthOptions::social_provider`.
+- `openauth-social-providers`: `advanced::*` module for low-level provider
+  request types, profile structs, endpoint constants, and HTTP helpers.
 
 - `openauth-example-full-app`: `postgres-deadpool` adapter profile (`deadpool-postgres`
   over `tokio-postgres`) in the sidebar and database studio, sharing the same
@@ -27,6 +43,18 @@ Versioning while the API is still pre-1.0.
 
 ### Changed
 
+- **Breaking:** Storage adapter crates (`openauth-sqlx`, `openauth-deadpool-postgres`,
+  `openauth-tokio-postgres`, `openauth-redis`, `openauth-fred`) now lead with
+  bundled `*Stores` types and `apply_to_options` for the recommended app-dev
+  setup. See each crate's README and CHANGELOG for removed constructors and
+  migration re-exports (`openauth_core::db` is canonical).
+- **Breaking:** `openauth-social-providers` no longer exposes per-provider modules
+  at the crate root. Use `openauth_social_providers::providers::{github, google,
+  …}` for app setup and `openauth_social_providers::advanced::{github, …}` for
+  low-level OAuth types and tests.
+- **Breaking:** public provider factories now take `SocialProviderConfig` (or
+  `SocialProviderConfig::builder().build()?`) instead of `ProviderOptions` or
+  per-provider `*Options` structs.
 - `openauth-sqlx`, `openauth-tokio-postgres`: Postgres migration planning now
   loads schema snapshots with a fixed set of batched catalog queries instead of
   per-column `information_schema` round trips.

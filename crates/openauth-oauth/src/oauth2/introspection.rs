@@ -6,7 +6,7 @@ use super::claims::{
 };
 use super::error::OAuthError;
 use super::http::{default_http_client, OAuthHttpClient};
-use super::jwks::verify_jws_access_token_with_client;
+use super::jwks::{verify_jws_access_token, JwksVerifyOptions, OAuthJwksCacheConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifyAccessTokenRemote {
@@ -16,12 +16,14 @@ pub struct VerifyAccessTokenRemote {
     pub force: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct VerifyAccessTokenOptions {
     pub verify_options: TokenValidationOptions,
     pub scopes: Vec<String>,
     pub jwks_url: Option<String>,
     pub remote_verify: Option<VerifyAccessTokenRemote>,
+    pub jwks_cache: OAuthJwksCacheConfig,
+    pub http: Option<OAuthHttpClient>,
 }
 
 impl VerifyAccessTokenOptions {
@@ -62,14 +64,10 @@ pub async fn verify_access_token(
     token: &str,
     options: VerifyAccessTokenOptions,
 ) -> Result<Value, OAuthError> {
-    verify_access_token_with_client(token, options, &default_http_client()?).await
-}
-
-pub async fn verify_access_token_with_client(
-    token: &str,
-    options: VerifyAccessTokenOptions,
-    client: &OAuthHttpClient,
-) -> Result<Value, OAuthError> {
+    let client = match options.http.as_ref() {
+        Some(client) => client,
+        None => &default_http_client()?,
+    };
     let mut payload = None;
     if let Some(jwks_url) = &options.jwks_url {
         if !options
@@ -80,11 +78,14 @@ pub async fn verify_access_token_with_client(
             if options.remote_verify.is_some() && !looks_like_parseable_jws(token) {
                 payload = None;
             } else {
-                match verify_jws_access_token_with_client(
+                match verify_jws_access_token(
                     token,
                     jwks_url,
-                    options.verify_options.clone(),
-                    client,
+                    JwksVerifyOptions {
+                        verify_options: options.verify_options.clone(),
+                        cache: options.jwks_cache,
+                        http: Some(client.clone()),
+                    },
                 )
                 .await
                 {

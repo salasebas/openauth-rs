@@ -8,12 +8,12 @@ use openauth_core::db::{
     DbSchema, DbValue, FindMany, FindOne, IdGeneration, IdPolicy, JoinOption, RateLimitStorage,
     SqlRateLimitNames, TableOptions, Update, UpdateMany, Where, WhereOperator,
 };
+use openauth_core::db::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_core::error::OpenAuthError;
 use openauth_core::options::{
     AdvancedOptions, OpenAuthOptions, RateLimitConsumeInput, RateLimitRule, RateLimitStore,
 };
 use openauth_core::test_utils::fast_verify_password;
-use openauth_tokio_postgres::migration::{MigrationStatementKind, SchemaMigrationWarning};
 use openauth_tokio_postgres::{
     TokioPostgresAdapter, TokioPostgresConnection, TokioPostgresRateLimitStore,
 };

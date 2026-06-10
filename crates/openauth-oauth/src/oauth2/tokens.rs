@@ -1,8 +1,9 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 
 use super::error::OAuthError;
+use super::types::ClientSecret;
 
 const MAX_TOKEN_EXPIRY_SECONDS: i64 = 10 * 365 * 24 * 60 * 60;
 
@@ -47,7 +48,12 @@ impl From<Vec<String>> for ClientId {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderOptions {
     pub client_id: Option<ClientId>,
-    pub client_secret: Option<String>,
+    #[serde(
+        default,
+        serialize_with = "serialize_client_secret",
+        deserialize_with = "deserialize_client_secret"
+    )]
+    pub client_secret: Option<ClientSecret>,
     pub scope: Vec<String>,
     pub disable_default_scope: bool,
     pub redirect_uri: Option<String>,
@@ -59,6 +65,35 @@ pub struct ProviderOptions {
     pub prompt: Option<String>,
     pub response_mode: Option<String>,
     pub override_user_info_on_sign_in: bool,
+}
+
+impl ProviderOptions {
+    pub fn client_secret_str(&self) -> Option<&str> {
+        self.client_secret.as_ref().map(ClientSecret::expose_secret)
+    }
+
+    pub fn with_client_secret(mut self, secret: impl Into<String>) -> Result<Self, OAuthError> {
+        self.client_secret = Some(ClientSecret::new(secret)?);
+        Ok(self)
+    }
+}
+
+fn serialize_client_secret<S: Serializer>(
+    secret: &Option<ClientSecret>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match secret {
+        Some(secret) => serializer.serialize_some(secret.expose_secret()),
+        None => serializer.serialize_none(),
+    }
+}
+
+fn deserialize_client_secret<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ClientSecret>, D::Error> {
+    Option::<String>::deserialize(deserializer)?
+        .map(|value| ClientSecret::new(value).map_err(serde::de::Error::custom))
+        .transpose()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

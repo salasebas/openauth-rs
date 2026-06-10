@@ -12,19 +12,22 @@ use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::Rs256;
 use josekit::jws::JwsHeader;
 use josekit::jwt::{self, JwtPayload};
 use openauth_oauth::oauth2::{
-    ClientId, OAuth2Tokens, OAuthError, OAuthProviderContract, ProviderOptions,
+    create_authorization_code_request, create_refresh_access_token_request,
+    AuthorizationCodeRequest, ClientAuthentication, ClientId, ClientSecret, OAuth2Tokens,
+    OAuthError, ProviderOptions, RefreshAccessTokenRequest,
 };
-use openauth_social_providers::paypal::{
+use openauth_social_providers::advanced::paypal::{
     paypal, PayPalAuthorizationUrlRequest, PayPalEnvironment, PayPalOptions, PayPalProfile,
     PAYPAL_ISSUER, PAYPAL_LIVE_JWKS_ENDPOINT, PAYPAL_SANDBOX_JWKS_ENDPOINT,
 };
+use openauth_social_providers::ProviderIdentity;
 use serde_json::json;
 use std::sync::Arc;
 use time::OffsetDateTime;
 
 #[test]
 fn paypal_provider_exposes_upstream_metadata_and_sandbox_endpoints() {
-    let provider = paypal(paypal_options());
+    let provider = paypal(paypal_options()).expect("provider should construct");
 
     assert_eq!(provider.id(), "paypal");
     assert_eq!(provider.name(), "PayPal");
@@ -47,7 +50,8 @@ fn paypal_live_environment_uses_production_endpoints() {
     let provider = paypal(PayPalOptions {
         environment: PayPalEnvironment::Live,
         ..paypal_options()
-    });
+    })
+    .expect("provider should construct");
 
     assert_eq!(
         provider.authorization_endpoint(),
@@ -68,7 +72,7 @@ fn paypal_authorization_url_omits_scopes_and_keeps_prompt() {
     let mut options = paypal_options();
     options.oauth.scope = vec!["openid".to_owned(), "email".to_owned()];
     options.oauth.prompt = Some("login".to_owned());
-    let provider = paypal(options);
+    let provider = paypal(options).expect("provider should construct");
 
     let url = provider
         .create_authorization_url(PayPalAuthorizationUrlRequest {
@@ -82,7 +86,7 @@ fn paypal_authorization_url_omits_scopes_and_keeps_prompt() {
         url.as_str().split('?').next(),
         Some(provider.authorization_endpoint())
     );
-    assert_eq!(query_value(&url, "scope"), None);
+    assert_eq!(query_value(&url, "scope"), Some("openid email".to_owned()));
     assert_eq!(query_value(&url, "prompt"), Some("login".to_owned()));
     assert_eq!(
         query_value(&url, "client_id"),
@@ -96,20 +100,10 @@ fn paypal_authorization_url_omits_scopes_and_keeps_prompt() {
 
 #[test]
 fn paypal_authorization_url_requires_client_id_and_secret() {
-    let provider = paypal(PayPalOptions::default());
-
-    let error = provider
-        .create_authorization_url(PayPalAuthorizationUrlRequest {
-            state: "state-1".to_owned(),
-            redirect_uri: "https://app.example.com/auth/callback".to_owned(),
-            code_verifier: None,
-        })
-        .unwrap_err();
-
-    assert_eq!(
-        error.to_string(),
-        "missing OAuth provider option `client_id`"
-    );
+    assert!(matches!(
+        paypal(PayPalOptions::default()),
+        Err(OAuthError::MissingOption("client_id"))
+    ));
 
     let provider = paypal(PayPalOptions {
         oauth: ProviderOptions {
@@ -117,7 +111,8 @@ fn paypal_authorization_url_requires_client_id_and_secret() {
             ..ProviderOptions::default()
         },
         ..PayPalOptions::default()
-    });
+    })
+    .expect("provider should construct");
 
     let error = provider
         .create_authorization_url(PayPalAuthorizationUrlRequest {
@@ -135,10 +130,18 @@ fn paypal_authorization_url_requires_client_id_and_secret() {
 
 #[test]
 fn paypal_token_requests_use_basic_auth_and_paypal_headers() {
-    let provider = paypal(paypal_options());
-    let request = provider
-        .authorization_code_request("code-1", "https://app.example.com/auth/callback")
-        .expect("request should build");
+    let provider = paypal(paypal_options()).expect("provider should construct");
+    let request = create_authorization_code_request(
+        AuthorizationCodeRequest::try_new(
+            "code-1",
+            "https://app.example.com/auth/callback",
+            provider.options(),
+        )
+        .expect("request should build")
+        .authentication(ClientAuthentication::Basic)
+        .header("Accept-Language", "en_US"),
+    )
+    .expect("request should build");
 
     assert_eq!(
         request.header("authorization"),
@@ -153,10 +156,14 @@ fn paypal_token_requests_use_basic_auth_and_paypal_headers() {
 
 #[test]
 fn paypal_refresh_requests_use_basic_auth_and_paypal_headers() {
-    let provider = paypal(paypal_options());
-    let request = provider
-        .refresh_access_token_request("refresh-1")
-        .expect("request should build");
+    let provider = paypal(paypal_options()).expect("provider should construct");
+    let request = create_refresh_access_token_request(
+        RefreshAccessTokenRequest::try_new("refresh-1", provider.options())
+            .expect("request should build")
+            .authentication(ClientAuthentication::Basic)
+            .header("Accept-Language", "en_US"),
+    )
+    .expect("request should build");
 
     assert_eq!(
         request.header("authorization"),
@@ -171,7 +178,8 @@ fn paypal_refresh_requests_use_basic_auth_and_paypal_headers() {
 fn paypal_profile_maps_to_user_info() {
     let profile = paypal_profile();
 
-    let mapped = paypal(paypal_options()).map_profile(profile);
+    let provider = paypal(paypal_options()).expect("provider should construct");
+    let mapped = provider.map_profile(profile);
 
     assert_eq!(mapped.user.id, "paypal-user-1");
     assert_eq!(mapped.user.name.as_deref(), Some("Ada Lovelace"));
@@ -199,7 +207,7 @@ fn paypal_id_token_metadata_matches_paypal_openid_configuration() {
 
 #[tokio::test]
 async fn paypal_verify_id_token_rejects_unsigned_jwt_by_default() -> Result<(), OAuthError> {
-    let provider = paypal(paypal_options());
+    let provider = paypal(paypal_options()).expect("provider should construct");
     let token = unsigned_jwt(json!({
         "sub": "paypal-user-1",
         "aud": "paypal-client",
@@ -223,7 +231,7 @@ async fn paypal_verify_id_token_accepts_signed_token_with_expected_claims() -> R
         true,
     );
     let jwks = jwks_with_keys(vec![jwk]);
-    let provider = paypal(paypal_options());
+    let provider = paypal(paypal_options()).expect("provider should construct");
 
     assert!(provider.verify_id_token_with_jwk_set(&token, Some("nonce-1"), &jwks)?);
     Ok(())
@@ -247,7 +255,7 @@ async fn paypal_verify_id_token_rejects_unsigned_invalid_claims_and_wrong_keys(
         true,
     );
     let jwks = jwks_with_keys(vec![jwk]);
-    let provider = paypal(paypal_options());
+    let provider = paypal(paypal_options()).expect("provider should construct");
     assert!(!provider.verify_id_token_with_jwk_set(&unsigned, Some("nonce-1"), &jwks)?);
 
     let (wrong_audience, _) = signed_paypal_id_token(
@@ -346,7 +354,7 @@ async fn paypal_verify_id_token_rejects_tokens_missing_standard_claims() -> Resu
         "exp": now + 3600,
         "iat": now
     });
-    let provider = paypal(paypal_options());
+    let provider = paypal(paypal_options()).expect("provider should construct");
 
     for missing in ["sub", "aud", "iss", "exp"] {
         let mut claims = base.clone();
@@ -376,14 +384,17 @@ async fn paypal_verify_id_token_returns_false_when_disabled_or_client_id_missing
             ..paypal_options().oauth
         },
         ..paypal_options()
-    });
+    })
+    .expect("provider should construct");
     assert!(!disabled.verify_id_token(&token, None).await?);
 
-    let missing_client = paypal(PayPalOptions {
-        oauth: ProviderOptions::default(),
-        ..PayPalOptions::default()
-    });
-    assert!(!missing_client.verify_id_token(&token, None).await?);
+    assert!(matches!(
+        paypal(PayPalOptions {
+            oauth: ProviderOptions::default(),
+            ..PayPalOptions::default()
+        }),
+        Err(OAuthError::MissingOption("client_id"))
+    ));
 
     Ok(())
 }
@@ -397,7 +408,8 @@ async fn paypal_verify_id_token_uses_custom_verifier_when_configured() {
             )
         })),
         ..paypal_options()
-    });
+    })
+    .expect("provider should construct");
 
     assert!(provider
         .verify_id_token("id-token-1", Some("nonce-1"))
@@ -411,7 +423,7 @@ async fn paypal_verify_id_token_uses_custom_verifier_when_configured() {
 
 #[tokio::test]
 async fn paypal_get_user_info_returns_none_without_access_token() {
-    let provider = paypal(paypal_options());
+    let provider = paypal(paypal_options()).expect("provider should construct");
 
     let info = provider
         .get_user_info(&OAuth2Tokens::default())
@@ -425,7 +437,7 @@ fn paypal_options() -> PayPalOptions {
     PayPalOptions {
         oauth: ProviderOptions {
             client_id: Some(ClientId::from("paypal-client")),
-            client_secret: Some("paypal-secret".to_owned()),
+            client_secret: Some(ClientSecret::new("paypal-secret").expect("valid client secret")),
             ..ProviderOptions::default()
         },
         ..PayPalOptions::default()

@@ -2,18 +2,16 @@
 
 use std::collections::BTreeMap;
 
+use openauth_oauth::oauth2::ClientAuthentication;
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token,
-    refresh_access_token_request, validate_authorization_code, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract, ProviderOptions,
-    RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
 use crate::http::ProviderHttpClient;
+use crate::runtime::ProviderIdentity;
 
 pub const GITLAB_ID: &str = "gitlab";
 pub const GITLAB_NAME: &str = "Gitlab";
@@ -21,6 +19,7 @@ pub const GITLAB_DEFAULT_ISSUER: &str = "https://gitlab.com";
 pub const GITLAB_AUTHORIZATION_ENDPOINT: &str = "https://gitlab.com/oauth/authorize";
 pub const GITLAB_TOKEN_ENDPOINT: &str = "https://gitlab.com/oauth/token";
 pub const GITLAB_USERINFO_ENDPOINT: &str = "https://gitlab.com/api/v4/user";
+const DEFAULT_SCOPE: &str = "read_user";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GitlabOptions {
@@ -99,14 +98,13 @@ pub struct GitlabUserInfo {
 
 #[derive(Debug, Clone)]
 pub struct GitlabProvider {
-    options: GitlabOptions,
-    authorization_endpoint: String,
-    token_endpoint: String,
+    client: OAuth2Client,
+    issuer: Option<String>,
     userinfo_endpoint: String,
     http_client: ProviderHttpClient,
 }
 
-pub fn gitlab(options: GitlabOptions) -> GitlabProvider {
+pub fn gitlab(options: GitlabOptions) -> Result<GitlabProvider, OAuthError> {
     GitlabProvider::new(options)
 }
 
@@ -128,15 +126,23 @@ impl GitlabProfile {
 }
 
 impl GitlabProvider {
-    pub fn new(options: GitlabOptions) -> Self {
-        let endpoints = issuer_to_endpoints(options.issuer.as_deref());
-        Self {
-            options,
-            authorization_endpoint: endpoints.authorization,
-            token_endpoint: endpoints.token,
+    pub fn new(options: GitlabOptions) -> Result<Self, OAuthError> {
+        let issuer = options.issuer.clone();
+        let endpoints = issuer_to_endpoints(issuer.as_deref());
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(GITLAB_ID, options.oauth)
+            .authorization_endpoint(&endpoints.authorization)?
+            .token_endpoint(&endpoints.token)?
+            .authentication(ClientAuthentication::Post);
+        if !disable_default_scope {
+            builder = builder.default_scope(DEFAULT_SCOPE);
+        }
+        Ok(Self {
+            client: builder.build()?,
+            issuer,
             userinfo_endpoint: endpoints.userinfo,
             http_client: ProviderHttpClient::shared(),
-        }
+        })
     }
 
     /// Overrides the HTTP client used for userinfo requests. Use
@@ -147,44 +153,43 @@ impl GitlabProvider {
     }
 
     pub fn authorization_endpoint(&self) -> &str {
-        &self.authorization_endpoint
+        self.client.authorization_endpoint().as_str()
     }
 
     pub fn token_endpoint(&self) -> &str {
-        &self.token_endpoint
+        self.client.token_endpoint().as_str()
     }
 
     pub fn userinfo_endpoint(&self) -> &str {
         &self.userinfo_endpoint
     }
 
-    pub fn options(&self) -> &GitlabOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
+    }
+
+    pub fn gitlab_options(&self) -> GitlabOptions {
+        GitlabOptions {
+            oauth: self.options(),
+            issuer: self.issuer.clone(),
+        }
     }
 
     pub fn create_authorization_url(
         &self,
         input: GitlabAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            vec!["read_user".to_owned()]
-        };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(input.scopes);
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: GITLAB_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: self.authorization_endpoint.clone(),
-            redirect_uri: input.redirect_uri,
-            state: input.state,
-            code_verifier: input.code_verifier,
-            scopes,
-            login_hint: input.login_hint,
-            ..AuthorizationUrlRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(input.state, input.redirect_uri)?
+            .scopes(input.scopes);
+        if let Some(code_verifier) = input.code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        if let Some(login_hint) = input.login_hint {
+            url = url.login_hint(login_hint);
+        }
+        url.build()
     }
 
     pub fn authorization_code_request(
@@ -193,14 +198,11 @@ impl GitlabProvider {
         code_verifier: Option<impl Into<String>>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.oauth.clone(),
-            code_verifier: code_verifier.map(Into::into),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.into_form_request()
     }
 
     pub async fn validate_authorization_code(
@@ -209,46 +211,27 @@ impl GitlabProvider {
         code_verifier: Option<impl Into<String>>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: self.token_endpoint.clone(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                code_verifier: code_verifier.map(Into::into),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub fn refresh_access_token_request(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .refresh_token(refresh_token)?
+            .into_form_request()
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: self.token_endpoint.clone(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(
@@ -290,7 +273,7 @@ impl GitlabProvider {
     }
 }
 
-impl OAuthProviderContract for GitlabProvider {
+impl ProviderIdentity for GitlabProvider {
     fn id(&self) -> &str {
         GITLAB_ID
     }

@@ -5,15 +5,16 @@
     reason = "provider tests intentionally fail fast with contextual setup errors"
 )]
 
-use openauth_oauth::oauth2::{ClientId, ProviderOptions};
-use openauth_social_providers::linkedin::{
+use openauth_oauth::oauth2::{ClientId, ClientSecret, ProviderOptions};
+use openauth_social_providers::advanced::linkedin::{
     linkedin, LinkedInAuthorizationUrlRequest, LinkedInLocale, LinkedInProfile, LinkedInProvider,
     LINKEDIN_AUTHORIZATION_ENDPOINT, LINKEDIN_ID, LINKEDIN_NAME,
 };
+use openauth_social_providers::ProviderIdentity;
 
 #[test]
 fn linkedin_provider_exposes_upstream_metadata() {
-    let provider = linkedin(provider_options());
+    let provider = linkedin(provider_options()).expect("provider should construct");
 
     assert_eq!(provider.id(), LINKEDIN_ID);
     assert_eq!(provider.name(), LINKEDIN_NAME);
@@ -24,7 +25,8 @@ fn linkedin_authorization_url_uses_upstream_default_scopes() {
     let provider = linkedin(ProviderOptions {
         scope: vec!["r_liteprofile".to_owned()],
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(LinkedInAuthorizationUrlRequest {
@@ -65,7 +67,8 @@ fn linkedin_authorization_url_can_disable_default_scopes() {
         disable_default_scope: true,
         scope: vec!["r_liteprofile".to_owned()],
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let url = provider
         .create_authorization_url(LinkedInAuthorizationUrlRequest {
@@ -85,9 +88,10 @@ fn linkedin_authorization_url_can_disable_default_scopes() {
 #[test]
 fn linkedin_authorization_code_request_matches_oauth_form_contract() {
     let provider = linkedin(ProviderOptions {
-        client_secret: Some("linkedin-secret".to_owned()),
+        client_secret: Some(ClientSecret::new("linkedin-secret").expect("valid client secret")),
         ..provider_options()
-    });
+    })
+    .expect("provider should construct");
 
     let request = provider
         .authorization_code_request("auth-code", "https://app.example.com/callback/linkedin")

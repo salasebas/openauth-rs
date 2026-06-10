@@ -8,9 +8,10 @@ use openauth_core::options::{
     RateLimitStore,
 };
 
+use crate::config::FredRateLimitOptions;
 use crate::error::fred_error;
 use crate::script::{parse_rate_limit_script_result, RATE_LIMIT_SCRIPT};
-use crate::{normalize_fred_url, FredRateLimitOptions};
+use crate::url::normalize_fred_url;
 
 #[derive(Clone)]
 pub struct FredRateLimitStore {
@@ -22,14 +23,6 @@ pub struct FredRateLimitStore {
 impl FredRateLimitStore {
     pub async fn connect(url: &str) -> Result<Self, OpenAuthError> {
         Self::connect_with_options(url, FredRateLimitOptions::default()).await
-    }
-
-    pub async fn connect_redis(url: &str) -> Result<Self, OpenAuthError> {
-        Self::connect(url).await
-    }
-
-    pub async fn connect_valkey(url: &str) -> Result<Self, OpenAuthError> {
-        Self::connect(url).await
     }
 
     pub async fn connect_with_options(

@@ -19,28 +19,34 @@ pub struct TokenValidationResult {
     pub key_id: Option<String>,
 }
 
+/// Options for [`validate_token`].
+#[derive(Debug, Clone, Default)]
+pub struct ValidateTokenOptions {
+    pub validation: TokenValidationOptions,
+    pub cache: OAuthJwksCacheConfig,
+    pub http: Option<OAuthHttpClient>,
+}
+
+impl ValidateTokenOptions {
+    pub fn new(validation: TokenValidationOptions) -> Self {
+        Self {
+            validation,
+            ..Self::default()
+        }
+    }
+}
+
 pub async fn validate_token(
     token: &str,
     jwks_endpoint: &str,
-    options: TokenValidationOptions,
+    options: ValidateTokenOptions,
 ) -> Result<TokenValidationResult, OAuthError> {
-    validate_token_with_client(token, jwks_endpoint, options, &default_http_client()?).await
-}
-
-pub async fn validate_token_with_client(
-    token: &str,
-    jwks_endpoint: &str,
-    options: TokenValidationOptions,
-    client: &OAuthHttpClient,
-) -> Result<TokenValidationResult, OAuthError> {
-    let jwk_set = get_cached_jwks_for_token(
-        token,
-        jwks_endpoint,
-        client,
-        OAuthJwksCacheConfig::default(),
-    )
-    .await?;
-    verify_jws_with_jwks(token, &jwk_set, &options)
+    let client = match options.http.as_ref() {
+        Some(client) => client,
+        None => &default_http_client()?,
+    };
+    let jwk_set = get_cached_jwks_for_token(token, jwks_endpoint, client, options.cache).await?;
+    verify_jws_with_jwks(token, &jwk_set, &options.validation)
 }
 
 pub fn verify_jws_with_jwks(

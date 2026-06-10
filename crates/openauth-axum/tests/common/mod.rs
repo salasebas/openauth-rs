@@ -246,11 +246,7 @@ impl FakeProvider {
     pub fn new(id: &str) -> Self {
         Self {
             id: id.to_owned(),
-            options: ProviderOptions {
-                client_id: None,
-                client_secret: Some("client-secret".to_owned()),
-                ..ProviderOptions::default()
-            },
+            options: ProviderOptions::default(),
         }
     }
 }

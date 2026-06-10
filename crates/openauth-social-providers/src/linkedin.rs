@@ -1,14 +1,13 @@
 //! LinkedIn OpenID Connect social provider.
 
+use openauth_oauth::oauth2::ClientAuthentication;
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token,
-    refresh_access_token_request, validate_authorization_code, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract, ProviderOptions,
-    RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const LINKEDIN_ID: &str = "linkedin";
 pub const LINKEDIN_NAME: &str = "Linkedin";
@@ -64,30 +63,32 @@ pub struct LinkedInUserInfo {
 }
 
 /// LinkedIn OAuth/OIDC provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct LinkedInProvider {
-    options: ProviderOptions,
+    client: OAuth2Client,
 }
 
-pub fn linkedin(options: ProviderOptions) -> LinkedInProvider {
+pub fn linkedin(options: ProviderOptions) -> Result<LinkedInProvider, OAuthError> {
     LinkedInProvider::new(options)
 }
 
 impl LinkedInProvider {
-    pub fn new(options: ProviderOptions) -> Self {
-        Self { options }
+    pub fn new(options: ProviderOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.disable_default_scope;
+        let mut builder = OAuth2Client::builder(LINKEDIN_ID, options)
+            .authorization_endpoint(LINKEDIN_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(LINKEDIN_TOKEN_ENDPOINT)?
+            .authentication(ClientAuthentication::Post);
+        if !disable_default_scope {
+            builder = builder.default_scopes(LINKEDIN_DEFAULT_SCOPES.iter().copied());
+        }
+        Ok(Self {
+            client: builder.build()?,
+        })
     }
 
-    pub fn id(&self) -> &str {
-        LINKEDIN_ID
-    }
-
-    pub fn name(&self) -> &str {
-        LINKEDIN_NAME
-    }
-
-    pub fn options(&self) -> &ProviderOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn authorization_endpoint(&self) -> &str {
@@ -106,16 +107,14 @@ impl LinkedInProvider {
         &self,
         request: LinkedInAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: LINKEDIN_ID.to_owned(),
-            options: self.options.clone(),
-            authorization_endpoint: LINKEDIN_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            scopes: self.scopes(request.scopes),
-            login_hint: request.login_hint,
-            ..AuthorizationUrlRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?
+            .scopes(request.scopes);
+        if let Some(login_hint) = request.login_hint {
+            url = url.login_hint(login_hint);
+        }
+        url.build()
     }
 
     pub fn authorization_code_request(
@@ -123,13 +122,9 @@ impl LinkedInProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.clone(),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        self.client
+            .exchange_code(code, redirect_uri)?
+            .into_form_request()
     }
 
     pub async fn validate_authorization_code(
@@ -137,45 +132,23 @@ impl LinkedInProvider {
         code: impl Into<String>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: LINKEDIN_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.clone(),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        self.client.exchange_code(code, redirect_uri)?.send().await
     }
 
     pub fn refresh_access_token_request(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.clone(),
-            authentication: ClientAuthentication::Post,
-            ..RefreshAccessTokenRequest::default()
-        })
+        self.client
+            .refresh_token(refresh_token)?
+            .into_form_request()
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: LINKEDIN_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(&self, token: &OAuth2Tokens) -> Option<LinkedInUserInfo> {
@@ -212,34 +185,14 @@ impl LinkedInProvider {
             email_verified: profile.email_verified.unwrap_or(false),
         }
     }
-
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.disable_default_scope {
-            Vec::new()
-        } else {
-            LINKEDIN_DEFAULT_SCOPES
-                .iter()
-                .map(|scope| (*scope).to_owned())
-                .collect()
-        };
-        scopes.extend(self.options.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
 }
 
-impl Default for LinkedInProvider {
-    fn default() -> Self {
-        Self::new(ProviderOptions::default())
-    }
-}
-
-impl OAuthProviderContract for LinkedInProvider {
+impl ProviderIdentity for LinkedInProvider {
     fn id(&self) -> &str {
-        self.id()
+        LINKEDIN_ID
     }
 
     fn name(&self) -> &str {
-        self.name()
+        LINKEDIN_NAME
     }
 }

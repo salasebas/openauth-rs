@@ -1,17 +1,12 @@
 //! Kakao social OAuth provider.
 
-use std::collections::BTreeMap;
-
 use openauth_oauth::oauth2::{
-    authorization_code_request, create_authorization_url, refresh_access_token,
-    refresh_access_token_request, validate_authorization_code, AuthorizationCodeRequest,
-    AuthorizationUrlRequest, ClientAuthentication, ClientTokenRequest, OAuth2Tokens,
-    OAuth2UserInfo, OAuthError, OAuthFormRequest, OAuthProviderContract, ProviderOptions,
-    RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, ProviderOptions,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 pub const KAKAO_ID: &str = "kakao";
 pub const KAKAO_NAME: &str = "Kakao";
@@ -90,7 +85,7 @@ pub struct KakaoProfile {
     pub connected_at: Option<String>,
     pub synched_at: Option<String>,
     #[serde(default)]
-    pub properties: BTreeMap<String, Value>,
+    pub properties: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     pub kakao_account: KakaoAccount,
     pub for_partner: Option<KakaoPartner>,
@@ -104,30 +99,31 @@ pub struct KakaoUserInfo {
 }
 
 /// Kakao OAuth provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct KakaoProvider {
-    options: KakaoProviderOptions,
+    client: OAuth2Client,
 }
 
-pub fn kakao(oauth: ProviderOptions) -> KakaoProvider {
+pub fn kakao(oauth: ProviderOptions) -> Result<KakaoProvider, OAuthError> {
     KakaoProvider::new(KakaoProviderOptions { oauth })
 }
 
 impl KakaoProvider {
-    pub fn new(options: KakaoProviderOptions) -> Self {
-        Self { options }
+    pub fn new(options: KakaoProviderOptions) -> Result<Self, OAuthError> {
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder(KAKAO_ID, options.oauth)
+            .authorization_endpoint(KAKAO_AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(KAKAO_TOKEN_ENDPOINT)?;
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
+        }
+        Ok(Self {
+            client: builder.build()?,
+        })
     }
 
-    pub fn id(&self) -> &str {
-        KAKAO_ID
-    }
-
-    pub fn name(&self) -> &str {
-        KAKAO_NAME
-    }
-
-    pub fn options(&self) -> &KakaoProviderOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
     pub fn token_endpoint(&self) -> &str {
@@ -142,32 +138,13 @@ impl KakaoProvider {
         &self,
         request: KakaoAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        create_authorization_url(AuthorizationUrlRequest {
-            id: KAKAO_ID.to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: KAKAO_AUTHORIZATION_ENDPOINT.to_owned(),
-            redirect_uri: request.redirect_uri,
-            state: request.state,
-            code_verifier: request.code_verifier,
-            scopes: self.scopes(request.scopes),
-            ..AuthorizationUrlRequest::default()
-        })
-    }
-
-    pub fn authorization_code_request(
-        &self,
-        code: impl Into<String>,
-        code_verifier: Option<impl Into<String>>,
-        redirect_uri: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        authorization_code_request(AuthorizationCodeRequest {
-            code: code.into(),
-            redirect_uri: redirect_uri.into(),
-            options: self.options.oauth.clone(),
-            code_verifier: code_verifier.map(Into::into),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut url = self
+            .client
+            .authorization_url(request.state, request.redirect_uri)?;
+        if let Some(code_verifier) = request.code_verifier {
+            url = url.code_verifier(code_verifier);
+        }
+        url.scopes(request.scopes).build()
     }
 
     pub async fn validate_authorization_code(
@@ -176,46 +153,18 @@ impl KakaoProvider {
         code_verifier: Option<impl Into<String>>,
         redirect_uri: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: KAKAO_TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: code.into(),
-                redirect_uri: redirect_uri.into(),
-                options: self.options.oauth.clone(),
-                code_verifier: code_verifier.map(Into::into),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
-    }
-
-    pub fn refresh_access_token_request(
-        &self,
-        refresh_token: impl Into<String>,
-    ) -> Result<OAuthFormRequest, OAuthError> {
-        refresh_access_token_request(RefreshAccessTokenRequest {
-            refresh_token: refresh_token.into(),
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            ..RefreshAccessTokenRequest::default()
-        })
+        let mut exchange = self.client.exchange_code(code, redirect_uri)?;
+        if let Some(code_verifier) = code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: KAKAO_TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token)?.send().await
     }
 
     pub async fn get_user_info(
@@ -275,34 +224,14 @@ impl KakaoProvider {
                 && account.is_email_verified.unwrap_or(false),
         }
     }
-
-    fn scopes(&self, request_scopes: Vec<String>) -> Vec<String> {
-        let mut scopes = if self.options.oauth.disable_default_scope {
-            Vec::new()
-        } else {
-            DEFAULT_SCOPES
-                .iter()
-                .map(|scope| (*scope).to_owned())
-                .collect()
-        };
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(request_scopes);
-        scopes
-    }
 }
 
-impl Default for KakaoProvider {
-    fn default() -> Self {
-        Self::new(KakaoProviderOptions::default())
-    }
-}
-
-impl OAuthProviderContract for KakaoProvider {
+impl ProviderIdentity for KakaoProvider {
     fn id(&self) -> &str {
-        self.id()
+        KAKAO_ID
     }
 
     fn name(&self) -> &str {
-        self.name()
+        KAKAO_NAME
     }
 }

@@ -4,9 +4,16 @@ All notable changes to `openauth-social-providers` are documented in this file.
 
 ## Unreleased
 
-
 ### Changed
 
+- **Breaking:** Provider factories (`GitHubProvider::new`, `DropboxProvider::new`,
+  and the rest of the catalog) now return `Result<Self, OAuthError>` and hold an
+  internal [`OAuth2Client`](https://docs.rs/openauth-oauth/latest/openauth_oauth/oauth2/struct.OAuth2Client.html)
+  instead of implementing the removed `OAuthProviderContract`.
+- **Breaking:** Re-exported [`ProviderIdentity`](src/runtime/mod.rs) for
+  provider id/name metadata used by the social runtime macro.
+- **Breaking:** Removed `Default` on providers whose default options lack
+  `client_id` (Notion, Naver, Kakao, VK, Hugging Face, Roblox).
 - Clarified Better Auth 1.6.9 parity status: remaining provider differences are
   intentional Rust API or token-verification hardening choices, not open
   in-scope `openauth-social-providers` implementation gaps.

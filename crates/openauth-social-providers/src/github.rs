@@ -3,15 +3,15 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use openauth_oauth::oauth2::ClientAuthentication;
 use openauth_oauth::oauth2::{
-    create_authorization_code_request, create_authorization_url, refresh_access_token,
-    validate_authorization_code, AuthorizationCodeRequest, AuthorizationUrlRequest,
-    ClientAuthentication, ClientTokenRequest, OAuth2Tokens, OAuth2UserInfo, OAuthError,
-    OAuthFormRequest, OAuthProviderContract, ProviderOptions, RefreshAccessTokenRequest,
+    OAuth2Client, OAuth2Tokens, OAuth2UserInfo, OAuthError, OAuthFormRequest, ProviderOptions,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use url::Url;
+
+use crate::runtime::ProviderIdentity;
 
 const DEFAULT_SCOPES: &[&str] = &["read:user", "user:email"];
 const AUTHORIZATION_ENDPOINT: &str = "https://github.com/login/oauth/authorize";
@@ -137,95 +137,78 @@ pub struct GitHubValidateAuthorizationCodeRequest {
 /// GitHub OAuth provider.
 #[derive(Clone)]
 pub struct GitHubProvider {
-    options: GitHubOptions,
+    client: OAuth2Client,
+    map_profile_to_user: Option<UserMapper>,
 }
 
 impl GitHubProvider {
-    pub fn new(options: impl Into<GitHubOptions>) -> Self {
-        Self {
-            options: options.into(),
+    pub fn new(options: impl Into<GitHubOptions>) -> Result<Self, OAuthError> {
+        let options = options.into();
+        let disable_default_scope = options.oauth.disable_default_scope;
+        let mut builder = OAuth2Client::builder("github", options.oauth)
+            .authorization_endpoint(AUTHORIZATION_ENDPOINT)?
+            .token_endpoint(TOKEN_ENDPOINT)?
+            .authentication(ClientAuthentication::Post);
+        if !disable_default_scope {
+            builder = builder.default_scopes(DEFAULT_SCOPES.iter().copied());
         }
+        Ok(Self {
+            client: builder.build()?,
+            map_profile_to_user: options.map_profile_to_user,
+        })
     }
 
-    pub fn options(&self) -> &GitHubOptions {
-        &self.options
+    pub fn options(&self) -> ProviderOptions {
+        self.client.options().clone()
     }
 
-    pub fn provider_options(&self) -> &ProviderOptions {
-        &self.options.oauth
+    pub fn provider_options(&self) -> ProviderOptions {
+        self.options()
     }
 
     pub fn create_authorization_url(
         &self,
         input: GitHubAuthorizationUrlRequest,
     ) -> Result<Url, OAuthError> {
-        let mut scopes = Vec::new();
-        if !self.options.oauth.disable_default_scope {
-            scopes.extend(DEFAULT_SCOPES.iter().map(|scope| (*scope).to_owned()));
+        let mut url = self
+            .client
+            .authorization_url(input.state, input.redirect_uri)?;
+        if let Some(code_verifier) = input.code_verifier {
+            url = url.code_verifier(code_verifier);
         }
-        scopes.extend(self.options.oauth.scope.iter().cloned());
-        scopes.extend(input.scopes);
-
-        create_authorization_url(AuthorizationUrlRequest {
-            id: self.id().to_owned(),
-            options: self.options.oauth.clone(),
-            authorization_endpoint: AUTHORIZATION_ENDPOINT.to_owned(),
-            scopes,
-            state: input.state,
-            code_verifier: input.code_verifier,
-            redirect_uri: input.redirect_uri,
-            login_hint: input.login_hint,
-            prompt: self.options.oauth.prompt.clone(),
-            ..AuthorizationUrlRequest::default()
-        })
+        if let Some(login_hint) = input.login_hint {
+            url = url.login_hint(login_hint);
+        }
+        url.scopes(input.scopes).build()
     }
 
     pub fn create_authorization_code_request(
         &self,
         input: GitHubValidateAuthorizationCodeRequest,
     ) -> Result<OAuthFormRequest, OAuthError> {
-        create_authorization_code_request(AuthorizationCodeRequest {
-            code: input.code,
-            code_verifier: input.code_verifier,
-            redirect_uri: input.redirect_uri,
-            options: self.options.oauth.clone(),
-            authentication: ClientAuthentication::Post,
-            ..AuthorizationCodeRequest::default()
-        })
+        let mut exchange = self.client.exchange_code(input.code, input.redirect_uri)?;
+        if let Some(code_verifier) = input.code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.into_form_request()
     }
 
     pub async fn validate_authorization_code(
         &self,
         input: GitHubValidateAuthorizationCodeRequest,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        validate_authorization_code(ClientTokenRequest {
-            token_endpoint: TOKEN_ENDPOINT.to_owned(),
-            request: AuthorizationCodeRequest {
-                code: input.code,
-                code_verifier: input.code_verifier,
-                redirect_uri: input.redirect_uri,
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..AuthorizationCodeRequest::default()
-            },
-        })
-        .await
+        let mut exchange = self.client.exchange_code(input.code, input.redirect_uri)?;
+        if let Some(code_verifier) = input.code_verifier {
+            exchange = exchange.code_verifier(code_verifier);
+        }
+        exchange.send().await
     }
 
     pub async fn refresh_access_token(
         &self,
         refresh_token_value: impl Into<String>,
     ) -> Result<OAuth2Tokens, OAuthError> {
-        refresh_access_token(ClientTokenRequest {
-            token_endpoint: TOKEN_ENDPOINT.to_owned(),
-            request: RefreshAccessTokenRequest {
-                refresh_token: refresh_token_value.into(),
-                options: self.options.oauth.clone(),
-                authentication: ClientAuthentication::Post,
-                ..RefreshAccessTokenRequest::default()
-            },
-        })
-        .await
+        self.client.refresh_token(refresh_token_value)?.send().await
     }
 
     pub async fn get_user_info(
@@ -245,7 +228,7 @@ impl GitHubProvider {
             .unwrap_or_default();
 
         let mut user_info = map_github_user_info(profile, &emails);
-        if let Some(mapper) = &self.options.map_profile_to_user {
+        if let Some(mapper) = &self.map_profile_to_user {
             user_info.user = mapper(&user_info.data);
         }
 
@@ -253,7 +236,7 @@ impl GitHubProvider {
     }
 }
 
-impl OAuthProviderContract for GitHubProvider {
+impl ProviderIdentity for GitHubProvider {
     fn id(&self) -> &str {
         "github"
     }
@@ -263,7 +246,7 @@ impl OAuthProviderContract for GitHubProvider {
     }
 }
 
-pub fn github(options: impl Into<GitHubOptions>) -> GitHubProvider {
+pub fn github(options: impl Into<GitHubOptions>) -> Result<GitHubProvider, OAuthError> {
     GitHubProvider::new(options)
 }
 
