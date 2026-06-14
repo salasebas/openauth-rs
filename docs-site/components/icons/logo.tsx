@@ -2,7 +2,10 @@ import type { SVGProps } from "react";
 import { cn } from "@/lib/utils";
 import {
 	RUSTAUTH_ACCENT,
+	RUSTAUTH_MARK_COUNTER_PATH,
+	RUSTAUTH_MARK_PATH,
 	RUSTAUTH_MARK_VIEWBOX,
+	RUSTAUTH_PROMPT_PATH,
 } from "@/lib/branding/rustauth-mark";
 
 type LogoProps = {
@@ -19,40 +22,17 @@ export const Logo = ({ className, showAccent = true }: LogoProps) => {
 			xmlns="http://www.w3.org/2000/svg"
 			aria-hidden="true"
 		>
-			<rect
-				x="9"
-				y="8.5"
-				width="4.5"
-				height="15"
-				rx="1.2"
-				className="fill-foreground"
-			/>
-			<rect
-				x="12.8"
-				y="8.5"
-				width="11.5"
-				height="7.5"
-				rx="1.2"
-				className="fill-foreground"
-			/>
-			<rect
-				x="14.8"
-				y="10.8"
-				width="7.2"
-				height="3.2"
-				rx="0.8"
-				className="fill-background"
-			/>
-			<rect
-				x="13.2"
-				y="15.5"
-				width="5.5"
-				height="8"
-				rx="1.1"
-				className="fill-foreground"
+			<path d={RUSTAUTH_MARK_PATH} className="fill-foreground" />
+			<path d={RUSTAUTH_MARK_COUNTER_PATH} className="fill-background" />
+			<path
+				d={RUSTAUTH_PROMPT_PATH}
+				className="stroke-foreground"
+				strokeWidth="2.4"
+				strokeLinecap="round"
+				strokeLinejoin="round"
 			/>
 			{showAccent ? (
-				<circle cx="25" cy="9.5" r="1.8" fill={RUSTAUTH_ACCENT} />
+				<circle cx="25.15" cy="7.45" r="2.35" fill={RUSTAUTH_ACCENT} />
 			) : null}
 		</svg>
 	);
@@ -72,40 +52,17 @@ export const LogoMark = ({
 			className={cn("h-5 w-5", className)}
 			aria-hidden="true"
 		>
-			<rect
-				x="9"
-				y="8.5"
-				width="4.5"
-				height="15"
-				rx="1.2"
-				className="fill-foreground"
-			/>
-			<rect
-				x="12.8"
-				y="8.5"
-				width="11.5"
-				height="7.5"
-				rx="1.2"
-				className="fill-foreground"
-			/>
-			<rect
-				x="14.8"
-				y="10.8"
-				width="7.2"
-				height="3.2"
-				rx="0.8"
-				className="fill-background"
-			/>
-			<rect
-				x="13.2"
-				y="15.5"
-				width="5.5"
-				height="8"
-				rx="1.1"
-				className="fill-foreground"
+			<path d={RUSTAUTH_MARK_PATH} className="fill-foreground" />
+			<path d={RUSTAUTH_MARK_COUNTER_PATH} className="fill-background" />
+			<path
+				d={RUSTAUTH_PROMPT_PATH}
+				className="stroke-foreground"
+				strokeWidth="2.4"
+				strokeLinecap="round"
+				strokeLinejoin="round"
 			/>
 			{showAccent ? (
-				<circle cx="25" cy="9.5" r="1.8" fill={RUSTAUTH_ACCENT} />
+				<circle cx="25.15" cy="7.45" r="2.35" fill={RUSTAUTH_ACCENT} />
 			) : null}
 		</svg>
 	);

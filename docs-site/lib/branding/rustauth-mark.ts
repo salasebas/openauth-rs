@@ -1,8 +1,17 @@
-/** RustAuth "R" mark geometry (matches `public/favicon/favicon.svg`). */
+/** RustAuth monogram geometry (matches `public/favicon/favicon.svg`). */
 
-export const RUSTAUTH_MARK_VIEWBOX = "8 8 18 16";
+export const RUSTAUTH_MARK_VIEWBOX = "0 0 32 32";
 
 export const RUSTAUTH_ACCENT = "#DE622A";
+
+export const RUSTAUTH_MARK_PATH =
+	"M7 6h13.3c4.2 0 6.9 2.45 6.9 6.2 0 2.62-1.34 4.54-3.62 5.54L28 26h-6.02l-3.88-7.18h-5.42V26H7V6Z";
+
+export const RUSTAUTH_MARK_COUNTER_PATH =
+	"M12.68 10.74v3.68h7.04c1.38 0 2.22-.72 2.22-1.84 0-1.1-.84-1.84-2.22-1.84h-7.04Z";
+
+export const RUSTAUTH_PROMPT_PATH =
+	"M4.9 14.1 8.28 17.5 4.9 20.9";
 
 type MarkColors = {
 	fill: string;
@@ -12,14 +21,13 @@ type MarkColors = {
 
 function markShapes({ fill, cutout, includeAccent = true }: MarkColors): string {
 	const accent = includeAccent
-		? `<circle cx="25" cy="9.5" r="1.8" fill="${RUSTAUTH_ACCENT}"/>`
+		? `<circle cx="25.15" cy="7.45" r="2.35" fill="${RUSTAUTH_ACCENT}"/>`
 		: "";
 
 	return `
-<rect x="9" y="8.5" width="4.5" height="15" rx="1.2" fill="${fill}"/>
-<rect x="12.8" y="8.5" width="11.5" height="7.5" rx="1.2" fill="${fill}"/>
-<rect x="14.8" y="10.8" width="7.2" height="3.2" rx="0.8" fill="${cutout}"/>
-<rect x="13.2" y="15.5" width="5.5" height="8" rx="1.1" fill="${fill}"/>
+<path d="${RUSTAUTH_MARK_PATH}" fill="${fill}"/>
+<path d="${RUSTAUTH_MARK_COUNTER_PATH}" fill="${cutout}"/>
+<path d="${RUSTAUTH_PROMPT_PATH}" stroke="${fill}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
 ${accent}`.trim();
 }
 
@@ -31,9 +39,6 @@ export function rustauthMarkSvg({
 }: MarkColors & { viewBox?: string }): string {
 	return `<svg viewBox="${viewBox}" fill="none" xmlns="http://www.w3.org/2000/svg">${markShapes({ fill, cutout, includeAccent })}</svg>`;
 }
-
-const WORDMARK_TEXT_PATH =
-	'M281.832 162V93.84H305.256C313.32 93.84 319.368 95.312 323.4 98.256C327.432 101.2 329.448 105.84 329.448 112.176C329.448 116.016 328.36 119.248 326.184 121.872C324.072 124.432 321.128 126.064 317.352 126.768C322.024 127.408 325.672 129.232 328.296 132.24C330.984 135.184 332.328 138.864 332.328 143.28C332.328 149.488 330.312 154.16 326.28 157.296C322.248 160.432 316.52 162 309.096 162H281.832ZM290.088 123.312H305.256C310.248 123.312 314.088 122.384 316.776 120.528C319.464 118.608 320.808 115.952 320.808 112.56C320.808 105.456 315.624 101.904 305.256 101.904H290.088V123.312ZM290.088 153.936H309.096C313.768 153.936 317.352 152.976 319.848 151.056C322.408 149.136 323.688 146.384 323.688 142.8C323.688 139.216 322.408 136.432 319.848 134.448C317.352 132.4 313.768 131.376 309.096 131.376H290.088V153.936ZM345.301 162V93.84H388.117V101.904H353.557V123.888H386.965V131.76H353.557V153.936H388.885V162H345.301ZM416.681 162V101.904H395.465V93.84H446.153V101.904H424.937V162H416.681ZM470.587 162V101.904H449.371V93.84H500.059V101.904H478.843V162H470.587ZM507.113 162V93.84H549.929V101.904H515.369V123.888H548.777V131.76H515.369V153.936H550.697V162H507.113ZM564.02 162V93.84H589.844C597.012 93.84 602.676 95.696 606.836 99.408C610.996 103.12 613.076 108.144 613.076 114.48C613.076 117.104 612.532 119.504 611.444 121.68C610.356 123.792 608.948 125.584 607.22 127.056C605.492 128.528 603.604 129.552 601.556 130.128C604.564 130.64 606.932 131.856 608.66 133.776C610.452 135.696 611.508 138.416 611.828 141.936L613.748 162H605.396L603.667 142.8C603.412 139.984 602.388 137.904 600.596 136.56C598.868 135.216 596.02 134.544 592.052 134.544H572.276V162H564.02ZM572.276 126.48H590.9C595.06 126.48 598.356 125.424 600.788 123.312C603.22 121.2 604.436 118.192 604.436 114.288C604.436 110.32 603.188 107.28 600.692 105.168C598.196 102.992 594.58 101.904 589.844 101.904H572.276V126.48ZM623.912 137.808V130.224H655.688V137.808H623.912ZM661.826 162L686.402 93.84H697.538L722.114 162H713.09L706.274 142.608H677.666L670.85 162H661.826ZM680.45 134.544H703.49L691.97 101.04L680.45 134.544ZM755.651 163.536C750.403 163.536 745.827 162.512 741.923 160.464C738.083 158.416 735.107 155.504 732.995 151.728C730.947 147.888 729.923 143.376 729.923 138.192V93.744H738.179V138.192C738.179 143.696 739.683 147.952 742.691 150.96C745.763 153.968 750.083 155.472 755.651 155.472C761.155 155.472 765.411 153.968 768.419 150.96C771.491 147.952 773.027 143.696 773.027 138.192V93.744H781.283V138.192C781.283 143.376 780.227 147.888 778.115 151.728C776.067 155.504 773.123 158.416 769.283 160.464C765.443 162.512 760.899 163.536 755.651 163.536ZM811.087 162V101.904H789.871V93.84H840.559V101.904H819.343V162H811.087ZM847.613 162V93.84H855.869V123.696H890.141V93.84H898.397V162H890.141V131.76H855.869V162H847.613ZM911.443 162V151.152H922.291V162H911.443Z';
 
 function scaledMarkTransform(scale: number, offsetX: number, offsetY: number): string {
 	return `translate(${offsetX} ${offsetY}) scale(${scale})`;
@@ -48,8 +53,8 @@ export function rustauthLogoSquareSvg({
 	fill: string;
 	cutout: string;
 }): string {
-	const scale = 14;
-	const offset = (500 - 16 * scale) / 2;
+	const scale = 10;
+	const offset = (500 - 32 * scale) / 2;
 
 	return `<svg width="500" height="500" viewBox="0 0 500 500" fill="none" xmlns="http://www.w3.org/2000/svg">
 <rect width="500" height="500" fill="${background}"/>
@@ -70,32 +75,32 @@ export function rustauthWordmarkSvg({
 }): string {
 	return `<svg width="1024" height="256" viewBox="0 0 1024 256" fill="none" xmlns="http://www.w3.org/2000/svg">
 <rect width="1024" height="256" fill="${background}"/>
-<g transform="${scaledMarkTransform(6.4, 72, 68)}">
+<g transform="${scaledMarkTransform(4.25, 72, 60)}">
 ${markShapes({ fill, cutout })}
 </g>
-<path d="${WORDMARK_TEXT_PATH}" fill="${fill}"/>
+<text x="240" y="154" fill="${fill}" font-family="'Geist Mono', 'SFMono-Regular', Consolas, monospace" font-size="82" font-weight="500" letter-spacing="5">RUSTAUTH.</text>
 </svg>`;
 }
 
 export const logoAssets = {
 	darkSvg: rustauthLogoSquareSvg({
-		background: "black",
+		background: "#141413",
 		fill: "white",
-		cutout: "black",
+		cutout: "#141413",
 	}),
 	whiteSvg: rustauthLogoSquareSvg({
-		background: "white",
-		fill: "black",
-		cutout: "white",
+		background: "#fafafa",
+		fill: "#141413",
+		cutout: "#fafafa",
 	}),
 	darkWordmark: rustauthWordmarkSvg({
-		background: "black",
+		background: "#141413",
 		fill: "white",
-		cutout: "black",
+		cutout: "#141413",
 	}),
 	whiteWordmark: rustauthWordmarkSvg({
-		background: "#FFEAEA",
-		fill: "black",
-		cutout: "#FFEAEA",
+		background: "#fafafa",
+		fill: "#141413",
+		cutout: "#fafafa",
 	}),
 };
