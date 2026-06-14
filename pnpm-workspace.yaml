@@ -4,7 +4,7 @@ packages:
 allowBuilds:
   esbuild: true
   sharp: true
-  workerd: true
+  workerd: set this to true or false
 
 catalog:
   '@better-auth/utils': 0.4.0
