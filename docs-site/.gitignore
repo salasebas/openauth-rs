@@ -3,6 +3,9 @@
 node_modules
 .source
 .env
+.dev.vars
+.open-next
+.wrangler
 .DS_Store
 next-env.d.ts
 

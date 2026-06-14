@@ -39,10 +39,22 @@ export function createMetadata(override: Metadata): Metadata {
 	};
 }
 
-export const baseUrl =
-	process.env.NODE_ENV === "development" ||
-	(!process.env.VERCEL_PROJECT_PRODUCTION_URL && !process.env.VERCEL_URL)
-		? new URL("http://localhost:3000")
-		: new URL(
-				`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL}`,
-			);
+function resolveBaseUrl(): URL {
+	if (process.env.NODE_ENV === "development") {
+		return new URL("http://localhost:3000");
+	}
+
+	if (process.env.NEXT_PUBLIC_URL) {
+		return new URL(process.env.NEXT_PUBLIC_URL);
+	}
+
+	if (process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL) {
+		return new URL(
+			`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL}`,
+		);
+	}
+
+	return new URL("https://rustauth.dev");
+}
+
+export const baseUrl = resolveBaseUrl();

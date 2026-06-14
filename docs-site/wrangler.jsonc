@@ -1,0 +1,18 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "rustauth-docs",
+	"main": ".open-next/worker.js",
+	"compatibility_date": "2026-06-12",
+	"compatibility_flags": ["nodejs_compat"],
+	"account_id": "89c442db1bb3ff7ef27c48fff710dc1f",
+	"assets": {
+		"directory": ".open-next/assets",
+		"binding": "ASSETS"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		"NEXT_PUBLIC_URL": "https://rustauth.dev"
+	}
+}
