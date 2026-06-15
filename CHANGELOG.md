@@ -5,6 +5,35 @@ All notable changes to the RustAuth workspace are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project follows [Semantic Versioning](https://semver.org/) while the API is still pre-1.0.
 
+## [Unreleased]
+
+Planned for the next crates.io release (likely **0.3.0** because of the CLI breaking change).
+
+### Added
+
+#### Web integration (`rustauth-actix-web`)
+
+- New `rustauth-actix-web` crate with `RustAuthActixWebExt` (`mount_at_base_path`, `mount_routes`,
+  `handle`) and `RustAuthActixWebOptions`.
+- Integration tests aligned with the Axum adapter contract (routing, HTTP/error contracts, auth
+  flows, security scenarios).
+- Docs-site guide at `/docs/integrations/actix-web`, `examples/actix-web-minimal`, and CI matrix
+  coverage for `rustauth-actix-web --all-features`.
+
+#### CLI (`rustauth-cli`)
+
+- `rustauth init --framework actix-web` writes Actix-oriented `rustauth.toml` metadata and prints
+  an Actix Web mount snippet.
+- Workspace inspection and telemetry detect Actix Web when both `actix-web` and
+  `rustauth-actix-web` appear in `Cargo.toml`.
+
+### Changed
+
+#### CLI (`rustauth-cli`)
+
+- **Breaking:** `rustauth init` requires `--framework axum` or `--framework actix-web`. The
+  previous implicit default (`axum`) and workspace auto-detection fallback were removed.
+
 ## [0.2.0] - 2026-06-14
 
 Initial public working release of **RustAuth** — an unofficial Rust authentication toolkit
@@ -27,11 +56,9 @@ release line under the `rustauth` / `rustauth-*` crate namespace.
 - Default cookie prefix `rustauth`; configuration via `RUSTAUTH_*` environment variables and
   `rustauth.toml`.
 
-#### Web integration (`rustauth-axum`, `rustauth-actix-web`)
+#### Web integration (`rustauth-axum`)
 
 - Axum router mounting via `RustAuthAxumExt` (`mount_at_base_path`, `into_router`, `handle`, …).
-- Actix Web scope mounting via `RustAuthActixWebExt` (`mount_at_base_path`, `mount_routes`,
-  `handle`, …).
 
 #### CLI (`rustauth-cli`)
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `rustauth init --framework actix-web` snippet and workspace detection for Actix Web projects.
+
+### Changed
+
+- **Breaking:** `rustauth init` requires `--framework axum` or `--framework actix-web`.
+
 ## [0.2.0] - 2026-06-14
 
 Initial public working release.
