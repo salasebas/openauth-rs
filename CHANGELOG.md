@@ -7,7 +7,7 @@ project follows [Semantic Versioning](https://semver.org/) while the API is stil
 
 ## [Unreleased]
 
-Planned for the next crates.io release (likely **0.3.0** because of CLI breaking changes).
+## [0.3.0] - 2026-06-15
 
 ### Added
 
@@ -121,4 +121,5 @@ release line under the `rustauth` / `rustauth-*` crate namespace.
   not part of the public server API.
 - Public duration fields use `time::Duration` directly across core, plugins, and passkey options.
 
+[0.3.0]: https://github.com/salasebas/rustauth/releases/tag/v0.3.0
 [0.2.0]: https://github.com/salasebas/rustauth/releases/tag/v0.2.0

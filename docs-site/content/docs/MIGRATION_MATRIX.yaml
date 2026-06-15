@@ -235,6 +235,9 @@ entries:
   disposition: migrate
   status: migrated
   notes: Replace createAuthClient with HTTP/curl or flows.rs
+- slug: docs/changelog/0-3-0
+  disposition: migrate
+  notes: Release notes; RustAuth changelog
 - slug: docs/changelog/0-2-0
   disposition: migrate
   notes: Release notes; RustAuth changelog

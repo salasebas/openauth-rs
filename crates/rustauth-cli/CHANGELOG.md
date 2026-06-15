@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-Planned for the next crates.io release (likely **0.3.0** because of CLI breaking changes).
+## [0.3.0] - 2026-06-15
 
 ### Added
 
@@ -25,4 +25,5 @@ Initial public working release.
 - Feature-gated enterprise plugin and adapter support (`sqlx`, `tokio-postgres`, `plugins`, `full`).
 - Opt-in telemetry for `db generate` and `db migrate`.
 
+[0.3.0]: https://github.com/salasebas/rustauth/releases/tag/v0.3.0
 [0.2.0]: https://github.com/salasebas/rustauth/releases/tag/v0.2.0

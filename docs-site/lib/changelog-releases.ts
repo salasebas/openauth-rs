@@ -8,33 +8,46 @@ export interface ChangelogRelease {
 
 const UNRELEASED_URL =
 	"https://github.com/salasebas/rustauth/blob/main/CHANGELOG.md#unreleased";
-const DETAILS_URL =
+const V030_URL =
+	"https://github.com/salasebas/rustauth/blob/main/CHANGELOG.md#030---2026-06-15";
+const V020_URL =
 	"https://github.com/salasebas/rustauth/blob/main/CHANGELOG.md#020---2026-06-14";
 
 export const changelogReleases: ChangelogRelease[] = [
 	{
 		tag: "Unreleased",
-		title: "Unreleased — Actix Web and CLI init (planned 0.3.0)",
+		title: "Unreleased",
 		date: "2026-06-15",
 		url: UNRELEASED_URL,
-		content: `Changes on \`main\` not yet published to crates.io. The next release will likely be **0.3.0** because \`rustauth init\` now requires an explicit framework flag.
+		content: `Changes on \`main\` not yet published to crates.io.
+
+[Full changelog →](${UNRELEASED_URL})`,
+	},
+	{
+		tag: "v0.3.0",
+		title: "0.3.0 — Actix Web, Diesel adapters, CLI breaking changes",
+		date: "2026-06-15",
+		url: V030_URL,
+		content: `Adds Actix Web integration, Diesel storage adapters, and CLI breaking changes.
 
 ### Added
 
 - **\`rustauth-actix-web\`** — Actix Web adapter (\`RustAuthActixWebExt\`), parity tests, docs-site guide, and \`examples/actix-web-minimal\`.
+- **\`rustauth-diesel\`** — async Diesel adapters for Postgres and MySQL (\`diesel-postgres\`, \`diesel-mysql\` features).
 - **CLI** — \`rustauth init --framework actix-web\`, Actix workspace detection, and telemetry support.
 
 ### Changed
 
 - **Breaking:** \`rustauth init\` requires \`--framework axum\` or \`--framework actix-web\` (no implicit default).
+- **Breaking:** \`database.adapter\` is required in \`rustauth.toml\` and for \`rustauth init\` (no implicit \`sqlx\` default).
 
-[Full changelog →](${UNRELEASED_URL})`,
+[Full release notes →](${V030_URL})`,
 	},
 	{
 		tag: "v0.2.0",
 		title: "0.2.0 — initial public working release",
 		date: "2026-06-14",
-		url: DETAILS_URL,
+		url: V020_URL,
 		content: `First public release of **RustAuth** under the \`rustauth\` / \`rustauth-*\` crate namespace.
 
 ### Added
@@ -45,7 +58,7 @@ export const changelogReleases: ChangelogRelease[] = [
 - Enterprise identity: OAuth client (\`rustauth-oauth\`), social providers, OAuth/OIDC provider, OIDC RP, SAML, SSO, SCIM, passkeys, Stripe, i18n, telemetry.
 - Storage adapters: SQLx, tokio-postgres, deadpool-postgres, Redis, Fred.
 
-[Full release notes →](${DETAILS_URL})`,
+[Full release notes →](${V020_URL})`,
 	},
 ];
 

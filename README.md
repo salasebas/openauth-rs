@@ -4,8 +4,8 @@ RustAuth is an unofficial Rust authentication toolkit inspired by [Better Auth](
 It is server-first: sessions, OAuth/OIDC, SSO, SCIM, SAML, passkeys, plugins, storage adapters,
 and Axum and Actix Web integrations live in the `rustauth-*` crates.
 
-**0.2.0** is the initial public working release. The API is pre-1.0; breaking changes are still
-possible before 1.0.
+**0.3.0** adds Actix Web integration, Diesel storage adapters, and CLI breaking changes. The API
+is pre-1.0; breaking changes are still possible before 1.0.
 
 ## Quick start
 

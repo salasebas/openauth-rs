@@ -8,8 +8,8 @@ export interface DocsVersion {
 
 export const docsVersions: DocsVersion[] = [
 	{
-		label: "v0.2.0 (Latest)",
-		version: "0.2.0",
+		label: "v0.3.0 (Latest)",
+		version: "0.3.0",
 		branch: "main",
 		slug: null,
 		badge: null,

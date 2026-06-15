@@ -1,0 +1,17 @@
+---
+title: "0.3.0"
+description: Actix Web integration, Diesel adapters, and CLI breaking changes.
+---
+
+**Released 2026-06-15.** Full notes live in [CHANGELOG.md](https://github.com/salasebas/rustauth/blob/main/CHANGELOG.md#030---2026-06-15).
+
+## Added
+
+* **`rustauth-actix-web`** — Actix Web adapter (`RustAuthActixWebExt`), parity tests, [integration guide](/docs/integrations/actix-web), and `examples/actix-web-minimal`.
+* **`rustauth-diesel`** — async Diesel adapters for Postgres and MySQL (`diesel-postgres`, `diesel-mysql` features on the umbrella crate).
+* **CLI** — `rustauth init --framework actix-web`, Actix workspace detection, and telemetry support.
+
+## Changed
+
+* **Breaking:** `rustauth init` requires `--framework axum` or `--framework actix-web` (no implicit default).
+* **Breaking:** `database.adapter` is required in `rustauth.toml` and for `rustauth init` (via `--adapter` or workspace detection; no implicit `sqlx` default).

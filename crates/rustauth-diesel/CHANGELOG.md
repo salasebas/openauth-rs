@@ -2,7 +2,9 @@
 
 All notable changes to `rustauth-diesel` are documented here.
 
-## Unreleased
+## [Unreleased]
+
+## [0.3.0] - 2026-06-15
 
 ### Added
 
@@ -14,3 +16,5 @@ All notable changes to `rustauth-diesel` are documented here.
 - `DieselMysqlStores` / `DieselMysqlStoresBuilder` bundle.
 - Dynamic `DieselPostgresRow` and `DieselMysqlRow` (`QueryableByName`) for shared SQL runner integration.
 - Port of `rustauth-sqlx` Postgres and MySQL adapter integration tests.
+
+[0.3.0]: https://github.com/salasebas/rustauth/releases/tag/v0.3.0
