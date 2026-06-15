@@ -7,8 +7,23 @@ builds on [`diesel-async`](https://docs.rs/diesel-async) deadpool pooling and
 RustAuth's shared SQL runner in `rustauth-core`. The public crate name is
 `rustauth-diesel`; configure CLI migrations with `database.adapter = "diesel"`.
 
-SQLite and sync Diesel are intentionally deferred. Use [`rustauth-sqlx`](../rustauth-sqlx/README.md)
-for SQLite.
+**SQLite is not supported.** Use [`rustauth-sqlx`](../rustauth-sqlx/README.md) for SQLite
+(local dev, tests, or small deployments). Sync Diesel is not exposed either.
+
+## When to use Diesel vs SQLx
+
+| Your stack | RustAuth adapter |
+| --- | --- |
+| App uses Diesel for Postgres or MySQL in production | `rustauth-diesel` (`postgres` / `mysql`) |
+| Local dev, tests, or production on SQLite | `rustauth-sqlx` with `sqlite` |
+| App uses SQLx for Postgres, MySQL, or SQLite | `rustauth-sqlx` — no need to add Diesel |
+| "Diesel everywhere" shop wanting SQLite locally | Use `rustauth-sqlx` for the auth storage slice, or run Postgres in Docker for parity with prod |
+
+RustAuth intentionally ships one SQLite path: native async SQLx. Diesel SQLite in
+`diesel-async` routes every query through `SyncConnectionWrapper` (`spawn_blocking`
+over a sync connection), which is a poor fit for concurrent auth CRUD, transactions,
+and SQL-backed rate limits. There is no incremental user value over the existing
+SQLx adapter (~1900 lines of SQLite tests, CLI migrations, transactional apply).
 
 ## Install
 
@@ -125,8 +140,8 @@ Do **not** configure `database.adapter = "diesel-async"`. The adapter string is
 
 ## Behavior notes
 
-- Uses `diesel-async` internally with deadpool connection pooling.
-- SQLite is deferred (`diesel-async` SQLite uses a sync connection wrapper).
+- Uses `diesel-async` internally with deadpool connection pooling (Postgres/MySQL only).
+- SQLite is **not supported** — see [When to use Diesel vs SQLx](#when-to-use-diesel-vs-sqlx).
 - Sync Diesel is not exposed; RustAuth's `DbAdapter` contract is async-only.
 - MySQL array columns are JSON-backed where the shared SQL planner emits array
   types Postgres handles natively.

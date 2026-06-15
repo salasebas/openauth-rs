@@ -124,8 +124,8 @@ Via the facade, import `rustauth::diesel::{DieselPostgresStores, DieselMysqlStor
 
 ## Limitations
 
-- **SQLite deferred** — `diesel-async` SQLite uses a sync connection wrapper; use [SQLx SQLite](/docs/adapters/sqlite) instead.
-- **Sync Diesel deferred** — RustAuth's `DbAdapter` contract is async-only; no sync Diesel adapter is exposed.
+- **SQLite not supported** — `rustauth-diesel` ships Postgres and MySQL only. `diesel-async` SQLite uses `SyncConnectionWrapper` (`spawn_blocking` per query), which does not meet RustAuth's concurrent auth workload needs. Use [SQLx SQLite](/docs/adapters/sqlite) for local dev, tests, and SQLite deployments. CLI `database.adapter = "diesel"` with `provider = "sqlite"` returns an unsupported-provider error by design.
+- **Sync Diesel not supported** — RustAuth's `DbAdapter` contract is async-only; no sync Diesel adapter is exposed.
 - **Not `diesel-async` in config** — use `database.adapter = "diesel"`, not `"diesel-async"`.
 
 ## CLI migrate
