@@ -1,0 +1,53 @@
+[package]
+name = "rustauth-diesel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/rustauth-diesel"
+readme = "README.md"
+description = "Diesel database adapters for RustAuth."
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+postgres = [
+    "dep:pq-sys",
+    "diesel/postgres",
+    "diesel-async/postgres",
+    "diesel/uuid",
+    "diesel/time",
+    "diesel/serde_json",
+    "dep:tokio-postgres",
+    "uuid",
+]
+mysql = ["diesel/mysql", "diesel-async/mysql", "diesel/time", "diesel/serde_json"]
+
+[dependencies]
+diesel = { workspace = true, default-features = false }
+diesel-async = { workspace = true, default-features = false, features = ["pool", "deadpool"] }
+indexmap.workspace = true
+pq-sys = { version = "0.7", optional = true, features = ["bundled"] }
+rustauth-core.workspace = true
+serde_json.workspace = true
+time = { workspace = true, features = ["formatting", "parsing"] }
+tokio = { workspace = true, features = ["fs"] }
+tokio-postgres = { workspace = true, optional = true, features = ["with-serde_json-1", "with-time-0_3", "with-uuid-1"] }
+uuid = { workspace = true, optional = true }
+
+[dev-dependencies]
+http.workspace = true
+indexmap.workspace = true
+rustauth-core = { workspace = true, features = ["test-utils"] }
+serde_json.workspace = true
+sqlx = { workspace = true, features = ["postgres", "uuid"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+uuid.workspace = true
+
+[lints]
+workspace = true

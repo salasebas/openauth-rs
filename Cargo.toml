@@ -6,6 +6,7 @@ members = [
     "crates/rustauth-cli",
     "crates/rustauth-core",
     "crates/rustauth-deadpool-postgres",
+    "crates/rustauth-diesel",
     "crates/rustauth-fred",
     "crates/rustauth-i18n",
     "crates/rustauth-oauth",
@@ -81,6 +82,9 @@ rustauth-sso = { path = "crates/rustauth-sso", version = "0.2.0", default-featur
 rustauth-stripe = { path = "crates/rustauth-stripe", version = "0.2.0" }
 rustauth-telemetry = { path = "crates/rustauth-telemetry", version = "0.2.0", default-features = false }
 rustauth-deadpool-postgres = { path = "crates/rustauth-deadpool-postgres", version = "0.2.0" }
+diesel = { version = "2.3", default-features = false }
+diesel-async = { version = "0.9", default-features = false }
+rustauth-diesel = { path = "crates/rustauth-diesel", version = "0.2.0", default-features = false }
 rustauth-tokio-postgres = { path = "crates/rustauth-tokio-postgres", version = "0.2.0" }
 rustauth-axum = { path = "crates/rustauth-axum", version = "0.2.0" }
 rustauth-cli = { path = "crates/rustauth-cli", version = "0.2.0" }
