@@ -1,13 +1,8 @@
 # Changelog
 
-## [0.2.0] - 2026-06-14
+The umbrella `rustauth` crate uses the workspace-level changelog at
+[`../../CHANGELOG.md`](../../CHANGELOG.md).
 
-Initial public working release.
-
-### Added
-
-- Umbrella crate re-exporting `rustauth-core`, adapters, and feature-gated enterprise plugins.
-- `rustauth::prelude` for application wiring (`RustAuth`, `RustAuthBuilder`, common options).
-- Cargo features for `plugins`, `passkey`, `sso`, `scim`, `stripe`, `oauth-provider`, `telemetry`, `i18n`, and `full`.
-
-[0.2.0]: https://github.com/salasebas/rustauth/releases/tag/v0.2.0
+Release-plz is configured to write the aggregate `rustauth` changelog there so
+the repository keeps a single root release narrative while the specialized
+crates keep their own `crates/<crate>/CHANGELOG.md` files.

@@ -1,0 +1,160 @@
+[workspace]
+allow_dirty = false
+changelog_update = true
+dependencies_update = false
+git_release_enable = false
+git_tag_enable = false
+git_tag_name = "v{{ version }}"
+pr_branch_prefix = "release-plz-"
+pr_draft = true
+pr_labels = ["release"]
+publish = true
+publish_allow_dirty = false
+publish_no_verify = false
+publish_timeout = "60m"
+release_always = false
+repo_url = "https://github.com/salasebas/rustauth"
+semver_check = false
+
+[changelog]
+protect_breaking_commits = true
+sort_commits = "oldest"
+
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^add", group = "Added" },
+  { message = "^changed", group = "Changed" },
+  { message = "^change", group = "Changed" },
+  { message = "^deprecated", group = "Deprecated" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^security", group = "Security" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^.*", group = "Changed" },
+]
+
+[[package]]
+name = "rustauth"
+version_group = "rustauth-workspace"
+changelog_path = "CHANGELOG.md"
+changelog_include = [
+  "rustauth-actix-web",
+  "rustauth-axum",
+  "rustauth-cli",
+  "rustauth-core",
+  "rustauth-deadpool-postgres",
+  "rustauth-diesel",
+  "rustauth-fred",
+  "rustauth-i18n",
+  "rustauth-oauth",
+  "rustauth-oauth-provider",
+  "rustauth-oidc",
+  "rustauth-passkey",
+  "rustauth-plugins",
+  "rustauth-redis",
+  "rustauth-saml",
+  "rustauth-scim",
+  "rustauth-social-providers",
+  "rustauth-sqlx",
+  "rustauth-sso",
+  "rustauth-stripe",
+  "rustauth-telemetry",
+  "rustauth-tokio-postgres",
+]
+git_release_enable = true
+git_release_name = "v{{ version }}"
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
+
+[[package]]
+name = "rustauth-actix-web"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-axum"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-cli"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-core"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-deadpool-postgres"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-diesel"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-fred"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-i18n"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-oauth"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-oauth-provider"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-oidc"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-passkey"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-plugins"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-redis"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-saml"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-scim"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-social-providers"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-sqlx"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-sso"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-stripe"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-telemetry"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-tokio-postgres"
+version_group = "rustauth-workspace"
+
+[[package]]
+name = "rustauth-example-stripe-smoke"
+publish = false
+release = false
