@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/salasebas/rustauth/compare/v0.3.0...v0.3.1) - 2026-06-30
+
+### Fixed
+
+- break plugins/fred dev-dep cycle and repair post-0.3.0 CI
+- *(plugins)* restrict email OTP verification endpoints
+
 ### Changed
 
 - Email OTP verification create/get endpoints are now marked server-only, so public route

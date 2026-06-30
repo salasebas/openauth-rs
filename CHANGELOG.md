@@ -7,6 +7,17 @@ project follows [Semantic Versioning](https://semver.org/) while the API is stil
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/salasebas/rustauth/compare/v0.3.0...v0.3.1) - 2026-06-30
+
+### Changed
+
+- *(release)* add release-plz automation
+
+### Fixed
+
+- *(plugins)* restrict email OTP verification endpoints
+- break plugins/fred dev-dep cycle and repair post-0.3.0 CI
+
 ### Changed
 
 #### Official plugins (`rustauth-plugins`)
