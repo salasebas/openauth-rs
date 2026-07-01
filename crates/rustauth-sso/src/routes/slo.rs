@@ -472,6 +472,7 @@ fn logout_build_context<'a>(
         base_url: &context.base_url,
         provider_id,
         build_options: logout_build_options(options),
+        max_message_size: options.saml.max_logout_message_size,
     }
 }
 

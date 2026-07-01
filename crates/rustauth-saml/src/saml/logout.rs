@@ -29,6 +29,18 @@ pub struct SamlLogoutBuildContext<'a> {
     pub base_url: &'a str,
     pub provider_id: &'a str,
     pub build_options: SpBuildOptions,
+    pub max_message_size: usize,
+}
+
+pub const DEFAULT_MAX_SAML_LOGOUT_MESSAGE_SIZE: usize = 256 * 1024;
+const SAML_LOGOUT_MESSAGE_TOO_LARGE_ERROR: &str =
+    "SAML logout message exceeds maximum allowed size";
+
+pub fn is_saml_logout_message_too_large(error: &RustAuthError) -> bool {
+    matches!(
+        error,
+        RustAuthError::Api(message) if message == SAML_LOGOUT_MESSAGE_TOO_LARGE_ERROR
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -425,7 +437,10 @@ pub struct ParsedSamlLogoutResponse {
 pub type SamlLogoutParseContext<'a> = SamlLogoutBuildContext<'a>;
 
 pub fn parse_post_logout_request(encoded: &str) -> Result<ParsedSamlLogoutRequest, RustAuthError> {
-    parse_logout_request_xml(&decode_base64_xml(encoded)?)
+    parse_logout_request_xml(&decode_base64_xml(
+        encoded,
+        DEFAULT_MAX_SAML_LOGOUT_MESSAGE_SIZE,
+    )?)
 }
 
 pub fn parse_post_logout_request_with_context(
@@ -438,7 +453,10 @@ pub fn parse_post_logout_request_with_context(
 pub fn parse_post_logout_response(
     encoded: &str,
 ) -> Result<ParsedSamlLogoutResponse, RustAuthError> {
-    parse_logout_response_xml(&decode_base64_xml(encoded)?)
+    parse_logout_response_xml(&decode_base64_xml(
+        encoded,
+        DEFAULT_MAX_SAML_LOGOUT_MESSAGE_SIZE,
+    )?)
 }
 
 pub fn parse_post_logout_response_with_context(
@@ -451,7 +469,10 @@ pub fn parse_post_logout_response_with_context(
 pub fn parse_redirect_logout_request(
     encoded: &str,
 ) -> Result<ParsedSamlLogoutRequest, RustAuthError> {
-    parse_logout_request_xml(&decode_redirect_xml(encoded)?)
+    parse_logout_request_xml(&decode_redirect_xml(
+        encoded,
+        DEFAULT_MAX_SAML_LOGOUT_MESSAGE_SIZE,
+    )?)
 }
 
 pub fn parse_redirect_logout_request_with_context(
@@ -472,7 +493,10 @@ pub fn parse_redirect_logout_request_with_redirect_query(
 pub fn parse_redirect_logout_response(
     encoded: &str,
 ) -> Result<ParsedSamlLogoutResponse, RustAuthError> {
-    parse_logout_response_xml(&decode_redirect_xml(encoded)?)
+    parse_logout_response_xml(&decode_redirect_xml(
+        encoded,
+        DEFAULT_MAX_SAML_LOGOUT_MESSAGE_SIZE,
+    )?)
 }
 
 pub fn parse_redirect_logout_response_with_context(
@@ -498,7 +522,7 @@ fn parse_logout_request_via_opensaml(
     redirect_query: Option<&[(String, String)]>,
 ) -> Result<ParsedSamlLogoutRequest, RustAuthError> {
     let compact = encoded.split_whitespace().collect::<String>();
-    let xml = logout_xml_from_encoded(&compact, binding)?;
+    let xml = logout_xml_from_encoded(&compact, binding, context.max_message_size)?;
     validate_saml_xml(&xml)?;
     if should_use_legacy_logout_request_parse(&xml, context, redirect_query) {
         return parse_logout_request_xml(&xml);
@@ -527,13 +551,15 @@ fn parse_logout_request_via_opensaml(
 #[cfg(not(feature = "saml-signed"))]
 fn parse_logout_request_via_opensaml(
     encoded: &str,
-    _context: &SamlLogoutParseContext<'_>,
+    context: &SamlLogoutParseContext<'_>,
     binding: Binding,
     _redirect_query: Option<&[(String, String)]>,
 ) -> Result<ParsedSamlLogoutRequest, RustAuthError> {
     match binding {
-        Binding::Redirect => parse_redirect_logout_request(encoded),
-        _ => parse_post_logout_request(encoded),
+        Binding::Redirect => {
+            parse_logout_request_xml(&decode_redirect_xml(encoded, context.max_message_size)?)
+        }
+        _ => parse_logout_request_xml(&decode_base64_xml(encoded, context.max_message_size)?),
     }
 }
 
@@ -545,7 +571,7 @@ fn parse_logout_response_via_opensaml(
     redirect_query: Option<&[(String, String)]>,
 ) -> Result<ParsedSamlLogoutResponse, RustAuthError> {
     let compact = encoded.split_whitespace().collect::<String>();
-    let xml = logout_xml_from_encoded(&compact, binding)?;
+    let xml = logout_xml_from_encoded(&compact, binding, context.max_message_size)?;
     validate_saml_xml(&xml)?;
     if should_use_legacy_logout_response_parse(&xml, context, redirect_query) {
         return parse_logout_response_xml(&xml);
@@ -574,21 +600,27 @@ fn parse_logout_response_via_opensaml(
 #[cfg(not(feature = "saml-signed"))]
 fn parse_logout_response_via_opensaml(
     encoded: &str,
-    _context: &SamlLogoutParseContext<'_>,
+    context: &SamlLogoutParseContext<'_>,
     binding: Binding,
     _redirect_query: Option<&[(String, String)]>,
 ) -> Result<ParsedSamlLogoutResponse, RustAuthError> {
     match binding {
-        Binding::Redirect => parse_redirect_logout_response(encoded),
-        _ => parse_post_logout_response(encoded),
+        Binding::Redirect => {
+            parse_logout_response_xml(&decode_redirect_xml(encoded, context.max_message_size)?)
+        }
+        _ => parse_logout_response_xml(&decode_base64_xml(encoded, context.max_message_size)?),
     }
 }
 
 #[cfg(feature = "saml-signed")]
-fn logout_xml_from_encoded(encoded: &str, binding: Binding) -> Result<String, RustAuthError> {
+fn logout_xml_from_encoded(
+    encoded: &str,
+    binding: Binding,
+    max_message_size: usize,
+) -> Result<String, RustAuthError> {
     match binding {
-        Binding::Redirect => decode_redirect_xml(encoded),
-        _ => decode_base64_xml(encoded),
+        Binding::Redirect => decode_redirect_xml(encoded, max_message_size),
+        _ => decode_base64_xml(encoded, max_message_size),
     }
 }
 
@@ -800,26 +832,55 @@ fn parse_logout_response_xml(xml: &str) -> Result<ParsedSamlLogoutResponse, Rust
     })
 }
 
-fn decode_base64_xml(encoded: &str) -> Result<String, RustAuthError> {
+fn decode_base64_xml(encoded: &str, max_message_size: usize) -> Result<String, RustAuthError> {
     let compact = encoded.split_whitespace().collect::<String>();
+    reject_oversized_base64(&compact, max_message_size)?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(compact)
         .map_err(|_| RustAuthError::Api("Invalid base64-encoded SAML message".to_owned()))?;
+    if bytes.len() > max_message_size {
+        return Err(saml_logout_message_too_large());
+    }
     String::from_utf8(bytes)
         .map_err(|_| RustAuthError::Api("Invalid base64-encoded SAML message".to_owned()))
 }
 
-fn decode_redirect_xml(encoded: &str) -> Result<String, RustAuthError> {
+fn decode_redirect_xml(encoded: &str, max_message_size: usize) -> Result<String, RustAuthError> {
     let compact = encoded.split_whitespace().collect::<String>();
+    reject_oversized_base64(&compact, max_message_size)?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(compact)
         .map_err(|_| RustAuthError::Api("Invalid base64-encoded SAML message".to_owned()))?;
-    let mut decoder = DeflateDecoder::new(bytes.as_slice());
-    let mut xml = String::new();
+    if bytes.len() > max_message_size {
+        return Err(saml_logout_message_too_large());
+    }
+    let decoder = DeflateDecoder::new(bytes.as_slice());
+    let mut xml = Vec::new();
+    let read_limit = u64::try_from(max_message_size.saturating_add(1)).unwrap_or(u64::MAX);
     decoder
-        .read_to_string(&mut xml)
+        .take(read_limit)
+        .read_to_end(&mut xml)
         .map_err(|error| RustAuthError::Api(format!("Invalid SAML redirect binding: {error}")))?;
-    Ok(xml)
+    if xml.len() > max_message_size {
+        return Err(saml_logout_message_too_large());
+    }
+    String::from_utf8(xml)
+        .map_err(|_| RustAuthError::Api("Invalid SAML redirect binding".to_owned()))
+}
+
+fn reject_oversized_base64(encoded: &str, max_message_size: usize) -> Result<(), RustAuthError> {
+    if encoded.len() > max_base64_size(max_message_size) {
+        return Err(saml_logout_message_too_large());
+    }
+    Ok(())
+}
+
+fn max_base64_size(max_decoded_size: usize) -> usize {
+    max_decoded_size.saturating_add(2) / 3 * 4
+}
+
+fn saml_logout_message_too_large() -> RustAuthError {
+    RustAuthError::Api(SAML_LOGOUT_MESSAGE_TOO_LARGE_ERROR.to_owned())
 }
 
 fn deflate_and_encode(xml: &str) -> Result<String, SamlLogoutRequestError> {

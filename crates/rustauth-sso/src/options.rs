@@ -374,6 +374,8 @@ impl Default for DomainVerificationOptions {
 
 /// Default maximum accepted base64 SAML response size (256 KiB).
 pub const DEFAULT_MAX_SAML_RESPONSE_SIZE: usize = 256 * 1024;
+/// Default maximum accepted SAML logout message size (256 KiB).
+pub const DEFAULT_MAX_SAML_LOGOUT_MESSAGE_SIZE: usize = 256 * 1024;
 /// Default maximum accepted IdP metadata XML size (100 KiB).
 pub const DEFAULT_MAX_SAML_METADATA_SIZE: usize = 100 * 1024;
 
@@ -393,6 +395,9 @@ pub struct SamlOptions {
     pub require_timestamps: bool,
     /// Maximum accepted base64 SAML response size.
     pub max_response_size: usize,
+    #[serde(default = "default_max_saml_logout_message_size")]
+    /// Maximum accepted SAML SLO message size.
+    pub max_logout_message_size: usize,
     /// Maximum accepted IdP metadata XML size.
     pub max_metadata_size: usize,
     /// Enable SAML single logout endpoints and session lookup state.
@@ -416,6 +421,7 @@ impl Default for SamlOptions {
             clock_skew: Duration::minutes(5),
             require_timestamps: false,
             max_response_size: DEFAULT_MAX_SAML_RESPONSE_SIZE,
+            max_logout_message_size: DEFAULT_MAX_SAML_LOGOUT_MESSAGE_SIZE,
             max_metadata_size: DEFAULT_MAX_SAML_METADATA_SIZE,
             enable_single_logout: false,
             logout_request_ttl: Duration::minutes(5),
@@ -424,6 +430,10 @@ impl Default for SamlOptions {
             algorithms: SamlAlgorithmOptions::default(),
         }
     }
+}
+
+const fn default_max_saml_logout_message_size() -> usize {
+    DEFAULT_MAX_SAML_LOGOUT_MESSAGE_SIZE
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

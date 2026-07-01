@@ -65,7 +65,8 @@ pub use options::{
     ProvidersLimitResolver, ProvisionUserInput, ProvisionUserResolver, SamlAlgorithmOptions,
     SamlConfig, SamlIdpMetadata, SamlMapping, SamlOptions, SamlService, SamlSpMetadata,
     SsoAuditEvent, SsoAuditEventKind, SsoAuditEventResolver, SsoAuditSeverity, SsoOptions,
-    SsoProvider, SsoRateLimitOptions, TokenEndpointAuthentication, DEFAULT_MAX_SAML_METADATA_SIZE,
+    SsoProvider, SsoRateLimitOptions, TokenEndpointAuthentication,
+    DEFAULT_MAX_SAML_LOGOUT_MESSAGE_SIZE, DEFAULT_MAX_SAML_METADATA_SIZE,
     DEFAULT_MAX_SAML_RESPONSE_SIZE,
 };
 #[cfg(feature = "saml")]
