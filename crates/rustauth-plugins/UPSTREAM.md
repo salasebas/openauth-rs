@@ -29,7 +29,7 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | Custom session | ✅ | Session response extension hooks and cookie behavior are implemented. |
 | Device authorization | ✅ | Device code, decision, verification, token, options, and schema paths are implemented. |
 | Email OTP | ✅ | OTP send/verify, explicit expired-OTP errors, sign-up/sign-in, password reset alias, change-email current-email verification, hooks, storage modes, resend strategies, rate limits, additional fields, and race protection are implemented. |
-| Generic OAuth | ✅ | Provider config, discovery, callback routes, token/userinfo hooks, PKCE, and provider helpers are implemented. |
+| Generic OAuth | ✅ | Provider config, discovery, callback routes, token/userinfo hooks, verified ID-token profile opt-in, PKCE, and provider helpers are implemented. |
 | Have I Been Pwned | ✅ | k-anonymity range lookup, padding, and hash handling are implemented. |
 | JWT | ✅ | JWKS, token, sign/verify endpoints, claims, schema options, and crypto adapter paths are implemented. |
 | Last login method | ✅ | OAuth and credential method persistence plus session response metadata are implemented. |
@@ -70,6 +70,7 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | Serializable metadata | Exposes callback-driven plugin options | Omits closure/callback fields, preserves observable values | Runtime callbacks are not serializable metadata. |
 | OAuth proxy payloads | Object transport | Rust-owned encrypted structs | Payload is RustAuth-to-RustAuth transport, not a public cross-implementation API. |
 | Generic OAuth HTTP | Baseline outbound fetch behavior | SSRF-guarded default HTTP transport | Auth boundary should fail closed for private/internal targets. |
+| Generic OAuth ID-token profiles | Decodes ID-token claims before userinfo | Uses ID-token claims only when `GenericOAuthProfileSource::VerifiedIdToken(...)` verifies issuer, audience, expiration, subject, nonce, asymmetric algorithm, and JWKS key | Avoids trusting unsigned or unverified profile claims while still supporting explicit Generic OIDC providers. |
 | API-key cache revalidation | Cache-first secondary storage | Optional DB revalidation for cache hits | Preserves compatibility by default while offering immediate revocation visibility. |
 | API-key pure secondary listing across processes | Cache-first `customStorage` get/set/delete index | Atomic `SecondaryStorage::compare_and_set` / `delete_if_value` index updates, plus database fallback/revalidation options | Rust storage backends can provide cross-process compare-and-set semantics without forcing database fallback. |
 | Additional fields helper | Core user/session additional fields | Dedicated Rust server plugin helper | Gives Rust callers a plugin-shaped way to contribute schema/runtime metadata. |
@@ -86,6 +87,8 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 ## Hardening Notes
 
 - Keep Generic OAuth and OAuth proxy outbound requests on SSRF-guarded HTTP transports.
+- Keep Generic OAuth ID-token profile extraction explicit; do not add decode-only
+  fallbacks for `id_token` claims.
 - Prefer explicit errors at auth boundaries; avoid silent fallbacks for malformed
   cookies, forged API keys, expired OTPs, or invalid OAuth state.
 - Use API-key database fallback/revalidation or a secondary-storage backend with

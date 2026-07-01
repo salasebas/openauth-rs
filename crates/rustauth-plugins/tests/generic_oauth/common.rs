@@ -1,4 +1,9 @@
 pub(super) use http::{header, Method, Request, Response, StatusCode};
+use josekit::jwk::Jwk;
+use josekit::jws::alg::hmac::HmacJwsAlgorithm::Hs256;
+use josekit::jws::alg::rsassa::RsassaJwsAlgorithm::Rs256;
+use josekit::jws::JwsHeader;
+use josekit::jwt::{self, JwtPayload};
 pub(super) use rustauth_core::api::AuthRouter;
 pub(super) use rustauth_core::context::{create_auth_context_with_adapter, AuthContext};
 pub(super) use rustauth_core::cookies::{
@@ -20,9 +25,10 @@ pub(super) use rustauth_oauth::oauth2::{
 pub(super) use rustauth_plugins::generic_oauth::{
     auth0, generic_oauth, gumroad, hubspot, keycloak, line, microsoft_entra_id, okta, patreon,
     slack, Auth0Options, BaseOAuthProviderOptions, GenericOAuthConfig, GenericOAuthFlow,
-    GenericOAuthOptions, GenericOAuthParamsContext, GenericOAuthTokenRequest, GumroadOptions,
-    HubSpotOptions, KeycloakOptions, LineOptions, MicrosoftEntraIdOptions, OktaOptions,
-    PatreonOptions, SlackOptions, UPSTREAM_PLUGIN_ID,
+    GenericOAuthOptions, GenericOAuthParamsContext, GenericOAuthProfileSource,
+    GenericOAuthTokenRequest, GenericOAuthUserInfoContext, GenericOidcIdTokenProfile,
+    GumroadOptions, HubSpotOptions, KeycloakOptions, LineOptions, MicrosoftEntraIdOptions,
+    OktaOptions, PatreonOptions, SlackOptions, UPSTREAM_PLUGIN_ID,
 };
 pub(super) use serde_json::Value;
 pub(super) use std::collections::BTreeMap;
@@ -61,6 +67,17 @@ pub(super) fn example_config() -> GenericOAuthConfig {
     config
         .authorization_url_params
         .insert("audience".to_owned(), "api".to_owned());
+    config
+}
+
+pub(super) fn verified_id_token_config() -> GenericOAuthConfig {
+    let mut config = example_config();
+    config.user_info_url = None;
+    config.profile_source = GenericOAuthProfileSource::VerifiedIdToken(
+        GenericOidcIdTokenProfile::new()
+            .jwks_url("https://idp.example.com/oauth/jwks")
+            .issuer("https://idp.example.com"),
+    );
     config
 }
 
@@ -451,4 +468,86 @@ pub(super) fn jwt_claims(claims: &str) -> String {
     }
 
     format!("{}.{}.", encode(r#"{"alg":"none"}"#), encode(claims))
+}
+
+pub(super) fn signed_rs256_id_token(
+    claims: Value,
+) -> Result<(String, Value), Box<dyn std::error::Error>> {
+    let key = TestSigningKey::new_rs256("generic-oauth-test-key")?;
+    Ok((key.sign_rs256(claims)?, key.public_jwk()?))
+}
+
+pub(super) fn signed_hs256_id_token(
+    claims: Value,
+) -> Result<(String, Value), Box<dyn std::error::Error>> {
+    let kid = "generic-oauth-hmac-test-key";
+    let mut jwk = Jwk::generate_oct_key(32)?;
+    jwk.set_key_id(kid);
+    jwk.set_algorithm("HS256");
+    let signer = Hs256.signer_from_jwk(&jwk)?;
+    let token = encode_jwt("HS256", kid, claims, |payload, header| {
+        jwt::encode_with_signer(payload, header, &signer)
+    })?;
+    Ok((token, serde_json::to_value(jwk)?))
+}
+
+pub(super) struct TestSigningKey {
+    kid: String,
+    jwk: Jwk,
+}
+
+impl TestSigningKey {
+    pub(super) fn new_rs256(kid: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut jwk = Jwk::generate_rsa_key(2048)?;
+        jwk.set_key_id(kid);
+        jwk.set_algorithm("RS256");
+        Ok(Self {
+            kid: kid.to_owned(),
+            jwk,
+        })
+    }
+
+    pub(super) fn sign_rs256(&self, claims: Value) -> Result<String, Box<dyn std::error::Error>> {
+        let signer = Rs256.signer_from_jwk(&self.jwk)?;
+        encode_jwt("RS256", &self.kid, claims, |payload, header| {
+            jwt::encode_with_signer(payload, header, &signer)
+        })
+    }
+
+    pub(super) fn public_jwk(&self) -> Result<Value, Box<dyn std::error::Error>> {
+        let mut public_jwk = self.jwk.to_public_key()?;
+        public_jwk.set_key_id(&self.kid);
+        public_jwk.set_algorithm("RS256");
+        Ok(serde_json::to_value(public_jwk)?)
+    }
+}
+
+fn encode_jwt<F>(
+    algorithm: &str,
+    kid: &str,
+    claims: Value,
+    encode: F,
+) -> Result<String, Box<dyn std::error::Error>>
+where
+    F: FnOnce(&JwtPayload, &JwsHeader) -> Result<String, josekit::JoseError>,
+{
+    let mut header = JwsHeader::new();
+    header.set_token_type("JWT");
+    header.set_algorithm(algorithm);
+    if !kid.is_empty() {
+        header.set_key_id(kid);
+    }
+
+    let mut payload = JwtPayload::new();
+    let claims = claims.as_object().ok_or("claims should be an object")?;
+    for (key, value) in claims {
+        payload.set_claim(key, Some(value.clone()))?;
+    }
+
+    Ok(encode(&payload, &header)?)
+}
+
+pub(super) fn jwks_server(jwk: Value) -> String {
+    let body = serde_json::json!({ "keys": [jwk] }).to_string();
+    capture_get_server(Arc::new(Mutex::new(String::new())), &body)
 }

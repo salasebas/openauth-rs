@@ -8,9 +8,16 @@ use rustauth_oauth::oauth2::{
 };
 use url::Url;
 
-use super::config::{GenericOAuthConfig, GenericOAuthTokenRequest};
+use super::config::{GenericOAuthConfig, GenericOAuthProfileSource, GenericOAuthTokenRequest};
 use super::discovery::{resolve_http_client, DiscoveryCache};
+use super::id_token;
 use super::user_info;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GenericOAuthUserInfoContext<'a> {
+    /// Nonce value previously stored in OAuth state for verified ID-token profile extraction.
+    pub expected_nonce: Option<&'a str>,
+}
 
 /// Social provider implementation used by the generic OAuth plugin.
 ///
@@ -49,6 +56,43 @@ impl GenericOAuthProvider {
 
     pub fn config(&self) -> &GenericOAuthConfig {
         &self.config
+    }
+
+    pub async fn get_user_info_with_context(
+        &self,
+        tokens: OAuth2Tokens,
+        context: GenericOAuthUserInfoContext<'_>,
+    ) -> Result<Option<OAuth2UserInfo>, OAuthError> {
+        let user = if let Some(get_user_info) = &self.config.get_user_info {
+            get_user_info(tokens).await?
+        } else {
+            match &self.config.profile_source {
+                GenericOAuthProfileSource::UserInfo => {
+                    user_info::get_user_info(
+                        &tokens,
+                        self.config.user_info_url.as_deref(),
+                        self.http_client()?,
+                    )
+                    .await?
+                }
+                GenericOAuthProfileSource::VerifiedIdToken(_) => {
+                    id_token::verified_user_info(
+                        &tokens,
+                        &self.config,
+                        context.expected_nonce,
+                        self.http_client()?,
+                    )
+                    .await?
+                }
+            }
+        };
+        if let Some(map_profile) = &self.config.map_profile_to_user {
+            if let Some(user) = user {
+                return map_profile(user).await.map(Some);
+            }
+            return Ok(None);
+        }
+        Ok(user)
     }
 
     fn http_client(&self) -> Result<&OAuthHttpClient, OAuthError> {
@@ -206,23 +250,8 @@ impl SocialOAuthProvider for GenericOAuthProvider {
         _provider_user: Option<serde_json::Value>,
     ) -> SocialProviderFuture<'_, Option<OAuth2UserInfo>> {
         Box::pin(async move {
-            let user = if let Some(get_user_info) = &self.config.get_user_info {
-                get_user_info(tokens).await?
-            } else {
-                user_info::get_user_info(
-                    &tokens,
-                    self.config.user_info_url.as_deref(),
-                    self.http_client()?,
-                )
-                .await?
-            };
-            if let Some(map_profile) = &self.config.map_profile_to_user {
-                if let Some(user) = user {
-                    return map_profile(user).await.map(Some);
-                }
-                return Ok(None);
-            }
-            Ok(user)
+            self.get_user_info_with_context(tokens, GenericOAuthUserInfoContext::default())
+                .await
         })
     }
 

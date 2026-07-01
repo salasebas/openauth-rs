@@ -13,6 +13,8 @@ project follows [Semantic Versioning](https://semver.org/) while the API is stil
 
 - Email OTP verification create/get endpoints are now server-only routes, preventing public
   HTTP dispatch while preserving server-side OTP generation and retrieval flows.
+- Generic OAuth now supports explicit verified OIDC ID-token profile extraction with
+  JWKS, issuer, audience, expiration, subject, nonce, algorithm, and authorized-party checks.
 
 ## [0.3.0] - 2026-06-15
 

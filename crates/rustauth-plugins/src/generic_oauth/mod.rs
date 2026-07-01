@@ -4,6 +4,7 @@ mod account;
 mod config;
 mod discovery;
 mod errors;
+mod id_token;
 mod provider;
 pub mod providers;
 mod route_http;
@@ -22,14 +23,16 @@ pub use config::{
     GenericOAuthConfig, GenericOAuthFlow, GenericOAuthGetToken, GenericOAuthGetUserInfo,
     GenericOAuthMapProfileToUser, GenericOAuthOptions, GenericOAuthOptionsBuilder,
     GenericOAuthParams, GenericOAuthParamsCallback, GenericOAuthParamsContext,
-    GenericOAuthParamsFuture, GenericOAuthRefreshAccessToken, GenericOAuthRevokeToken,
-    GenericOAuthTokenRequest, GenericOAuthVerifyIdToken,
+    GenericOAuthParamsFuture, GenericOAuthProfileSource, GenericOAuthRefreshAccessToken,
+    GenericOAuthRevokeToken, GenericOAuthTokenRequest, GenericOAuthVerifyIdToken,
+    GenericOidcIdTokenProfile,
 };
 pub use errors::{
-    INVALID_OAUTH_CONFIG, INVALID_OAUTH_CONFIGURATION, ISSUER_MISMATCH, ISSUER_MISSING,
-    PROVIDER_CONFIG_NOT_FOUND, PROVIDER_ID_REQUIRED, SESSION_REQUIRED, TOKEN_URL_NOT_FOUND,
+    INVALID_ID_TOKEN, INVALID_OAUTH_CONFIG, INVALID_OAUTH_CONFIGURATION, ISSUER_MISMATCH,
+    ISSUER_MISSING, OIDC_ID_TOKEN_CONFIGURATION_REQUIRED, PROVIDER_CONFIG_NOT_FOUND,
+    PROVIDER_ID_REQUIRED, SESSION_REQUIRED, TOKEN_URL_NOT_FOUND,
 };
-pub use provider::GenericOAuthProvider;
+pub use provider::{GenericOAuthProvider, GenericOAuthUserInfoContext};
 pub use providers::{
     auth0, gumroad, hubspot, keycloak, line, microsoft_entra_id, okta, patreon, slack,
     Auth0Options, BaseOAuthProviderOptions, GumroadOptions, HubSpotOptions, KeycloakOptions,
@@ -73,6 +76,14 @@ pub fn generic_oauth(options: GenericOAuthOptions) -> AuthPlugin {
         .with_error_code(errors::error_code(
             ISSUER_MISSING,
             "OAuth issuer parameter missing. The authorization server did not include the required iss parameter (RFC 9207).",
+        ))
+        .with_error_code(errors::error_code(
+            OIDC_ID_TOKEN_CONFIGURATION_REQUIRED,
+            "OIDC ID token profile extraction requires an issuer and JWKS URL.",
+        ))
+        .with_error_code(errors::error_code(
+            INVALID_ID_TOKEN,
+            "Invalid ID token.",
         ))
         .with_endpoint(routes::sign_in_oauth2_endpoint(
             options.clone(),

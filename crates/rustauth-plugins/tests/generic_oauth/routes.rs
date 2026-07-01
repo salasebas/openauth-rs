@@ -41,6 +41,7 @@ async fn sign_in_oauth2_route_returns_redirect_url() {
         query_value(&url, "redirect_uri"),
         Some("https://app.example.com/oauth2/callback/example".to_owned())
     );
+    assert_eq!(query_value(&url, "nonce"), None);
 }
 
 #[tokio::test]
@@ -79,6 +80,48 @@ async fn sign_in_oauth2_route_applies_dynamic_authorization_url_params() {
 
     assert_eq!(query_value(&url, "audience"), Some("dynamic".to_owned()));
     assert_eq!(query_value(&url, "resource"), Some("calendar".to_owned()));
+}
+
+#[tokio::test]
+async fn sign_in_oauth2_route_verified_id_token_includes_nonce(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    let context = context_with_plugin(adapter, oauth_plugin(verified_id_token_config()));
+    let router = AuthRouter::try_new(context, Vec::new())?;
+
+    let url = sign_in_url(&router, "example", "/dashboard", None, false).await?;
+
+    let nonce = query_value(&url, "nonce").ok_or("missing nonce")?;
+    assert!(!nonce.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn sign_in_oauth2_route_verified_id_token_overwrites_caller_nonce(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    let mut config = verified_id_token_config();
+    config
+        .authorization_url_params
+        .insert("nonce".to_owned(), "static-nonce".to_owned());
+    config.authorization_url_params_callback = Some(Arc::new(|_context| {
+        Box::pin(async {
+            Ok(BTreeMap::from([(
+                "nonce".to_owned(),
+                "callback-nonce".to_owned(),
+            )]))
+        })
+    }));
+    let context = context_with_plugin(adapter, oauth_plugin(config));
+    let router = AuthRouter::try_new(context, Vec::new())?;
+
+    let url = sign_in_url(&router, "example", "/dashboard", None, false).await?;
+
+    let nonce = query_value(&url, "nonce").ok_or("missing nonce")?;
+    assert_ne!(nonce, "static-nonce");
+    assert_ne!(nonce, "callback-nonce");
+    assert!(!nonce.is_empty());
+    Ok(())
 }
 
 #[tokio::test]
@@ -700,6 +743,245 @@ async fn oauth2_callback_rejects_unverified_id_token_claims(
         .filter_map(|value| value.to_str().ok())
         .any(|cookie| cookie.starts_with("rustauth.session_token=")
             || cookie.starts_with("__Secure-rustauth.session_token=")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn oauth2_callback_verified_id_token_creates_user_account_session_without_userinfo(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (memory, context, response) =
+        oidc_callback_response(|key, nonce| key.sign_rs256(route_id_token_claims(nonce))).await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(location(&response), Some("/dashboard"));
+    let user = DbUserStore::new(memory.as_ref())
+        .find_user_by_email("ada@example.com")
+        .await?
+        .ok_or("missing created user")?;
+    assert_eq!(user.name, "Ada OIDC");
+    assert!(DbUserStore::new(memory.as_ref())
+        .find_account_by_provider_account("oidc-route-user", "example")
+        .await?
+        .is_some());
+    let token = session_token_from_response(&context, &response);
+    assert!(DbSessionStore::new(memory.as_ref())
+        .find_session(&token)
+        .await?
+        .is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn oauth2_callback_verified_id_token_rejects_forged_unsigned_token(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (memory, _context, response) = oidc_callback_response(|_key, nonce| {
+        Ok(jwt_claims(&route_id_token_claims(nonce).to_string()))
+    })
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        location(&response),
+        Some("https://app.example.com/error?error=invalid_id_token")
+    );
+    assert_no_oidc_user_or_session(memory.as_ref()).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn oauth2_callback_verified_id_token_rejects_wrong_issuer(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (memory, _context, response) = oidc_callback_response(|key, nonce| {
+        let mut claims = route_id_token_claims(nonce);
+        claims["iss"] = Value::String("https://wrong.example.com".to_owned());
+        key.sign_rs256(claims)
+    })
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        location(&response),
+        Some("https://app.example.com/error?error=invalid_id_token")
+    );
+    assert_no_oidc_user_or_session(memory.as_ref()).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn oauth2_callback_verified_id_token_rejects_wrong_audience(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (memory, _context, response) = oidc_callback_response(|key, nonce| {
+        let mut claims = route_id_token_claims(nonce);
+        claims["aud"] = Value::String("other-client".to_owned());
+        key.sign_rs256(claims)
+    })
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        location(&response),
+        Some("https://app.example.com/error?error=invalid_id_token")
+    );
+    assert_no_oidc_user_or_session(memory.as_ref()).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn oauth2_callback_verified_id_token_rejects_missing_nonce(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (memory, _context, response) = oidc_callback_response(|key, nonce| {
+        let mut claims = route_id_token_claims(nonce);
+        claims
+            .as_object_mut()
+            .ok_or("claims should be an object")?
+            .remove("nonce");
+        key.sign_rs256(claims)
+    })
+    .await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        location(&response),
+        Some("https://app.example.com/error?error=invalid_id_token")
+    );
+    assert_no_oidc_user_or_session(memory.as_ref()).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn oauth2_callback_verified_id_token_rejects_mismatched_nonce(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (memory, _context, response) =
+        oidc_callback_response(|key, _nonce| key.sign_rs256(route_id_token_claims("wrong-nonce")))
+            .await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        location(&response),
+        Some("https://app.example.com/error?error=invalid_id_token")
+    );
+    assert_no_oidc_user_or_session(memory.as_ref()).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn oauth2_callback_verified_id_token_custom_get_user_info_still_works(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let memory = Arc::new(MemoryAdapter::new());
+    let adapter = memory.clone() as Arc<dyn DbAdapter>;
+    let signing_key = TestSigningKey::new_rs256("generic-oauth-custom-key")?;
+    let jwks_url = jwks_server(signing_key.public_jwk()?);
+    let mut config = oauth_flow_config("custom-verified-user");
+    config.user_info_url = None;
+    config.profile_source = GenericOAuthProfileSource::VerifiedIdToken(
+        GenericOidcIdTokenProfile::new()
+            .jwks_url(jwks_url)
+            .issuer("https://idp.example.com"),
+    );
+    let context = context_with_plugin(adapter, oauth_plugin(config));
+    let router = AuthRouter::try_new(context.clone(), Vec::new())?;
+    let state = sign_in_state(&router, "example", "/dashboard", None, false).await?;
+
+    let response = oauth_callback(&router, "example", "code-1", &state).await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(location(&response), Some("/dashboard"));
+    assert!(DbUserStore::new(memory.as_ref())
+        .find_account_by_provider_account("custom-verified-user", "example")
+        .await?
+        .is_some());
+    let token = session_token_from_response(&context, &response);
+    assert!(DbSessionStore::new(memory.as_ref())
+        .find_session(&token)
+        .await?
+        .is_some());
+    Ok(())
+}
+
+async fn oidc_callback_response<F>(
+    token_for_nonce: F,
+) -> Result<(Arc<MemoryAdapter>, AuthContext, Response<Vec<u8>>), Box<dyn std::error::Error>>
+where
+    F: FnOnce(&TestSigningKey, &str) -> Result<String, Box<dyn std::error::Error>>,
+{
+    let memory = Arc::new(MemoryAdapter::new());
+    let adapter = memory.clone() as Arc<dyn DbAdapter>;
+    let signing_key = TestSigningKey::new_rs256("generic-oauth-route-key")?;
+    let jwks_url = jwks_server(signing_key.public_jwk()?);
+    let id_token = Arc::new(Mutex::new(None));
+    let context = context_with_plugin(
+        adapter,
+        oauth_plugin(oidc_route_config(jwks_url, Arc::clone(&id_token))),
+    );
+    let router = AuthRouter::try_new(context.clone(), Vec::new())?;
+    let (sign_in, oauth_state_cookie) =
+        sign_in_url_with_oauth_cookie(&router, "example", "/dashboard", None, false).await?;
+    let nonce = query_value(&sign_in, "nonce").ok_or("missing nonce")?;
+    let token = token_for_nonce(&signing_key, &nonce)?;
+    match id_token.lock() {
+        Ok(mut slot) => *slot = Some(token),
+        Err(_) => return Err("id token lock poisoned".into()),
+    }
+    let state = query_value(&sign_in, "state").ok_or("missing state")?;
+    let response = oauth_callback(
+        &router,
+        "example",
+        "code-1",
+        &state_with_oauth_cookie(state, oauth_state_cookie),
+    )
+    .await?;
+    Ok((memory, context, response))
+}
+
+fn oidc_route_config(jwks_url: String, id_token: Arc<Mutex<Option<String>>>) -> GenericOAuthConfig {
+    let mut config = loopback_http_config(verified_id_token_config());
+    if let GenericOAuthProfileSource::VerifiedIdToken(profile) = &mut config.profile_source {
+        profile.jwks_url = Some(jwks_url);
+    }
+    config.get_token = Some(Arc::new(move |_request| {
+        let id_token = Arc::clone(&id_token);
+        Box::pin(async move {
+            let token = id_token
+                .lock()
+                .map_err(|_| OAuthError::InvalidResponse("id token lock poisoned".to_owned()))?
+                .clone()
+                .ok_or_else(|| OAuthError::InvalidResponse("missing id token".to_owned()))?;
+            Ok(OAuth2Tokens {
+                access_token: Some("access-token".to_owned()),
+                id_token: Some(token),
+                ..OAuth2Tokens::default()
+            })
+        })
+    }));
+    config
+}
+
+fn route_id_token_claims(nonce: &str) -> Value {
+    serde_json::json!({
+        "iss": "https://idp.example.com",
+        "sub": "oidc-route-user",
+        "aud": "client-1",
+        "exp": OffsetDateTime::now_utc().unix_timestamp() + Duration::hours(1).whole_seconds(),
+        "nonce": nonce,
+        "email": "ada@example.com",
+        "email_verified": true,
+        "name": "Ada OIDC",
+        "picture": "https://img.example.com/ada-oidc.png"
+    })
+}
+
+async fn assert_no_oidc_user_or_session(
+    adapter: &MemoryAdapter,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert!(DbUserStore::new(adapter)
+        .find_user_by_email("ada@example.com")
+        .await?
+        .is_none());
+    assert!(DbUserStore::new(adapter)
+        .find_account_by_provider_account("oidc-route-user", "example")
+        .await?
+        .is_none());
+    assert_eq!(adapter.len("session").await, 0);
     Ok(())
 }
 

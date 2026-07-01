@@ -152,6 +152,21 @@ same contract: `passkey(PasskeyOptions)`, `sso(SsoOptions)`, `scim(ScimOptions)`
 use `OAuthProviderOptions::with_external_jwt()` (or `disable_jwt_plugin: true`) to
 run without the jwt plugin.
 
+## Generic OAuth OIDC profile claims
+
+Generic OAuth uses `userinfo_url` or a custom `get_user_info` hook by default.
+It does not decode `id_token` profile claims just because a provider returns an
+ID token.
+
+Providers that only return profile claims in an ID token can opt into verified
+OIDC profile extraction with
+`GenericOAuthProfileSource::VerifiedIdToken(GenericOidcIdTokenProfile::new())`.
+Provide discovery metadata or configure both a JWKS URL and issuer explicitly.
+The verified path checks the JWKS key, supported asymmetric signing algorithm,
+issuer, client ID audience, expiration, subject, nonce, and authorized party
+when the token has multiple audiences before mapping claims. Existing
+`userinfo_url` and custom `get_user_info` flows remain supported.
+
 ## Time units
 
 Public plugin and core option timeouts use [`time::Duration`](https://docs.rs/time/latest/time/struct.Duration.html).
