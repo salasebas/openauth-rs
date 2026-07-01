@@ -455,6 +455,13 @@ pub(super) fn update_client_endpoint(
                         "token_endpoint_auth_method is immutable",
                     ));
                 }
+                if body.update.reference_id.is_some() {
+                    return error_response(OAuthProviderError::new(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_client_metadata",
+                        "reference_id is immutable",
+                    ));
+                }
                 let merged = merge_oauth_client_update(&existing, &body.update);
                 if let Err(error) = check_oauth_client(&merged, &options, false) {
                     return oauth_validation_error_response(error);
@@ -551,9 +558,6 @@ fn merge_oauth_client_update(
     if update.subject_type.is_some() {
         merged.subject_type = update.subject_type.clone();
     }
-    if update.reference_id.is_some() {
-        merged.reference_id = update.reference_id.clone();
-    }
     if update.metadata.is_some() {
         merged.metadata = update.metadata.clone();
     }
@@ -618,7 +622,6 @@ fn client_update_record(update: &OAuthClient) -> DbRecord {
         record.insert("require_pkce".to_owned(), DbValue::Boolean(require_pkce));
     }
     insert_optional_string(&mut record, "subject_type", update.subject_type.clone());
-    insert_optional_string(&mut record, "reference_id", update.reference_id.clone());
     if let Some(metadata) = update.metadata.clone() {
         record.insert("metadata".to_owned(), DbValue::Json(metadata));
     }

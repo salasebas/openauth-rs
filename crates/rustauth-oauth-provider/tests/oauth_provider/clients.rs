@@ -710,6 +710,104 @@ async fn update_client_rejects_token_auth_method_changes() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
+async fn update_client_rejects_reference_id_changes_and_preserves_token_reference(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let provider = oauth_provider(OAuthProviderOptions {
+        client_reference: Some(ClientReferenceResolver::new(|input| async move {
+            Ok(input.user.map(|user| {
+                if user.id == "user_1" {
+                    "org_1".to_owned()
+                } else {
+                    "org_other".to_owned()
+                }
+            }))
+        })),
+        scopes: vec!["read:reports".to_owned()],
+        ..default_options()
+    })?;
+    let mut options = options_with_plugins(vec![default_jwt_plugin()?, provider]);
+    options.rate_limit = rustauth_core::options::RateLimitOptions::default().enabled(false);
+    let context = create_auth_context_with_adapter(options, adapter.clone())?;
+    let cookies = set_session_cookie(
+        &context.auth_cookies,
+        &context.secret,
+        "token_1",
+        SessionCookieOptions::default(),
+    )?;
+    let cookie = cookies
+        .iter()
+        .map(|cookie: &Cookie| format!("{}={}", cookie.name, cookie.value))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let router =
+        AuthRouter::with_async_endpoints(context, Vec::new(), core_auth_async_endpoints())?;
+    let client = create_admin_client(
+        &router,
+        r#"{"redirect_uris":["https://rp.example/callback"],"grant_types":["client_credentials"],"scope":"read:reports"}"#,
+        &cookie,
+    )
+    .await?;
+    let client_id = client["client_id"].as_str().ok_or("missing client_id")?;
+    let client_secret = client["client_secret"]
+        .as_str()
+        .ok_or("missing client_secret")?;
+    assert_eq!(client["reference_id"], "org_1");
+
+    let response = router
+        .handle_async(request(
+            Method::POST,
+            "/api/auth/oauth2/update-client",
+            &format!(r#"{{"client_id":"{client_id}","update":{{"reference_id":"org_2"}}}}"#),
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response)?["error"], "invalid_client_metadata");
+
+    let stored_clients = adapter
+        .find_many(FindMany::new("oauth_client").where_clause(Where::new(
+            "client_id",
+            DbValue::String(client_id.to_owned()),
+        )))
+        .await?;
+    assert_eq!(
+        stored_clients
+            .first()
+            .and_then(|record| record.get("reference_id")),
+        Some(&DbValue::String("org_1".to_owned()))
+    );
+
+    let token_body = format!(
+        "grant_type=client_credentials&client_id={client_id}&client_secret={}&scope=read%3Areports",
+        query_encode(client_secret)
+    );
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/token",
+            &token_body,
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let access_tokens = adapter
+        .find_many(FindMany::new("oauth_access_token").where_clause(Where::new(
+            "client_id",
+            DbValue::String(client_id.to_owned()),
+        )))
+        .await?;
+    assert_eq!(
+        access_tokens
+            .first()
+            .and_then(|record| record.get("reference_id")),
+        Some(&DbValue::String("org_1".to_owned()))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn update_client_rejects_invalid_scope() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = adapter();
     seed_user_session(adapter.as_ref()).await?;
