@@ -93,33 +93,52 @@ pub fn json<T: Serialize>(
 /// non-public addresses. Clients are cached per policy so OIDC discovery,
 /// JWKS, userinfo, and token requests share one connection pool and guard.
 #[cfg(feature = "oidc")]
-pub(crate) fn oauth_http_client(allow_private_ips: bool) -> &'static OAuthHttpClient {
-    fn build(allow_private_ips: bool) -> OAuthHttpClient {
-        OAuthHttpClient::from_config(OAuthHttpClientConfig {
-            allow_private_ips,
-            ..OAuthHttpClientConfig::default()
-        })
-        // The SSRF-guarded builder only adds a custom DNS resolver, so it can
-        // only fail to build for the same reasons a default client would (TLS
-        // backend init). Fall back to a default client to keep this infallible
-        // without panicking; in practice the guarded build always succeeds.
-        .unwrap_or_else(|_| OAuthHttpClient::new(reqwest::Client::new()))
-    }
-
+pub(crate) fn oauth_http_client(
+    allow_private_ips: bool,
+) -> Result<&'static OAuthHttpClient, RustAuthError> {
     if allow_private_ips {
-        static PERMISSIVE_HTTP_CLIENT: OnceLock<OAuthHttpClient> = OnceLock::new();
-        PERMISSIVE_HTTP_CLIENT.get_or_init(|| build(true))
+        static PERMISSIVE_HTTP_CLIENT: OnceLock<Result<OAuthHttpClient, String>> = OnceLock::new();
+        cached_oauth_http_client(&PERMISSIVE_HTTP_CLIENT, || {
+            build_oauth_http_client(OAuthHttpClientConfig {
+                allow_private_ips: true,
+                ..OAuthHttpClientConfig::default()
+            })
+        })
     } else {
-        static GUARDED_HTTP_CLIENT: OnceLock<OAuthHttpClient> = OnceLock::new();
-        GUARDED_HTTP_CLIENT.get_or_init(|| build(false))
+        static GUARDED_HTTP_CLIENT: OnceLock<Result<OAuthHttpClient, String>> = OnceLock::new();
+        cached_oauth_http_client(&GUARDED_HTTP_CLIENT, || {
+            build_oauth_http_client(OAuthHttpClientConfig {
+                allow_private_ips: false,
+                ..OAuthHttpClientConfig::default()
+            })
+        })
     }
+}
+
+#[cfg(feature = "oidc")]
+fn cached_oauth_http_client(
+    cache: &'static OnceLock<Result<OAuthHttpClient, String>>,
+    build: impl FnOnce() -> Result<OAuthHttpClient, String>,
+) -> Result<&'static OAuthHttpClient, RustAuthError> {
+    cache
+        .get_or_init(build)
+        .as_ref()
+        .map_err(|message| RustAuthError::OAuth(message.clone()))
+}
+
+#[cfg(feature = "oidc")]
+fn build_oauth_http_client(config: OAuthHttpClientConfig) -> Result<OAuthHttpClient, String> {
+    OAuthHttpClient::from_config(config)
+        .map_err(|error| format!("failed to build OIDC HTTP client: {error}"))
 }
 
 /// Returns the underlying `reqwest::Client` for the requested SSRF policy,
 /// sharing the same guard and pool as [`oauth_http_client`].
 #[cfg(feature = "oidc")]
-pub(crate) fn http_client(allow_private_ips: bool) -> &'static reqwest::Client {
-    oauth_http_client(allow_private_ips).reqwest_client()
+pub(crate) fn http_client(
+    allow_private_ips: bool,
+) -> Result<&'static reqwest::Client, RustAuthError> {
+    Ok(oauth_http_client(allow_private_ips)?.reqwest_client())
 }
 
 pub fn safe_redirect_url(context: &AuthContext, value: &str) -> Option<String> {
@@ -184,4 +203,39 @@ fn is_sso_redirect_loop(value: &str) -> bool {
         || path.starts_with("/sso/saml2/callback/")
         || path == "/sso/saml2/sp/acs"
         || path.starts_with("/sso/saml2/sp/acs/")
+}
+
+#[cfg(all(test, feature = "oidc"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oidc_http_client_build_failure_is_reported() -> Result<(), Box<dyn std::error::Error>> {
+        let Err(error) = build_oauth_http_client(OAuthHttpClientConfig {
+            timeout: std::time::Duration::ZERO,
+            ..OAuthHttpClientConfig::default()
+        }) else {
+            return Err("expected invalid HTTP client config to fail".into());
+        };
+
+        assert!(error.contains("failed to build OIDC HTTP client"));
+        Ok(())
+    }
+
+    #[test]
+    fn cached_oauth_http_client_failure_is_fail_closed() -> Result<(), Box<dyn std::error::Error>> {
+        static CLIENT: OnceLock<Result<OAuthHttpClient, String>> = OnceLock::new();
+
+        let Err(error) =
+            cached_oauth_http_client(&CLIENT, || Err("guarded client unavailable".to_owned()))
+        else {
+            return Err("expected cached client failure to be returned".into());
+        };
+
+        assert_eq!(
+            error,
+            RustAuthError::OAuth("guarded client unavailable".to_owned())
+        );
+        Ok(())
+    }
 }
