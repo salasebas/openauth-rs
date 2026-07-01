@@ -1,5 +1,6 @@
 .agents/
 plans/
+advisor-plans/
 .env
 reference/upstream-better-auth/
 reference/upstream-src/README.md
