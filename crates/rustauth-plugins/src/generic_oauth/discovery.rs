@@ -11,6 +11,8 @@ pub struct DiscoveryDocument {
     pub authorization_endpoint: Option<String>,
     pub token_endpoint: Option<String>,
     pub userinfo_endpoint: Option<String>,
+    pub jwks_uri: Option<String>,
+    pub id_token_signing_alg_values_supported: Option<Vec<String>>,
 }
 
 pub(super) fn resolve_http_client(

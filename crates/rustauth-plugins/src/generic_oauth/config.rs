@@ -58,6 +58,55 @@ pub struct GenericOAuthTokenRequest {
     pub device_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum GenericOAuthProfileSource {
+    #[default]
+    UserInfo,
+    VerifiedIdToken(GenericOidcIdTokenProfile),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericOidcIdTokenProfile {
+    pub jwks_url: Option<String>,
+    pub issuer: Option<String>,
+    pub leeway_seconds: i64,
+}
+
+impl GenericOidcIdTokenProfile {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            jwks_url: None,
+            issuer: None,
+            leeway_seconds: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn jwks_url(mut self, jwks_url: impl Into<String>) -> Self {
+        self.jwks_url = Some(jwks_url.into());
+        self
+    }
+
+    #[must_use]
+    pub fn issuer(mut self, issuer: impl Into<String>) -> Self {
+        self.issuer = Some(issuer.into());
+        self
+    }
+
+    #[must_use]
+    pub fn leeway_seconds(mut self, leeway_seconds: i64) -> Self {
+        self.leeway_seconds = leeway_seconds.max(0);
+        self
+    }
+}
+
+impl Default for GenericOidcIdTokenProfile {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct GenericOAuthOptions {
     pub config: Vec<GenericOAuthConfig>,
@@ -119,6 +168,7 @@ pub struct GenericOAuthConfig {
     pub discovery_headers: BTreeMap<String, String>,
     pub authorization_headers: BTreeMap<String, String>,
     pub override_user_info: bool,
+    pub profile_source: GenericOAuthProfileSource,
     pub get_token: Option<GenericOAuthGetToken>,
     pub get_user_info: Option<GenericOAuthGetUserInfo>,
     pub map_profile_to_user: Option<GenericOAuthMapProfileToUser>,
@@ -169,6 +219,7 @@ impl std::fmt::Debug for GenericOAuthConfig {
             .field("discovery_headers", &self.discovery_headers)
             .field("authorization_headers", &self.authorization_headers)
             .field("override_user_info", &self.override_user_info)
+            .field("profile_source", &self.profile_source)
             .field("get_token", &self.get_token.is_some())
             .field("get_user_info", &self.get_user_info.is_some())
             .field("map_profile_to_user", &self.map_profile_to_user.is_some())
@@ -257,6 +308,10 @@ impl GenericOAuthConfig {
             "disableImplicitSignUp": self.disable_implicit_sign_up,
             "disableSignUp": self.disable_sign_up,
             "overrideUserInfo": self.override_user_info,
+            "profileSource": match self.profile_source {
+                GenericOAuthProfileSource::UserInfo => "userInfo",
+                GenericOAuthProfileSource::VerifiedIdToken(_) => "verifiedIdToken",
+            },
         })
     }
 }
@@ -290,6 +345,7 @@ impl Default for GenericOAuthConfig {
             discovery_headers: BTreeMap::new(),
             authorization_headers: BTreeMap::new(),
             override_user_info: false,
+            profile_source: GenericOAuthProfileSource::UserInfo,
             get_token: None,
             get_user_info: None,
             map_profile_to_user: None,

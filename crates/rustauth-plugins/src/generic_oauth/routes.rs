@@ -9,23 +9,28 @@ use rustauth_core::auth::oauth::{
 };
 use rustauth_core::context::AuthContext;
 use rustauth_core::cookies::{parse_cookies, set_session_cookie, Cookie, SessionCookieOptions};
+use rustauth_core::crypto::random::generate_random_string;
 use rustauth_core::error::RustAuthError;
 use rustauth_oauth::oauth2::{
     SocialAuthorizationCodeRequest, SocialAuthorizationUrlRequest, SocialOAuthProvider,
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::account::{link_account, link_error_code, normalize_user_info, oauth_account};
-use super::config::{GenericOAuthFlow, GenericOAuthOptions};
+use super::config::{
+    GenericOAuthConfig, GenericOAuthFlow, GenericOAuthOptions, GenericOAuthProfileSource,
+};
 use super::discovery::DiscoveryCache;
 use super::errors;
-use super::provider::GenericOAuthProvider;
+use super::provider::{GenericOAuthProvider, GenericOAuthUserInfoContext};
 use super::route_http::{
     api_error, link_schema, redirect, redirect_with_error, redirect_with_error_description,
     sign_in_schema,
 };
 use super::route_support::*;
+
+const GENERIC_OIDC_NONCE_KEY: &str = "genericOidcNonce";
 
 #[derive(Debug, Deserialize)]
 struct SignInOAuth2Body {
@@ -98,6 +103,12 @@ pub fn sign_in_oauth2_endpoint(
                     redirect_uri.clone(),
                 )
                 .await?;
+                let oidc_nonce = oidc_nonce(&config);
+                if let Some(nonce) = &oidc_nonce {
+                    config
+                        .authorization_url_params
+                        .insert("nonce".to_owned(), nonce.clone());
+                }
                 let state = generate_oauth_state(
                     &context,
                     Some(adapter.as_ref()),
@@ -106,7 +117,7 @@ pub fn sign_in_oauth2_endpoint(
                         error_url: body.error_callback_url,
                         new_user_url: body.new_user_callback_url,
                         request_sign_up: body.request_sign_up,
-                        additional_data: body.additional_data.unwrap_or(Value::Null),
+                        additional_data: sign_in_additional_data(body.additional_data, oidc_nonce),
                         ..OAuthStateInput::default()
                     },
                 )
@@ -209,6 +220,12 @@ pub fn oauth2_link_endpoint(
                     redirect_uri.clone(),
                 )
                 .await?;
+                let oidc_nonce = oidc_nonce(&config);
+                if let Some(nonce) = &oidc_nonce {
+                    config
+                        .authorization_url_params
+                        .insert("nonce".to_owned(), nonce.clone());
+                }
                 let state = generate_oauth_state(
                     &context,
                     Some(adapter.as_ref()),
@@ -219,6 +236,7 @@ pub fn oauth2_link_endpoint(
                             user_id: user.id,
                             email: user.email,
                         }),
+                        additional_data: link_additional_data(oidc_nonce),
                         ..OAuthStateInput::default()
                     },
                 )
@@ -321,8 +339,20 @@ async fn callback_get(
         Ok(tokens) => tokens,
         Err(_) => return redirect_with_error(&error_url, "oauth_code_verification_failed"),
     };
-    let Some(user_info) = provider.get_user_info(tokens.clone(), None).await? else {
-        return redirect_with_error(&error_url, "user_info_is_missing");
+    let expected_nonce = expected_oidc_nonce(&config, &state_data.additional_data);
+    let user_info = match provider
+        .get_user_info_with_context(
+            tokens.clone(),
+            GenericOAuthUserInfoContext { expected_nonce },
+        )
+        .await
+    {
+        Ok(Some(user_info)) => user_info,
+        Ok(None) => return redirect_with_error(&error_url, "user_info_is_missing"),
+        Err(_) if verified_id_token_profile(&config) && config.get_user_info.is_none() => {
+            return redirect_with_error(&error_url, "invalid_id_token");
+        }
+        Err(error) => return Err(error.into()),
     };
     if let Some(link) = state_data.link {
         if let Err(error) = link_account(context, &config, &link, &user_info, &tokens).await {
@@ -405,6 +435,54 @@ fn callback_config_error_code(error: &RustAuthError) -> &'static str {
         RustAuthError::Api(code) if code == errors::TOKEN_URL_NOT_FOUND => "token_url_not_found",
         RustAuthError::Api(code) if code == errors::ISSUER_MISSING => "issuer_missing",
         RustAuthError::Api(code) if code == errors::INVALID_OAUTH_CONFIG => "invalid_oauth_config",
+        RustAuthError::Api(code) if code == errors::OIDC_ID_TOKEN_CONFIGURATION_REQUIRED => {
+            "invalid_oauth_configuration"
+        }
         _ => "invalid_oauth_configuration",
     }
+}
+
+fn oidc_nonce(config: &GenericOAuthConfig) -> Option<String> {
+    verified_id_token_profile(config).then(|| generate_random_string(32))
+}
+
+fn expected_oidc_nonce<'a>(
+    config: &GenericOAuthConfig,
+    additional_data: &'a Value,
+) -> Option<&'a str> {
+    if !verified_id_token_profile(config) {
+        return None;
+    }
+    additional_data
+        .get(GENERIC_OIDC_NONCE_KEY)
+        .and_then(Value::as_str)
+        .filter(|nonce| !nonce.is_empty())
+}
+
+fn verified_id_token_profile(config: &GenericOAuthConfig) -> bool {
+    matches!(
+        &config.profile_source,
+        GenericOAuthProfileSource::VerifiedIdToken(_)
+    )
+}
+
+fn sign_in_additional_data(additional_data: Option<Value>, oidc_nonce: Option<String>) -> Value {
+    let Some(nonce) = oidc_nonce else {
+        return additional_data.unwrap_or(Value::Null);
+    };
+    let mut object = match additional_data {
+        Some(Value::Object(object)) => object,
+        _ => Map::new(),
+    };
+    object.insert(GENERIC_OIDC_NONCE_KEY.to_owned(), Value::String(nonce));
+    Value::Object(object)
+}
+
+fn link_additional_data(oidc_nonce: Option<String>) -> Value {
+    let Some(nonce) = oidc_nonce else {
+        return Value::Null;
+    };
+    let mut object = Map::new();
+    object.insert(GENERIC_OIDC_NONCE_KEY.to_owned(), Value::String(nonce));
+    Value::Object(object)
 }

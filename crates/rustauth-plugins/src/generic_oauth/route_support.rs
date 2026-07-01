@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use super::config::{
     GenericOAuthConfig, GenericOAuthFlow, GenericOAuthOptions, GenericOAuthParamsContext,
+    GenericOAuthProfileSource,
 };
 use super::discovery::DiscoveryCache;
 use super::route_http::{api_error, json_response};
@@ -34,10 +35,26 @@ pub(super) async fn resolved_config(
         if let Some(discovery) = discovery_cache.fetch(&config, &http_client).await? {
             config.authorization_url = config
                 .authorization_url
-                .or(discovery.authorization_endpoint);
-            config.token_url = config.token_url.or(discovery.token_endpoint);
-            config.user_info_url = config.user_info_url.or(discovery.userinfo_endpoint);
-            config.issuer = config.issuer.or(discovery.issuer);
+                .or(discovery.authorization_endpoint.clone());
+            config.token_url = config.token_url.or(discovery.token_endpoint.clone());
+            config.user_info_url = config.user_info_url.or(discovery.userinfo_endpoint.clone());
+            config.issuer = config.issuer.or(discovery.issuer.clone());
+            if let GenericOAuthProfileSource::VerifiedIdToken(profile) = &mut config.profile_source
+            {
+                if profile.jwks_url.is_none() {
+                    profile.jwks_url = discovery.jwks_uri;
+                }
+            }
+        }
+    }
+    if let GenericOAuthProfileSource::VerifiedIdToken(profile) = &mut config.profile_source {
+        if profile.issuer.is_none() {
+            profile.issuer = config.issuer.clone();
+        }
+        if profile.issuer.is_none() || profile.jwks_url.is_none() {
+            return Err(api_error_value(
+                super::errors::OIDC_ID_TOKEN_CONFIGURATION_REQUIRED,
+            ));
         }
     }
     if config.provider_id.trim().is_empty() {
@@ -197,6 +214,10 @@ pub(super) fn config_error_response(error: RustAuthError) -> Result<ApiResponse,
         super::errors::INVALID_OAUTH_CONFIG => {
             (StatusCode::BAD_REQUEST, "Invalid OAuth configuration.")
         }
+        super::errors::OIDC_ID_TOKEN_CONFIGURATION_REQUIRED => (
+            StatusCode::BAD_REQUEST,
+            "OIDC ID token profile extraction requires an issuer and JWKS URL.",
+        ),
         _ => (StatusCode::BAD_REQUEST, "Invalid OAuth configuration"),
     };
     api_error(status, &code, message)
