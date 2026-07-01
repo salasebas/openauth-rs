@@ -169,6 +169,20 @@ pub async fn update_user(
                 }
             }
             data.insert(field, role);
+        } else if matches!(
+            field.as_str(),
+            "id" | "email_verified"
+                | "created_at"
+                | "updated_at"
+                | "banned"
+                | "ban_reason"
+                | "ban_expires"
+        ) {
+            return errors::error_response(
+                StatusCode::BAD_REQUEST,
+                "INVALID_REQUEST",
+                format!("user field `{field}` cannot be updated with update-user"),
+            );
         } else {
             data.insert(field, json_to_db_value(value));
         }
@@ -481,6 +495,8 @@ fn json_filter_value(value: serde_json::Value) -> DbValue {
 fn camel_to_snake(field: &str) -> String {
     match field {
         "emailVerified" => "email_verified".to_owned(),
+        "createdAt" => "created_at".to_owned(),
+        "updatedAt" => "updated_at".to_owned(),
         "banReason" => "ban_reason".to_owned(),
         "banExpires" => "ban_expires".to_owned(),
         other => other.to_owned(),
