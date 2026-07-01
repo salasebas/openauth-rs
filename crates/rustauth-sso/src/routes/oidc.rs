@@ -146,6 +146,10 @@ async fn callback(
     if ensure_oidc_endpoint_allowed(&token_endpoint, allow_private_ips).is_err() {
         return redirect_with_error(&error_url, "invalid_oidc_config");
     }
+    let oauth_http_client = match utils::oauth_http_client(allow_private_ips) {
+        Ok(client) => client,
+        Err(_) => return redirect_with_error(&error_url, "invalid_oidc_config"),
+    };
     let tokens = match exchange_authorization_code(
         &token_endpoint,
         AuthorizationCodeRequest {
@@ -160,7 +164,7 @@ async fn callback(
             authentication: oidc_client_authentication(&config),
             ..AuthorizationCodeRequest::default()
         },
-        utils::oauth_http_client(allow_private_ips),
+        oauth_http_client,
     )
     .await
     {
@@ -399,7 +403,8 @@ async fn validate_oidc_id_token(
     }
     let jwks_url = JsonWebKeySetUrl::new(jwks_endpoint.to_owned())
         .map_err(|error| rustauth_core::error::RustAuthError::OAuth(error.to_string()))?;
-    let jwks = CoreJsonWebKeySet::fetch_async(&jwks_url, utils::http_client(allow_private_ips))
+    let http_client = utils::http_client(allow_private_ips)?;
+    let jwks = CoreJsonWebKeySet::fetch_async(&jwks_url, http_client)
         .await
         .map_err(|error| rustauth_core::error::RustAuthError::OAuth(error.to_string()))?;
     let raw_payload = jwt_payload_json(id_token)?;
@@ -494,7 +499,8 @@ async fn fetch_oidc_user_info(
         rustauth_core::error::RustAuthError::Api("missing access token".to_owned())
     })?;
     ensure_oidc_endpoint_allowed(endpoint, allow_private_ips)?;
-    let value = utils::http_client(allow_private_ips)
+    let http_client = utils::http_client(allow_private_ips)?;
+    let value = http_client
         .get(endpoint)
         .bearer_auth(access_token)
         .header("accept", "application/json")
@@ -586,13 +592,16 @@ pub(super) async fn ensure_runtime_oidc_config(
 ) -> Result<OidcConfig, crate::oidc_impl::discovery::OidcDiscoveryError> {
     let config = oidc_config_to_impl(config);
     let allow_private_ips = options.oidc.allow_private_endpoint_ips;
+    let http_client = utils::http_client(allow_private_ips).map_err(|error| {
+        crate::oidc_impl::discovery::OidcDiscoveryError::Request(error.to_string())
+    })?;
     ensure_runtime_oidc_config_with_origin_validator(
         issuer,
         config,
         requirement,
         ssrf_aware_oidc_origin_validator(context, request, allow_private_ips),
         options.oidc.strict_manual_endpoint_origins,
-        utils::http_client(allow_private_ips),
+        http_client,
     )
     .await
     .map(oidc_config_from_impl)

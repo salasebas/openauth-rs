@@ -318,6 +318,14 @@ async fn build_oidc_config(
             override_user_info: override_user_info || options.default_override_user_info,
         }
     } else {
+        let discovery_http_client = crate::utils::http_client(
+            options.oidc.allow_private_endpoint_ips,
+        )
+        .map_err(|error| {
+            BuildOidcConfigError::Discovery(
+                crate::oidc_impl::discovery::OidcDiscoveryError::Request(error.to_string()),
+            )
+        })?;
         let hydrated = discover_oidc_config_with_origin_validator(
             issuer,
             input.discovery_endpoint.as_deref(),
@@ -337,7 +345,7 @@ async fn build_oidc_config(
                 request,
                 options.oidc.allow_private_endpoint_ips,
             ),
-            crate::utils::http_client(options.oidc.allow_private_endpoint_ips),
+            discovery_http_client,
         )
         .await
         .map_err(BuildOidcConfigError::Discovery)?;
