@@ -1103,6 +1103,41 @@ async fn users_search_route_rejects_invalid_filter_with_scim_error() {
 }
 
 #[tokio::test]
+async fn users_search_rejects_deep_filter() -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_adapter()?;
+    ScimProviderStore::new(adapter.as_ref())
+        .create(CreateScimProviderInput {
+            provider_id: "okta".to_owned(),
+            scim_token: "base-token".to_owned(),
+            organization_id: None,
+            user_id: None,
+        })
+        .await?;
+    let token = encode_bearer_token("base-token", "okta", None);
+    let filter = format!(
+        "{}userName eq \"ada@example.com\"{}",
+        "(".repeat(80),
+        ")".repeat(80)
+    );
+    let body = serde_json::json!({ "filter": filter }).to_string();
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/scim/v2/Users/.search",
+            &body,
+            Some(&token),
+        ))
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response);
+    assert_eq!(body["scimType"], "invalidFilter");
+    assert_eq!(body["status"], "400");
+    Ok(())
+}
+
+#[tokio::test]
 async fn users_route_accepts_valid_extended_filter_after_validation() {
     let (adapter, router) = router_with_adapter().expect("router should build");
     ScimProviderStore::new(adapter.as_ref())
