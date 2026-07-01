@@ -1,8 +1,6 @@
 use rustauth_oauth::oauth2::{OAuth2Tokens, OAuth2UserInfo, OAuthError};
 use serde_json::Value;
 
-use super::super::user_info;
-
 pub async fn gumroad(tokens: OAuth2Tokens) -> Result<Option<OAuth2UserInfo>, OAuthError> {
     let Some(profile) = bearer_json(
         "https://api.gumroad.com/v2/user",
@@ -33,14 +31,6 @@ pub async fn hubspot(tokens: OAuth2Tokens) -> Result<Option<OAuth2UserInfo>, OAu
 }
 
 pub async fn line(tokens: OAuth2Tokens) -> Result<Option<OAuth2UserInfo>, OAuthError> {
-    if let Some(id_token) = tokens.id_token.as_deref() {
-        if let Some(user) = user_info::decode_id_token_claims(id_token)
-            .as_ref()
-            .and_then(map_line_profile)
-        {
-            return Ok(Some(user));
-        }
-    }
     let profile = bearer_json(
         "https://api.line.me/oauth2/v2.1/userinfo",
         tokens.access_token.as_deref(),
@@ -198,12 +188,36 @@ mod tests {
         reason = "fixture tests should fail immediately when a fixture no longer maps"
     )]
 
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use rustauth_oauth::oauth2::{OAuth2Tokens, OAuthError};
     use serde_json::json;
 
     use super::{
-        map_gumroad_profile, map_hubspot_profile, map_line_profile, map_microsoft_entra_profile,
-        map_patreon_profile, map_slack_profile,
+        line, map_gumroad_profile, map_hubspot_profile, map_line_profile,
+        map_microsoft_entra_profile, map_patreon_profile, map_slack_profile,
     };
+
+    #[tokio::test]
+    async fn line_ignores_unverified_id_token_without_access_token() -> Result<(), OAuthError> {
+        let user = line(OAuth2Tokens {
+            id_token: Some(unsigned_jwt(
+                r#"{"sub":"line-forged","email":"line@example.com","name":"Line Forged"}"#,
+            )),
+            ..OAuth2Tokens::default()
+        })
+        .await?;
+
+        assert_eq!(user, None);
+        Ok(())
+    }
+
+    fn unsigned_jwt(claims: &str) -> String {
+        format!(
+            "{}.{}.",
+            URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#),
+            URL_SAFE_NO_PAD.encode(claims)
+        )
+    }
 
     #[test]
     fn maps_gumroad_profile() {
