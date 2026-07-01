@@ -5,8 +5,8 @@ use http::{Method, StatusCode};
 use rustauth_core::api::{core_auth_async_endpoints, AuthRouter};
 use rustauth_core::context::{create_auth_context_with_adapter, AuthContext};
 use rustauth_core::cookies::{sign_cookie_value, verify_cookie_value};
-use rustauth_core::db::{DbRecord, DbValue, MemoryAdapter, Session};
-use rustauth_core::options::RustAuthOptions;
+use rustauth_core::db::{DbRecord, DbValue, MemoryAdapter, Session, Update, Where};
+use rustauth_core::options::{RateLimitOptions, RustAuthOptions};
 use rustauth_core::session::{CreateSessionInput, DbSessionStore};
 use rustauth_plugins::admin::{admin, AdminOptions, AdminRole, PermissionMap};
 use serde_json::json;
@@ -310,6 +310,105 @@ async fn update_user_rejects_role_change_without_set_role_permission(
 }
 
 #[tokio::test]
+async fn update_user_rejects_protected_security_fields() -> Result<(), Box<dyn std::error::Error>> {
+    let options = AdminOptions {
+        roles: BTreeMap::from([
+            ("admin".to_owned(), admin_role()),
+            ("user".to_owned(), AdminRole::new(PermissionMap::new())),
+            (
+                "support".to_owned(),
+                AdminRole::new(PermissionMap::from([(
+                    "user".to_owned(),
+                    vec!["update".to_owned()],
+                )])),
+            ),
+        ]),
+        ..AdminOptions::default()
+    };
+    let memory = MemoryAdapter::new();
+    let Fixture { context, router } = fixture_with_options(options, memory.clone())?;
+    let support = create_user(&context, "protected-support@example.com", "support").await?;
+    let target = create_user(&context, "protected-target@example.com", "user").await?;
+    let target_id = target.id.clone();
+    let adapter = context.adapter().ok_or("missing adapter")?;
+    adapter
+        .update(
+            Update::new("user")
+                .where_clause(Where::new("id", DbValue::String(target_id.clone())))
+                .data("email_verified", DbValue::Boolean(false)),
+        )
+        .await?;
+    let target_session = DbSessionStore::new(adapter.as_ref())
+        .create_session(CreateSessionInput::new(
+            &target_id,
+            OffsetDateTime::now_utc() + Duration::hours(1),
+        ))
+        .await?;
+    let cookie = session_cookie(&context, &support.id).await?;
+
+    let ok = router
+        .handle_async(request(
+            Method::POST,
+            "/admin/update-user",
+            Some(json!({ "userId": target_id, "data": { "name": "Support Updated" } })),
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(ok.status(), StatusCode::OK);
+
+    for (field, value) in [
+        ("id", json!("attacker-controlled-id")),
+        ("emailVerified", json!(true)),
+        ("email_verified", json!(true)),
+        ("createdAt", json!("2026-01-01T00:00:00Z")),
+        ("created_at", json!("2026-01-01T00:00:00Z")),
+        ("updatedAt", json!("2026-01-01T00:00:00Z")),
+        ("updated_at", json!("2026-01-01T00:00:00Z")),
+        ("banned", json!(true)),
+        ("banReason", json!("policy")),
+        ("ban_reason", json!("policy")),
+        ("banExpires", json!("2026-01-01T00:00:00Z")),
+        ("ban_expires", json!("2026-01-01T00:00:00Z")),
+    ] {
+        let mut data = serde_json::Map::new();
+        data.insert(field.to_owned(), value);
+        let denied = router
+            .handle_async(request(
+                Method::POST,
+                "/admin/update-user",
+                Some(json!({ "userId": target_id, "data": data })),
+                Some(&cookie),
+            )?)
+            .await?;
+        assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(json_body(denied)?["code"], "INVALID_REQUEST");
+    }
+
+    let records = memory.records("user").await;
+    let target_record = records
+        .iter()
+        .find(|record| record.get("id") == Some(&DbValue::String(target_id.clone())))
+        .ok_or("missing target record")?;
+    assert_eq!(
+        target_record.get("name"),
+        Some(&DbValue::String("Support Updated".to_owned()))
+    );
+    assert_eq!(
+        target_record.get("email_verified"),
+        Some(&DbValue::Boolean(false))
+    );
+    assert_eq!(target_record.get("banned"), Some(&DbValue::Boolean(false)));
+    assert_eq!(target_record.get("ban_reason"), Some(&DbValue::Null));
+    assert_eq!(target_record.get("ban_expires"), Some(&DbValue::Null));
+
+    let sessions = memory.records("session").await;
+    assert!(sessions.iter().any(|record| {
+        record.get("token") == Some(&DbValue::String(target_session.token.clone()))
+    }));
+    Ok(())
+}
+
+#[tokio::test]
 async fn impersonation_admin_target_permissions_match_upstream(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Fixture { context, router } = super::fixture()?;
@@ -557,6 +656,7 @@ fn fixture_with_options(
         RustAuthOptions {
             base_url: Some("http://localhost:3000".to_owned()),
             plugins: vec![admin(options)?],
+            rate_limit: RateLimitOptions::new().enabled(false),
             secret: Some(secret()),
             ..RustAuthOptions::default()
         },
