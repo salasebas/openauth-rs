@@ -154,8 +154,14 @@ fn provider_create_authorization_url_requires_code_verifier_when_pkce_is_enabled
 }
 
 #[tokio::test]
-async fn provider_uses_custom_get_token_and_maps_profile() {
-    let mut config = example_config();
+async fn provider_uses_custom_get_token_and_maps_profile() -> Result<(), OAuthError> {
+    let userinfo_request = Arc::new(Mutex::new(String::new()));
+    let user_info_url = capture_get_server(
+        Arc::clone(&userinfo_request),
+        r#"{"sub":123,"email":"ada@example.com","name":"Ada"}"#,
+    );
+    let mut config = loopback_http_config(example_config());
+    config.user_info_url = Some(user_info_url);
     config.get_token = Some(Arc::new(|request: GenericOAuthTokenRequest| {
         Box::pin(async move {
             assert_eq!(request.code, "code-1");
@@ -165,9 +171,6 @@ async fn provider_uses_custom_get_token_and_maps_profile() {
             );
             Ok(OAuth2Tokens {
                 access_token: Some("access-1".to_owned()),
-                id_token: Some(jwt_claims(
-                    r#"{"sub":123,"email":"ada@example.com","name":"Ada"}"#,
-                )),
                 ..OAuth2Tokens::default()
             })
         })
@@ -188,13 +191,41 @@ async fn provider_uses_custom_get_token_and_maps_profile() {
             redirect_uri: "https://app.example.com/oauth2/callback/example".to_owned(),
             device_id: None,
         })
-        .await
-        .unwrap();
-    let user = provider.get_user_info(tokens, None).await.unwrap().unwrap();
+        .await?;
+    let Some(user) = provider.get_user_info(tokens, None).await? else {
+        return Err(OAuthError::InvalidResponse("missing user info".to_owned()));
+    };
 
     assert_eq!(user.id, "mapped-123");
     assert_eq!(user.name.as_deref(), Some("Ada Lovelace"));
     assert!(user.email_verified);
+    let userinfo_contains_authorization = userinfo_request
+        .lock()
+        .map(|request| request.contains("authorization: Bearer access-1"))
+        .unwrap_or(false);
+    assert!(userinfo_contains_authorization);
+    Ok(())
+}
+
+#[tokio::test]
+async fn provider_ignores_unverified_id_token_claims_without_userinfo() -> Result<(), OAuthError> {
+    let mut config = example_config();
+    config.user_info_url = None;
+    let provider = provider(config);
+    let user = provider
+        .get_user_info(
+            OAuth2Tokens {
+                id_token: Some(jwt_claims(
+                    r#"{"sub":"forged-sub","email":"forged@example.com","name":"Forged","email_verified":true}"#,
+                )),
+                ..OAuth2Tokens::default()
+            },
+            None,
+        )
+        .await?;
+
+    assert_eq!(user, None);
+    Ok(())
 }
 
 #[tokio::test]

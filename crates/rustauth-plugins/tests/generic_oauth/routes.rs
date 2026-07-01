@@ -1,4 +1,6 @@
 use super::common::*;
+use rustauth_core::auth::oauth::{generate_oauth_state, OAuthStateInput};
+use rustauth_core::options::RateLimitOptions;
 
 #[tokio::test]
 async fn sign_in_oauth2_route_returns_redirect_url() {
@@ -634,6 +636,71 @@ async fn oauth2_callback_uses_http_token_userinfo_and_authorization_headers() {
         .unwrap()
         .unwrap();
     assert_eq!(user.name, "Ada HTTP");
+}
+
+#[tokio::test]
+async fn oauth2_callback_rejects_unverified_id_token_claims(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = example_config();
+    config.get_token = Some(Arc::new(|_request| {
+        Box::pin(async move {
+            Ok(OAuth2Tokens {
+                id_token: Some(jwt_claims(
+                    r#"{"sub":"forged-sub","email":"forged@example.com","name":"Forged","email_verified":true}"#,
+                )),
+                ..OAuth2Tokens::default()
+            })
+        })
+    }));
+    let adapter = Arc::new(MemoryAdapter::new()) as Arc<dyn DbAdapter>;
+    let context = context_with_plugin_options(
+        adapter.clone(),
+        oauth_plugin(config),
+        RustAuthOptions {
+            rate_limit: RateLimitOptions {
+                enabled: Some(false),
+                ..RateLimitOptions::default()
+            },
+            ..RustAuthOptions::default()
+        },
+    );
+    let state = generate_oauth_state(
+        &context,
+        Some(adapter.as_ref()),
+        OAuthStateInput {
+            callback_url: "/dashboard".to_owned(),
+            ..OAuthStateInput::default()
+        },
+    )
+    .await?;
+    let state = state_with_oauth_cookie(
+        state.state,
+        format!(
+            "{}={}",
+            context.auth_cookies.oauth_state.name, state.data.oauth_state
+        ),
+    );
+    let router = AuthRouter::try_new(context, Vec::new())?;
+
+    let response = oauth_callback(&router, "example", "code-1", &state).await?;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        location(&response),
+        Some("https://app.example.com/error?error=user_info_is_missing")
+    );
+    assert!(DbUserStore::new(adapter.as_ref())
+        .find_user_by_email("forged@example.com")
+        .await?
+        .is_none());
+    assert!(!response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|cookie| cookie.starts_with("rustauth.session_token=")
+            || cookie.starts_with("__Secure-rustauth.session_token=")));
+    Ok(())
 }
 
 #[tokio::test]
