@@ -1,0 +1,6 @@
+.agents/
+plans/
+.env
+reference/upstream-better-auth/
+reference/upstream-src/README.md
+reference/upstream-src/1.6.9/repository/
