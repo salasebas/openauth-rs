@@ -88,6 +88,48 @@ async fn saml_slo_logout_response_requires_signature_when_configured(
 }
 
 #[tokio::test]
+async fn saml_slo_redirect_logout_response_rejects_inflated_message_over_configured_size_limit(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut options = SsoOptions::default();
+    options.saml.enable_single_logout = true;
+    options.saml.max_logout_message_size = 512;
+    let max_logout_message_size = options.saml.max_logout_message_size;
+    let (adapter, router) = router_with_options(options)?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+    let filler = "a".repeat(max_logout_message_size * 4);
+    let issue_instant =
+        time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?;
+    let xml = format!(
+        r#"<samlp:LogoutResponse xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="oversized-logout-response" Version="2.0" IssueInstant="{issue_instant}" Destination="https://app.example.com/sso/saml2/sp/slo/saml-okta"><saml:Issuer>https://idp.example.com</saml:Issuer><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status><samlp:Extensions>{filler}</samlp:Extensions></samlp:LogoutResponse>"#
+    );
+    assert!(xml.len() > max_logout_message_size);
+    let saml_response = deflate_redirect_binding(&xml)?;
+    assert!(saml_response.len() < max_logout_message_size);
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("SAMLResponse", &saml_response)
+        .append_pair("RelayState", "/logged-out")
+        .finish();
+
+    let response = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!("/sso/saml2/sp/slo/saml-okta?{query}"),
+            "",
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        json_body(response)?["code"],
+        "SAML_LOGOUT_MESSAGE_TOO_LARGE"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn saml_slo_uses_post_form_for_post_logout_response() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut options = SsoOptions::default();

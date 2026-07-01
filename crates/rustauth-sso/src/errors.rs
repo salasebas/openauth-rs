@@ -184,6 +184,11 @@ const ERROR_DESCRIPTORS: &[SsoErrorDescriptor] = &[
         SsoErrorCategory::IdentityProviderRuntime,
     ),
     descriptor(
+        "SAML_LOGOUT_MESSAGE_TOO_LARGE",
+        "SAML logout message is too large",
+        SsoErrorCategory::IdentityProviderRuntime,
+    ),
+    descriptor(
         "SAML_RESPONSE_NOT_SUCCESS",
         "SAML response was not successful",
         SsoErrorCategory::IdentityProviderRuntime,

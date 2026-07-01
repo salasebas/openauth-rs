@@ -1,12 +1,14 @@
 use http::Method;
 use rustauth_core::api::{ApiRequest, ApiResponse};
 use rustauth_core::context::AuthContext;
+use rustauth_core::error::RustAuthError;
+use serde_json::json;
 
 use crate::audit;
 use crate::options::{SamlConfig, SsoAuditEvent, SsoAuditEventKind, SsoAuditSeverity, SsoOptions};
 use crate::saml_impl::logout::{
-    parse_post_logout_request_with_context, parse_post_logout_response_with_context,
-    parse_redirect_logout_request_with_redirect_query,
+    is_saml_logout_message_too_large, parse_post_logout_request_with_context,
+    parse_post_logout_response_with_context, parse_redirect_logout_request_with_redirect_query,
     parse_redirect_logout_response_with_redirect_query, ParsedSamlLogoutRequest,
     ParsedSamlLogoutResponse, SamlLogoutParseContext,
 };
@@ -40,17 +42,23 @@ pub(super) async fn parse_verified_logout_response(
         base_url: &context.base_url,
         provider_id: &provider.provider_id,
         build_options: crate::routes::slo::logout_build_options(options),
+        max_message_size: options.saml.max_logout_message_size,
     };
-    let mut message = if method == Method::GET {
-        parse_redirect_logout_response_with_redirect_query(
-            encoded_response,
-            &parse_context,
-            &saml_redirect_query(request),
-        )
-    } else {
-        parse_post_logout_response_with_context(encoded_response, &parse_context)
-    }
-    .map_err(|error| rustauth_core::error::RustAuthError::Api(error.to_string()))?;
+    let mut message = match logout_parse_result(
+        if method == Method::GET {
+            parse_redirect_logout_response_with_redirect_query(
+                encoded_response,
+                &parse_context,
+                &saml_redirect_query(request),
+            )
+        } else {
+            parse_post_logout_response_with_context(encoded_response, &parse_context)
+        },
+        options.saml.max_logout_message_size,
+    )? {
+        Ok(message) => message,
+        Err(response) => return Ok(Err(response)),
+    };
     let signature_verified = match verify_logout_response_signature(
         SignatureVerificationInput {
             context,
@@ -91,17 +99,23 @@ pub(super) async fn parse_verified_logout_request(
         base_url: &context.base_url,
         provider_id: &provider.provider_id,
         build_options: crate::routes::slo::logout_build_options(options),
+        max_message_size: options.saml.max_logout_message_size,
     };
-    let mut message = if method == Method::GET {
-        parse_redirect_logout_request_with_redirect_query(
-            encoded_request,
-            &parse_context,
-            &saml_redirect_query(request),
-        )
-    } else {
-        parse_post_logout_request_with_context(encoded_request, &parse_context)
-    }
-    .map_err(|error| rustauth_core::error::RustAuthError::Api(error.to_string()))?;
+    let mut message = match logout_parse_result(
+        if method == Method::GET {
+            parse_redirect_logout_request_with_redirect_query(
+                encoded_request,
+                &parse_context,
+                &saml_redirect_query(request),
+            )
+        } else {
+            parse_post_logout_request_with_context(encoded_request, &parse_context)
+        },
+        options.saml.max_logout_message_size,
+    )? {
+        Ok(message) => message,
+        Err(response) => return Ok(Err(response)),
+    };
     let signature_verified = match verify_logout_request_signature(
         SignatureVerificationInput {
             context,
@@ -123,6 +137,25 @@ pub(super) async fn parse_verified_logout_request(
         message,
         signature_verified,
     }))
+}
+
+fn logout_parse_result<T>(
+    result: Result<T, RustAuthError>,
+    max_message_size: usize,
+) -> Result<Result<T, ApiResponse>, RustAuthError> {
+    match result {
+        Ok(message) => Ok(Ok(message)),
+        Err(error) if is_saml_logout_message_too_large(&error) => Ok(Err(crate::utils::json(
+            http::StatusCode::PAYLOAD_TOO_LARGE,
+            &json!({
+                "code": "SAML_LOGOUT_MESSAGE_TOO_LARGE",
+                "message": format!(
+                    "SAML logout message exceeds maximum allowed size ({max_message_size} bytes)"
+                ),
+            }),
+        )?)),
+        Err(error) => Err(RustAuthError::Api(error.to_string())),
+    }
 }
 
 struct SignatureVerificationInput<'a> {

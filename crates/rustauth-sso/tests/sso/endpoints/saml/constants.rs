@@ -1,4 +1,7 @@
-use rustauth_sso::{SsoOptions, DEFAULT_MAX_SAML_METADATA_SIZE, DEFAULT_MAX_SAML_RESPONSE_SIZE};
+use rustauth_sso::{
+    SsoOptions, DEFAULT_MAX_SAML_LOGOUT_MESSAGE_SIZE, DEFAULT_MAX_SAML_METADATA_SIZE,
+    DEFAULT_MAX_SAML_RESPONSE_SIZE,
+};
 
 #[test]
 fn default_max_saml_size_constants_match_saml_options_defaults() {
@@ -10,5 +13,9 @@ fn default_max_saml_size_constants_match_saml_options_defaults() {
     assert_eq!(
         DEFAULT_MAX_SAML_METADATA_SIZE,
         options.saml.max_metadata_size
+    );
+    assert_eq!(
+        DEFAULT_MAX_SAML_LOGOUT_MESSAGE_SIZE,
+        options.saml.max_logout_message_size
     );
 }

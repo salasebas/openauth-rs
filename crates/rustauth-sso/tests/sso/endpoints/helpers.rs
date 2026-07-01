@@ -552,6 +552,15 @@ pub(super) fn inflate_redirect_binding(value: &str) -> Result<String, Box<dyn st
 }
 
 #[cfg(feature = "saml")]
+pub(super) fn deflate_redirect_binding(xml: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut encoder =
+        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, xml.as_bytes())?;
+    let compressed = encoder.finish()?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(compressed))
+}
+
+#[cfg(feature = "saml")]
 pub(super) fn logout_request_id_from_location(
     location: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
