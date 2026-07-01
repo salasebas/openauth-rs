@@ -15,6 +15,11 @@ use serde_json::Value;
 
 use crate::errors::ScimError;
 
+const FILTER_MAX_LENGTH_BYTES: usize = 8 * 1024;
+const FILTER_MAX_TOKENS: usize = 512;
+const FILTER_MAX_DEPTH: usize = 32;
+const FILTER_MAX_EXPRESSIONS: usize = 256;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScimFilterOperator {
     Eq,
@@ -85,12 +90,16 @@ impl From<&str> for ScimAttributePath {
 }
 
 pub fn parse_filter(filter: &str) -> Result<ScimFilterExpression, ScimError> {
+    if filter.len() > FILTER_MAX_LENGTH_BYTES {
+        return Err(filter_too_complex());
+    }
     let tokens = tokenize(filter)?;
     let mut parser = FilterParser { tokens, cursor: 0 };
-    let expression = parser.parse_or()?;
+    let expression = parser.parse_or(1)?;
     if parser.peek().is_some() {
         return Err(invalid_filter("Invalid filter expression"));
     }
+    validate_expression_budget(&expression, 1)?;
     Ok(expression)
 }
 
@@ -310,38 +319,44 @@ struct FilterParser {
 }
 
 impl FilterParser {
-    fn parse_or(&mut self) -> Result<ScimFilterExpression, ScimError> {
-        let mut expression = self.parse_and()?;
+    fn parse_or(&mut self, depth: usize) -> Result<ScimFilterExpression, ScimError> {
+        ensure_filter_depth(depth)?;
+        let mut expression = self.parse_and(depth)?;
         while self.consume_word("or") {
             expression =
-                ScimFilterExpression::Or(Box::new(expression), Box::new(self.parse_and()?));
+                ScimFilterExpression::Or(Box::new(expression), Box::new(self.parse_and(depth)?));
         }
         Ok(expression)
     }
 
-    fn parse_and(&mut self) -> Result<ScimFilterExpression, ScimError> {
-        let mut expression = self.parse_not()?;
+    fn parse_and(&mut self, depth: usize) -> Result<ScimFilterExpression, ScimError> {
+        ensure_filter_depth(depth)?;
+        let mut expression = self.parse_not(depth)?;
         while self.consume_word("and") {
             expression =
-                ScimFilterExpression::And(Box::new(expression), Box::new(self.parse_not()?));
+                ScimFilterExpression::And(Box::new(expression), Box::new(self.parse_not(depth)?));
         }
         Ok(expression)
     }
 
-    fn parse_not(&mut self) -> Result<ScimFilterExpression, ScimError> {
+    fn parse_not(&mut self, depth: usize) -> Result<ScimFilterExpression, ScimError> {
+        ensure_filter_depth(depth)?;
         if self.consume_word("not") {
-            return Ok(ScimFilterExpression::Not(Box::new(self.parse_not()?)));
+            return Ok(ScimFilterExpression::Not(Box::new(
+                self.parse_not(depth + 1)?,
+            )));
         }
-        self.parse_primary()
+        self.parse_primary(depth)
     }
 
-    fn parse_primary(&mut self) -> Result<ScimFilterExpression, ScimError> {
+    fn parse_primary(&mut self, depth: usize) -> Result<ScimFilterExpression, ScimError> {
+        ensure_filter_depth(depth)?;
         if self.consume_symbol(&Token::LeftParen) {
-            let expression = self.parse_or()?;
+            let expression = self.parse_or(depth + 1)?;
             self.expect_symbol(&Token::RightParen)?;
             return Ok(expression);
         }
-        let path = self.parse_path()?;
+        let path = self.parse_path(depth)?;
         if self.consume_word("pr") {
             return Ok(ScimFilterExpression::Present(path));
         }
@@ -356,7 +371,8 @@ impl FilterParser {
         })
     }
 
-    fn parse_path(&mut self) -> Result<ScimAttributePath, ScimError> {
+    fn parse_path(&mut self, depth: usize) -> Result<ScimAttributePath, ScimError> {
+        ensure_filter_depth(depth)?;
         let Some(Token::Word(mut attribute)) = self.next().cloned() else {
             return Err(invalid_filter("Invalid filter expression"));
         };
@@ -366,7 +382,7 @@ impl FilterParser {
                 sub_attribute
             });
         let value_filter = if self.consume_symbol(&Token::LeftBracket) {
-            let filter = self.parse_or()?;
+            let filter = self.parse_or(depth + 1)?;
             self.expect_symbol(&Token::RightBracket)?;
             Some(Box::new(filter))
         } else {
@@ -480,22 +496,28 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ScimError> {
     while let Some((index, ch)) = chars.next() {
         match ch {
             ch if ch.is_whitespace() => {}
-            '(' => tokens.push(Token::LeftParen),
-            ')' => tokens.push(Token::RightParen),
-            '[' => tokens.push(Token::LeftBracket),
-            ']' => tokens.push(Token::RightBracket),
-            '.' => tokens.push(Token::Dot),
-            '"' => tokens.push(Token::String(read_string(input, &mut chars)?)),
-            '-' | '0'..='9' => tokens.push(Token::Number(read_number(input, index, &mut chars))),
+            '(' => push_token(&mut tokens, Token::LeftParen)?,
+            ')' => push_token(&mut tokens, Token::RightParen)?,
+            '[' => push_token(&mut tokens, Token::LeftBracket)?,
+            ']' => push_token(&mut tokens, Token::RightBracket)?,
+            '.' => push_token(&mut tokens, Token::Dot)?,
+            '"' => push_token(&mut tokens, Token::String(read_string(input, &mut chars)?))?,
+            '-' | '0'..='9' => {
+                push_token(
+                    &mut tokens,
+                    Token::Number(read_number(input, index, &mut chars)),
+                )?;
+            }
             _ => {
                 if is_word_char(ch) {
                     let word = read_word(input, index, &mut chars);
-                    tokens.push(match word.to_ascii_lowercase().as_str() {
+                    let token = match word.to_ascii_lowercase().as_str() {
                         "true" => Token::Boolean(true),
                         "false" => Token::Boolean(false),
                         "null" => Token::Null,
                         _ => Token::Word(word),
-                    });
+                    };
+                    push_token(&mut tokens, token)?;
                 } else {
                     return Err(invalid_filter("Invalid filter expression"));
                 }
@@ -506,6 +528,52 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ScimError> {
         return Err(invalid_filter("Invalid filter expression"));
     }
     Ok(tokens)
+}
+
+fn push_token(tokens: &mut Vec<Token>, token: Token) -> Result<(), ScimError> {
+    if tokens.len() >= FILTER_MAX_TOKENS {
+        return Err(filter_too_complex());
+    }
+    tokens.push(token);
+    Ok(())
+}
+
+fn validate_expression_budget(
+    expression: &ScimFilterExpression,
+    depth: usize,
+) -> Result<usize, ScimError> {
+    ensure_filter_depth(depth)?;
+    let expressions = match expression {
+        ScimFilterExpression::Compare { path, .. } | ScimFilterExpression::Present(path) => {
+            1 + validate_path_budget(path, depth + 1)?
+        }
+        ScimFilterExpression::And(left, right) | ScimFilterExpression::Or(left, right) => {
+            1 + validate_expression_budget(left, depth + 1)?
+                + validate_expression_budget(right, depth + 1)?
+        }
+        ScimFilterExpression::Not(expression) => {
+            1 + validate_expression_budget(expression, depth + 1)?
+        }
+    };
+    if expressions > FILTER_MAX_EXPRESSIONS {
+        return Err(filter_too_complex());
+    }
+    Ok(expressions)
+}
+
+fn validate_path_budget(path: &ScimAttributePath, depth: usize) -> Result<usize, ScimError> {
+    if let Some(filter) = path.value_filter.as_deref() {
+        validate_expression_budget(filter, depth)
+    } else {
+        Ok(0)
+    }
+}
+
+fn ensure_filter_depth(depth: usize) -> Result<(), ScimError> {
+    if depth > FILTER_MAX_DEPTH {
+        return Err(filter_too_complex());
+    }
+    Ok(())
 }
 
 fn read_string(
@@ -591,4 +659,8 @@ fn split_embedded_sub_attribute(path: &str) -> Option<(String, String)> {
 
 fn invalid_filter(detail: impl Into<String>) -> ScimError {
     ScimError::new(StatusCode::BAD_REQUEST, detail).with_scim_type("invalidFilter")
+}
+
+fn filter_too_complex() -> ScimError {
+    invalid_filter("Filter expression exceeds complexity limits")
 }

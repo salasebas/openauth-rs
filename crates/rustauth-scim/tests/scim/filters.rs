@@ -111,6 +111,50 @@ fn parses_not_and_value_path_filter() {
 }
 
 #[test]
+fn accepts_reasonable_nested_filter() -> Result<(), Box<dyn std::error::Error>> {
+    let filter = r#"(((userName eq "ada@example.com")))"#;
+    parse_filter(filter).map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+
+    let resource = serde_json::json!({
+        "userName": "ada@example.com",
+    });
+    assert!(resource_matches_filter(&resource, filter)
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?);
+    Ok(())
+}
+
+#[test]
+fn rejects_excessively_deep_filter() -> Result<(), Box<dyn std::error::Error>> {
+    let filter = format!(
+        "{}userName eq \"ada@example.com\"{}",
+        "(".repeat(80),
+        ")".repeat(80)
+    );
+    let error = parse_filter(&filter)
+        .err()
+        .ok_or_else(|| std::io::Error::other("excessively deep filter should be rejected"))?;
+
+    assert_eq!(error.status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(error.scim_type.as_deref(), Some("invalidFilter"));
+    Ok(())
+}
+
+#[test]
+fn rejects_excessively_complex_filter() -> Result<(), Box<dyn std::error::Error>> {
+    let filter = (0..600)
+        .map(|_| r#"userName eq "ada@example.com""#)
+        .collect::<Vec<_>>()
+        .join(" or ");
+    let error = parse_filter(&filter)
+        .err()
+        .ok_or_else(|| std::io::Error::other("excessively complex filter should be rejected"))?;
+
+    assert_eq!(error.status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(error.scim_type.as_deref(), Some("invalidFilter"));
+    Ok(())
+}
+
+#[test]
 fn parses_presence_and_extension_urn_paths() {
     let filter =
         parse_filter("urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department pr")
