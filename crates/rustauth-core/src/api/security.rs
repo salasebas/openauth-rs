@@ -1,4 +1,4 @@
-use http::{Method, StatusCode};
+use http::{header, Method, StatusCode};
 use serde_json::Value;
 
 use crate::auth::trusted_origins::OriginMatchSettings;
@@ -7,6 +7,16 @@ use crate::error::RustAuthError;
 
 use super::endpoint::{ApiRequest, ApiResponse};
 use super::error::{api_error, ApiErrorCode};
+
+const CALLBACK_URL_KEYS: &[(&str, &str)] = &[
+    ("callbackURL", "callbackURL"),
+    ("callbackUrl", "callbackURL"),
+    ("redirectTo", "redirectURL"),
+    ("errorCallbackURL", "errorCallbackURL"),
+    ("errorCallbackUrl", "errorCallbackURL"),
+    ("newUserCallbackURL", "newUserCallbackURL"),
+    ("newUserCallbackUrl", "newUserCallbackURL"),
+];
 
 pub(super) fn validate_request_security(
     context: &AuthContext,
@@ -95,31 +105,48 @@ fn header_value<'a>(request: &'a ApiRequest, name: &str) -> Option<&'a str> {
 
 fn callback_urls(request: &ApiRequest) -> Vec<(&'static str, String)> {
     let mut urls = Vec::new();
-    for key in [
-        "callbackURL",
-        "redirectTo",
-        "errorCallbackURL",
-        "newUserCallbackURL",
-    ] {
+    for (key, label) in CALLBACK_URL_KEYS.iter().copied() {
         if let Some(value) = query_param(request.uri().query(), key) {
-            urls.push((url_label(key), value));
+            urls.push((label, value));
         }
     }
 
     if let Ok(Value::Object(body)) = serde_json::from_slice::<Value>(request.body()) {
-        for key in [
-            "callbackURL",
-            "redirectTo",
-            "errorCallbackURL",
-            "newUserCallbackURL",
-        ] {
+        for (key, label) in CALLBACK_URL_KEYS.iter().copied() {
             if let Some(Value::String(value)) = body.get(key) {
-                urls.push((url_label(key), value.clone()));
+                urls.push((label, value.clone()));
+            }
+        }
+    }
+
+    if is_form_urlencoded(request) {
+        let Ok(body) = std::str::from_utf8(request.body()) else {
+            return urls;
+        };
+        for (name, value) in url::form_urlencoded::parse(body.as_bytes()) {
+            if let Some((_, label)) = CALLBACK_URL_KEYS
+                .iter()
+                .find(|(key, _label)| *key == name.as_ref())
+            {
+                urls.push((*label, value.into_owned()));
             }
         }
     }
 
     urls
+}
+
+fn is_form_urlencoded(request: &ApiRequest) -> bool {
+    request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|content_type| content_type.split(';').next())
+        .is_some_and(|media_type| {
+            media_type
+                .trim()
+                .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+        })
 }
 
 fn query_param(query: Option<&str>, key: &str) -> Option<String> {
@@ -167,16 +194,6 @@ fn hex_value(byte: u8) -> Option<u8> {
         b'a'..=b'f' => Some(byte - b'a' + 10),
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
-    }
-}
-
-fn url_label(key: &str) -> &'static str {
-    match key {
-        "callbackURL" => "callbackURL",
-        "redirectTo" => "redirectURL",
-        "errorCallbackURL" => "errorCallbackURL",
-        "newUserCallbackURL" => "newUserCallbackURL",
-        _ => "url",
     }
 }
 
