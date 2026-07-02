@@ -21,7 +21,8 @@ pub(super) fn userinfo_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> A
                     ));
                 };
                 let Some(validated) =
-                    validate_access_token(&context, adapter.as_ref(), &options, &token).await?
+                    validate_access_token(&context, adapter.as_ref(), &options, &token, None)
+                        .await?
                 else {
                     return error_response(OAuthProviderError::new(
                         StatusCode::UNAUTHORIZED,

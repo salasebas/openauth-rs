@@ -120,7 +120,8 @@ pub async fn validate_bearer_token(
     let Some(token) = authorization.and_then(parse_bearer_token) else {
         return Ok(None);
     };
-    let Some(validated) = validate_access_token(context, adapter, options, token).await? else {
+    let Some(validated) = validate_access_token(context, adapter, options, token, None).await?
+    else {
         return Ok(None);
     };
     if !validated.active {

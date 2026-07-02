@@ -5,6 +5,7 @@ pub(crate) async fn validate_access_token(
     adapter: &dyn DbAdapter,
     options: &ResolvedOAuthProviderOptions,
     token: &str,
+    authenticated_client_id: Option<&str>,
 ) -> Result<Option<ValidatedAccessToken>, RustAuthError> {
     let stored = store_token(options, token, "access_token").await?;
     if let Some(record) = adapter
@@ -13,6 +14,11 @@ pub(crate) async fn validate_access_token(
     {
         let active = timestamp(&record, "expires_at").is_some_and(|expires| expires > now());
         let client_id = string(&record, "client_id");
+        if authenticated_client_id
+            .is_some_and(|expected_client_id| client_id.as_deref() != Some(expected_client_id))
+        {
+            return Ok(Some(inactive_access_token()));
+        }
         let user_id = string(&record, "user_id");
         let scopes = string_array(&record, "scopes").unwrap_or_default();
         let sub = match (&client_id, &user_id) {
@@ -89,6 +95,11 @@ pub(crate) async fn validate_access_token(
                     .unwrap_or_default();
                 let user_id = claims.get("sub").and_then(Value::as_str).map(str::to_owned);
                 let client_id = claims.get("azp").and_then(Value::as_str).map(str::to_owned);
+                if authenticated_client_id.is_some_and(|expected_client_id| {
+                    client_id.as_deref() != Some(expected_client_id)
+                }) {
+                    return Ok(Some(inactive_access_token()));
+                }
                 let mut response = Value::Object(claims);
                 if let Value::Object(map) = &mut response {
                     map.insert("active".to_owned(), Value::Bool(true));
@@ -113,44 +124,74 @@ pub(crate) async fn validate_access_token(
     Ok(None)
 }
 
+fn inactive_access_token() -> ValidatedAccessToken {
+    ValidatedAccessToken {
+        active: false,
+        claims: json!({ "active": false }),
+        user_id: None,
+        client_id: None,
+        scopes: Vec::new(),
+    }
+}
+
 pub async fn introspect_token_with_hint(
     context: &AuthContext,
     adapter: &dyn DbAdapter,
     options: &ResolvedOAuthProviderOptions,
     token: &str,
     token_type_hint: Option<&str>,
+    authenticated_client_id: &str,
 ) -> Result<serde_json::Value, RustAuthError> {
     match token_type_hint {
         Some("access_token") => {
-            return Ok(validate_access_token(context, adapter, options, token)
-                .await?
-                .map(|validated| validated.claims)
-                .unwrap_or_else(|| serde_json::json!({ "active": false })));
+            return Ok(validate_access_token(
+                context,
+                adapter,
+                options,
+                token,
+                Some(authenticated_client_id),
+            )
+            .await?
+            .map(|validated| validated.claims)
+            .unwrap_or_else(|| serde_json::json!({ "active": false })));
         }
         Some("refresh_token") => {
-            return introspect_refresh_token(adapter, options, token).await;
+            return introspect_refresh_token(adapter, options, token, authenticated_client_id)
+                .await;
         }
         Some(_) => {
             return Err(OAuthProviderError::invalid_request("unsupported token_type_hint").into());
         }
         None => {}
     }
-    if let Some(validated) = validate_access_token(context, adapter, options, token).await? {
+    if let Some(validated) = validate_access_token(
+        context,
+        adapter,
+        options,
+        token,
+        Some(authenticated_client_id),
+    )
+    .await?
+    {
         return Ok(validated.claims);
     }
-    introspect_refresh_token(adapter, options, token).await
+    introspect_refresh_token(adapter, options, token, authenticated_client_id).await
 }
 
 async fn introspect_refresh_token(
     adapter: &dyn DbAdapter,
     options: &ResolvedOAuthProviderOptions,
     token: &str,
+    authenticated_client_id: &str,
 ) -> Result<serde_json::Value, RustAuthError> {
     if let Some(stored) = stored_refresh_token_for_lookup(options, token).await? {
         if let Some(record) = adapter
             .find_one(find_by_string(OAUTH_REFRESH_TOKEN_MODEL, "token", &stored))
             .await?
         {
+            if !token_record_belongs_to_client(&record, authenticated_client_id) {
+                return Ok(serde_json::json!({ "active": false }));
+            }
             let active = timestamp(&record, "revoked").is_none()
                 && timestamp(&record, "expires_at").is_some_and(|expires| expires > now());
             return Ok(serde_json::json!({
@@ -218,13 +259,14 @@ pub async fn revoke_token_with_hint(
     options: &ResolvedOAuthProviderOptions,
     token: &str,
     token_type_hint: Option<&str>,
+    authenticated_client_id: &str,
 ) -> Result<(), RustAuthError> {
     match token_type_hint {
         Some("access_token") => {
-            if revoke_access_token(adapter, options, token).await? {
+            if revoke_access_token(adapter, options, token, authenticated_client_id).await? {
                 return Ok(());
             }
-            if refresh_token_exists(adapter, options, token).await? {
+            if refresh_token_exists(adapter, options, token, authenticated_client_id).await? {
                 return Err(OAuthProviderError::new(
                     http::StatusCode::BAD_REQUEST,
                     "invalid_token",
@@ -235,10 +277,10 @@ pub async fn revoke_token_with_hint(
             return Ok(());
         }
         Some("refresh_token") => {
-            if revoke_refresh_token(adapter, options, token).await? {
+            if revoke_refresh_token(adapter, options, token, authenticated_client_id).await? {
                 return Ok(());
             }
-            if access_token_exists(adapter, options, token).await? {
+            if access_token_exists(adapter, options, token, authenticated_client_id).await? {
                 return Err(OAuthProviderError::new(
                     http::StatusCode::BAD_REQUEST,
                     "invalid_token",
@@ -253,8 +295,8 @@ pub async fn revoke_token_with_hint(
         }
         None => {}
     }
-    revoke_access_token(adapter, options, token).await?;
-    revoke_refresh_token(adapter, options, token).await?;
+    revoke_access_token(adapter, options, token, authenticated_client_id).await?;
+    revoke_refresh_token(adapter, options, token, authenticated_client_id).await?;
     Ok(())
 }
 
@@ -262,20 +304,22 @@ async fn access_token_exists(
     adapter: &dyn DbAdapter,
     options: &ResolvedOAuthProviderOptions,
     token: &str,
+    authenticated_client_id: &str,
 ) -> Result<bool, RustAuthError> {
     let stored = store_token(options, token, "access_token").await?;
     Ok(adapter
         .find_one(find_by_string(OAUTH_ACCESS_TOKEN_MODEL, "token", &stored))
         .await?
-        .is_some())
+        .is_some_and(|record| token_record_belongs_to_client(&record, authenticated_client_id)))
 }
 
 async fn revoke_access_token(
     adapter: &dyn DbAdapter,
     options: &ResolvedOAuthProviderOptions,
     token: &str,
+    authenticated_client_id: &str,
 ) -> Result<bool, RustAuthError> {
-    let existed = access_token_exists(adapter, options, token).await?;
+    let existed = access_token_exists(adapter, options, token, authenticated_client_id).await?;
     if existed {
         let stored = store_token(options, token, "access_token").await?;
         adapter
@@ -289,6 +333,7 @@ async fn refresh_token_exists(
     adapter: &dyn DbAdapter,
     options: &ResolvedOAuthProviderOptions,
     token: &str,
+    authenticated_client_id: &str,
 ) -> Result<bool, RustAuthError> {
     let Some(stored_refresh_token) = stored_refresh_token_for_lookup(options, token).await? else {
         return Ok(false);
@@ -300,24 +345,27 @@ async fn refresh_token_exists(
             &stored_refresh_token,
         ))
         .await?
-        .is_some())
+        .is_some_and(|record| token_record_belongs_to_client(&record, authenticated_client_id)))
 }
 
 async fn revoke_refresh_token(
     adapter: &dyn DbAdapter,
     options: &ResolvedOAuthProviderOptions,
     token: &str,
+    authenticated_client_id: &str,
 ) -> Result<bool, RustAuthError> {
     if let Some(stored_refresh_token) = stored_refresh_token_for_lookup(options, token).await? {
-        if adapter
+        let Some(record) = adapter
             .find_one(find_by_string(
                 OAUTH_REFRESH_TOKEN_MODEL,
                 "token",
                 &stored_refresh_token,
             ))
             .await?
-            .is_none()
-        {
+        else {
+            return Ok(false);
+        };
+        if !token_record_belongs_to_client(&record, authenticated_client_id) {
             return Ok(false);
         }
         let mut revoke = DbRecord::new();
@@ -333,4 +381,8 @@ async fn revoke_refresh_token(
         return Ok(true);
     }
     Ok(false)
+}
+
+fn token_record_belongs_to_client(record: &DbRecord, authenticated_client_id: &str) -> bool {
+    string(record, "client_id").as_deref() == Some(authenticated_client_id)
 }
