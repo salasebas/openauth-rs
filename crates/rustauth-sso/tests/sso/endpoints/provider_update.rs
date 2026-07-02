@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn update_provider_applies_owner_scope_and_resets_domain_verification(
+async fn update_provider_ignores_organization_id_and_resets_domain_verification(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) =
         router_with_options(SsoOptions::default().domain_verification_enabled(true))?;
@@ -29,7 +29,7 @@ async fn update_provider_applies_owner_scope_and_resets_domain_verification(
     assert_eq!(body["providerId"], "okta");
     assert_eq!(body["issuer"], "https://login.example.com");
     assert_eq!(body["domain"], "corp.example.com");
-    assert_eq!(body["organizationId"], "org_1");
+    assert!(body["organizationId"].is_null());
     assert_eq!(body["domainVerified"], false);
 
     let records = adapter.records("sso_provider").await;
@@ -37,23 +37,16 @@ async fn update_provider_applies_owner_scope_and_resets_domain_verification(
         records[0].get("domain"),
         Some(&DbValue::String("corp.example.com".to_owned()))
     );
-    assert_eq!(
-        records[0].get("organization_id"),
-        Some(&DbValue::String("org_1".to_owned()))
-    );
+    assert_eq!(records[0].get("organization_id"), Some(&DbValue::Null));
 
     Ok(())
 }
 
 #[tokio::test]
-async fn update_provider_rejects_organization_id_without_membership(
+async fn update_provider_rejects_organization_id_only_as_no_update_fields(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (adapter, router) = router_with_options_and_extra_plugins(
-        SsoOptions::default(),
-        vec![AuthPlugin::new("organization")],
-    )?;
+    let (adapter, router) = router_with_options(SsoOptions::default())?;
     let cookie = seed_session(&adapter).await?;
-    seed_organization(&adapter, "org_1", "acme").await?;
     router
         .handle_async(json_request(
             Method::POST,
@@ -73,10 +66,7 @@ async fn update_provider_rejects_organization_id_without_membership(
         .await?;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(response)?["code"],
-        "ORGANIZATION_MEMBERSHIP_REQUIRED"
-    );
+    assert_eq!(json_body(response)?["code"], "NO_UPDATE_FIELDS");
     let records = adapter.records("sso_provider").await;
     assert_eq!(records[0].get("organization_id"), Some(&DbValue::Null));
 

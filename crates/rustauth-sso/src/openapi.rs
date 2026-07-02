@@ -32,7 +32,6 @@ pub fn update_provider_body_schema() -> BodySchema {
         BodyField::new("providerId", JsonSchemaType::String),
         BodyField::optional("issuer", JsonSchemaType::String).format("uri"),
         BodyField::optional("domain", JsonSchemaType::String),
-        BodyField::optional("organizationId", JsonSchemaType::String),
         BodyField::optional("oidcConfig", JsonSchemaType::Object).description(
             "OIDC provider configuration. Manual skipDiscovery endpoints may be validated against trusted origins when strict_oidc_manual_endpoint_origins is enabled.",
         ),
