@@ -262,6 +262,48 @@ async fn require_verification_blocks_sign_in_and_sends_otp(
 }
 
 #[tokio::test]
+async fn require_verification_does_not_send_otp_for_wrong_password(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sent = Arc::new(Mutex::new(0));
+    let adapter = Arc::new(MemoryAdapter::new());
+    seed_user_with_phone(&adapter, PHONE, false).await?;
+    DbUserStore::new(adapter.as_ref())
+        .create_credential_account(CreateCredentialAccountInput::new(
+            "user_1",
+            fast_hash_password("secret123")?,
+        ))
+        .await?;
+    let options = PhoneNumberOptions::default()
+        .require_verification(true)
+        .send_otp({
+            let sent = Arc::clone(&sent);
+            move |_phone, _code| {
+                *sent
+                    .lock()
+                    .map_err(|_| RustAuthError::Api("lock poisoned".to_owned()))? += 1;
+                Ok(())
+            }
+        });
+    let router = router_with_options(options, adapter.clone())?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/api/auth/sign-in/phone-number",
+            &format!(r#"{{"phoneNumber":"{PHONE}","password":"wrong-password"}}"#),
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "INVALID_PHONE_NUMBER_OR_PASSWORD");
+    assert_eq!(*sent.lock().map_err(|_| "lock poisoned")?, 0);
+    assert!(find_verification(&adapter, PHONE).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn callback_on_verification_receives_updated_phone_and_user_id(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let captured = Arc::new(Mutex::new(Vec::new()));

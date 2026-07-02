@@ -62,16 +62,6 @@ pub(crate) fn endpoint(options: Arc<PhoneNumberOptions>) -> AsyncAuthEndpoint {
                         invalid_phone_number_or_password(),
                     );
                 };
-                if options.require_verification && !user.phone_number_verified {
-                    send_sign_in_verification(
-                        &context,
-                        adapter.as_ref(),
-                        &options,
-                        &body.phone_number,
-                    )
-                    .await?;
-                    return error_response(StatusCode::UNAUTHORIZED, phone_number_not_verified());
-                }
                 let Some(account) = context.users()?.find_credential_account(&user.id).await?
                 else {
                     return error_response(
@@ -87,6 +77,16 @@ pub(crate) fn endpoint(options: Arc<PhoneNumberOptions>) -> AsyncAuthEndpoint {
                         StatusCode::UNAUTHORIZED,
                         invalid_phone_number_or_password(),
                     );
+                }
+                if options.require_verification && !user.phone_number_verified {
+                    send_sign_in_verification(
+                        &context,
+                        adapter.as_ref(),
+                        &options,
+                        &body.phone_number,
+                    )
+                    .await?;
+                    return error_response(StatusCode::UNAUTHORIZED, phone_number_not_verified());
                 }
                 let remember_me = body.remember_me.unwrap_or(true);
                 let (token, cookies) =
