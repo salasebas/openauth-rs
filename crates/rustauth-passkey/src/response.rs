@@ -16,6 +16,10 @@ pub fn not_allowed() -> Result<ApiResponse, RustAuthError> {
     )
 }
 
+pub fn invalid_origin() -> Result<ApiResponse, RustAuthError> {
+    error_response(StatusCode::FORBIDDEN, "INVALID_ORIGIN", "Invalid origin")
+}
+
 pub fn session_not_fresh() -> Result<ApiResponse, RustAuthError> {
     error_response(
         StatusCode::FORBIDDEN,

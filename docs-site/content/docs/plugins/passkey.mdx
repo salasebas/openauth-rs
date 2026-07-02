@@ -34,7 +34,7 @@ let auth = RustAuth::builder()
     .await?;
 ```
 
-When `rp_id` and `origin` are omitted, the plugin derives them from `base_url` or the request `Origin` header.
+When `rp_id` and `origin` are omitted, the plugin derives them from `base_url` or a request `Origin` header that is allowed by `trusted_origins`.
 
 ## Configuration
 

@@ -54,11 +54,23 @@ const PASSKEY_ORIGIN_REQUIRED: &str =
 const PASSKEY_RP_ID_REQUIRED: &str =
     "passkey requires an explicit rp_id or a host derivable from base_url or origin";
 
+#[derive(Debug)]
+pub(crate) enum WebAuthnConfigError {
+    InvalidOrigin,
+    RustAuth(RustAuthError),
+}
+
+impl From<RustAuthError> for WebAuthnConfigError {
+    fn from(error: RustAuthError) -> Self {
+        Self::RustAuth(error)
+    }
+}
+
 fn resolve_passkey_origins(
     context: &AuthContext,
     options: &PasskeyOptions,
     request: &ApiRequest,
-) -> Result<Vec<String>, RustAuthError> {
+) -> Result<Vec<String>, WebAuthnConfigError> {
     if !options.origin.is_empty() {
         return Ok(options.origin.clone());
     }
@@ -67,14 +79,18 @@ fn resolve_passkey_origins(
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok())
     {
-        return Ok(vec![origin.trim_end_matches('/').to_owned()]);
+        let origin = origin.trim_end_matches('/').to_owned();
+        if context.is_trusted_origin_for_request(&origin, None, Some(request))? {
+            return Ok(vec![origin]);
+        }
+        if context.base_url.is_empty() {
+            return Err(WebAuthnConfigError::InvalidOrigin);
+        }
     }
     if !context.base_url.is_empty() {
         return Ok(vec![context.base_url.trim_end_matches('/').to_owned()]);
     }
-    Err(RustAuthError::InvalidConfig(
-        PASSKEY_ORIGIN_REQUIRED.to_owned(),
-    ))
+    Err(RustAuthError::InvalidConfig(PASSKEY_ORIGIN_REQUIRED.to_owned()).into())
 }
 
 fn resolve_passkey_rp_id(
@@ -116,29 +132,9 @@ pub(crate) fn webauthn_config(
     context: &AuthContext,
     options: &PasskeyOptions,
     request: &ApiRequest,
-) -> Result<WebAuthnConfig, RustAuthError> {
+) -> Result<WebAuthnConfig, WebAuthnConfigError> {
     let origins = resolve_passkey_origins(context, options, request)?;
-    passkey_webauthn_config(context, options, origins)
-}
-
-pub(crate) fn verification_webauthn_config(
-    context: &AuthContext,
-    options: &PasskeyOptions,
-    request: &ApiRequest,
-) -> Result<Option<WebAuthnConfig>, RustAuthError> {
-    let origins = if options.origin.is_empty() {
-        let Some(origin) = request
-            .headers()
-            .get(header::ORIGIN)
-            .and_then(|value| value.to_str().ok())
-        else {
-            return Ok(None);
-        };
-        vec![origin.trim_end_matches('/').to_owned()]
-    } else {
-        options.origin.clone()
-    };
-    Ok(Some(passkey_webauthn_config(context, options, origins)?))
+    passkey_webauthn_config(context, options, origins).map_err(WebAuthnConfigError::from)
 }
 
 fn host_from_url(value: &str) -> Option<String> {

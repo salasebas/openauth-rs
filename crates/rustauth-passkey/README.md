@@ -50,6 +50,8 @@ let auth = RustAuth::builder()
 For production deployments, set an explicit public `base_url`, and configure
 `rp_id`/`origin` in `PasskeyOptions` when your auth server runs behind a proxy,
 custom domain, or multi-origin setup.
+If you omit `base_url` and rely on a request `Origin` header, list that origin
+in `trusted_origins` so passkey ceremonies fail closed for untrusted origins.
 
 Integration tests that inject a fake WebAuthn backend should enable the
 `test-util` feature on this crate and call `PasskeyOptions::backend(...)`.

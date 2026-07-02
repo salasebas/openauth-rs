@@ -24,7 +24,7 @@ use crate::options::{
     PasskeyRegistrationUser, RegistrationWebAuthnOptions, UserVerificationRequirement,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebAuthnConfig {
     pub rp_id: String,
     pub rp_name: String,
