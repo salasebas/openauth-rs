@@ -1,5 +1,11 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClientManagementEndpointKind {
+    Public,
+    Admin,
+}
+
 pub(super) fn register_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         "/oauth2/register",
@@ -42,11 +48,12 @@ pub(super) fn register_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> A
 pub(super) fn create_client_endpoint(
     path: &'static str,
     options: Arc<ResolvedOAuthProviderOptions>,
+    kind: ClientManagementEndpointKind,
 ) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         path,
         Method::POST,
-        AuthEndpointOptions::new().allowed_media_types(["application/json"]),
+        client_management_endpoint_options(kind),
         move |context, request| {
             let options = Arc::clone(&options);
             async move {
@@ -56,6 +63,9 @@ pub(super) fn create_client_endpoint(
                     ));
                 };
                 let body: OAuthClient = parse_body(&request)?;
+                if let Err(error) = reject_public_client_management_input(&body, kind) {
+                    return oauth_validation_error_response(error);
+                }
                 let current = current_session(&context, adapter.as_ref(), &request).await?;
                 let Some((session, user, _)) = current else {
                     return error_response(OAuthProviderError::new(
@@ -89,6 +99,30 @@ pub(super) fn create_client_endpoint(
             }
         },
     )
+}
+
+fn client_management_endpoint_options(kind: ClientManagementEndpointKind) -> AuthEndpointOptions {
+    let options = AuthEndpointOptions::new().allowed_media_types(["application/json"]);
+    if kind == ClientManagementEndpointKind::Admin {
+        options.server_only()
+    } else {
+        options
+    }
+}
+
+fn reject_public_client_management_input(
+    client: &OAuthClient,
+    kind: ClientManagementEndpointKind,
+) -> Result<(), RustAuthError> {
+    if kind == ClientManagementEndpointKind::Public && client.skip_consent.is_some() {
+        return Err(OAuthProviderError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "skip_consent is server-only",
+        )
+        .into());
+    }
+    Ok(())
 }
 
 pub(super) fn get_client_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> AsyncAuthEndpoint {
@@ -405,11 +439,12 @@ struct UpdateClientBody {
 pub(super) fn update_client_endpoint(
     path: &'static str,
     options: Arc<ResolvedOAuthProviderOptions>,
+    kind: ClientManagementEndpointKind,
 ) -> AsyncAuthEndpoint {
     create_auth_endpoint(
         path,
         Method::POST,
-        AuthEndpointOptions::new().allowed_media_types(["application/json"]),
+        client_management_endpoint_options(kind),
         move |context, request| {
             let options = Arc::clone(&options);
             async move {
@@ -428,6 +463,9 @@ pub(super) fn update_client_endpoint(
                     ));
                 };
                 let body: UpdateClientBody = parse_body(&request)?;
+                if let Err(error) = reject_public_client_management_input(&body.update, kind) {
+                    return oauth_validation_error_response(error);
+                }
                 if is_trusted_client(&options, &body.client_id) {
                     return trusted_client_error_response();
                 }
