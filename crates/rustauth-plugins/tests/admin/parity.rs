@@ -90,20 +90,45 @@ async fn create_user_rejects_reserved_custom_data_fields() -> Result<(), Box<dyn
     let admin = create_user(&context, "admin-reserved@example.com", "admin").await?;
     let cookie = session_cookie(&context, &admin.id).await?;
 
-    let response = router
-        .handle_async(request(
-            Method::POST,
-            "/admin/create-user",
-            Some(json!({
-                "email": "reserved@example.com",
-                "name": "Reserved",
-                "data": { "role": "admin" }
-            })),
-            Some(&cookie),
-        )?)
-        .await?;
+    for (index, (field, value)) in [
+        ("id", json!("attacker-controlled-id")),
+        ("email", json!("attacker@example.com")),
+        ("name", json!("Attacker")),
+        ("role", json!("admin")),
+        ("banned", json!(true)),
+        ("banReason", json!("policy")),
+        ("ban_reason", json!("policy")),
+        ("banExpires", json!("2026-01-01T00:00:00Z")),
+        ("ban_expires", json!("2026-01-01T00:00:00Z")),
+        ("emailVerified", json!(true)),
+        ("email_verified", json!(true)),
+        ("createdAt", json!("2026-01-01T00:00:00Z")),
+        ("created_at", json!("2026-01-01T00:00:00Z")),
+        ("updatedAt", json!("2026-01-01T00:00:00Z")),
+        ("updated_at", json!("2026-01-01T00:00:00Z")),
+        ("image", json!("https://example.com/avatar.png")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut data = serde_json::Map::new();
+        data.insert(field.to_owned(), value);
+        let response = router
+            .handle_async(request(
+                Method::POST,
+                "/admin/create-user",
+                Some(json!({
+                    "email": format!("reserved-{index}@example.com"),
+                    "name": "Reserved",
+                    "data": data
+                })),
+                Some(&cookie),
+            )?)
+            .await?;
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(json_body(response)?["code"], "INVALID_REQUEST");
+    }
     Ok(())
 }
 
