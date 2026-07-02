@@ -880,7 +880,14 @@ fn validate_parsed_saml_response(
     if parsed.has_signature && verified_signature.is_none() {
         return Err("SAML_SIGNATURE_INVALID");
     }
-    if config.want_assertions_signed && verified_signature.is_none() {
+    if config.want_assertions_signed
+        && !matches!(
+            verified_signature,
+            Some(VerifiedSamlSignature {
+                element: SamlSignedElement::Assertion
+            })
+        )
+    {
         return Err("SAML_ASSERTION_SIGNATURE_REQUIRED");
     }
     if parsed
@@ -1068,4 +1075,118 @@ fn effective_saml_user_info(
 ) -> OAuthUserInfo {
     user_info.email_verified = user_info.email_verified && is_trusted_provider;
     user_info
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::saml_impl::assertions::ParsedSamlAssertion;
+    use crate::saml_impl::security::SamlRuntimeAlgorithms;
+    use crate::saml_impl::signature::SamlSignatureInfo;
+    use crate::SamlSpMetadata;
+
+    use super::*;
+
+    #[test]
+    fn validate_parsed_saml_response_rejects_response_signature_when_assertion_signature_required()
+    {
+        assert_eq!(
+            validate_response_signed_saml_response(/*want_assertions_signed*/ true),
+            Err("SAML_ASSERTION_SIGNATURE_REQUIRED")
+        );
+    }
+
+    #[test]
+    fn validate_parsed_saml_response_accepts_response_signature_when_assertion_signature_not_required(
+    ) {
+        assert_eq!(
+            validate_response_signed_saml_response(/*want_assertions_signed*/ false),
+            Ok(())
+        );
+    }
+
+    fn validate_response_signed_saml_response(
+        want_assertions_signed: bool,
+    ) -> Result<(), &'static str> {
+        let parsed = ParsedSamlResponse {
+            response_destination: None,
+            response_in_response_to: Some("request-id".to_owned()),
+            response_issuer: None,
+            status_code: None,
+            has_signature: true,
+            signature: SamlSignatureInfo {
+                count: 1,
+                response: true,
+                ..SamlSignatureInfo::default()
+            },
+            signature_verified: false,
+            algorithms: SamlRuntimeAlgorithms::default(),
+            assertion: ParsedSamlAssertion {
+                id: "assertion-id".to_owned(),
+                issuer: None,
+                name_id: None,
+                audiences: Vec::new(),
+                conditions: None,
+                subject_confirmation: None,
+                attributes: BTreeMap::new(),
+                session_index: None,
+            },
+        };
+        let provider = crate::SsoProviderRecord {
+            id: "provider-row-id".to_owned(),
+            issuer: "https://idp.example.com".to_owned(),
+            oidc_config: None,
+            saml_config: None,
+            user_id: "user-id".to_owned(),
+            provider_id: "provider-id".to_owned(),
+            organization_id: None,
+            domain: "example.com".to_owned(),
+            domain_verified: Some(true),
+            created_at: None,
+        };
+        let config = SamlConfig {
+            issuer: "https://sp.example.com".to_owned(),
+            entry_point: "https://idp.example.com/sso".to_owned(),
+            cert: "certificate".to_owned(),
+            callback_url: String::new(),
+            acs_url: None,
+            audience: None,
+            idp_metadata: None,
+            sp_metadata: SamlSpMetadata::default(),
+            mapping: None,
+            want_assertions_signed,
+            authn_requests_signed: false,
+            signature_algorithm: None,
+            digest_algorithm: None,
+            identifier_format: None,
+            private_key: None,
+            decryption_pvk: None,
+            additional_params: None,
+        };
+        let options = SsoOptions::default();
+        let authn_record = super::super::sign_in::SamlAuthnRequestRecord {
+            id: "request-id".to_owned(),
+            provider_id: "provider-id".to_owned(),
+            callback_url: "/callback".to_owned(),
+            error_url: None,
+            new_user_url: None,
+            request_sign_up: false,
+            created_at: 0,
+            expires_at: 0,
+        };
+        let verified_signature = VerifiedSamlSignature {
+            element: SamlSignedElement::Response,
+        };
+
+        validate_parsed_saml_response(
+            &parsed,
+            &provider,
+            &config,
+            "https://sp.example.com",
+            &options,
+            Some(&authn_record),
+            Some(&verified_signature),
+        )
+    }
 }
