@@ -134,6 +134,7 @@ async fn saml_slo_uses_post_form_for_post_logout_response() -> Result<(), Box<dy
 {
     let mut options = SsoOptions::default();
     options.saml.enable_single_logout = true;
+    options.saml.want_logout_request_signed = false;
     let (adapter, router) = router_with_options(options)?;
     let cookie = seed_session(&adapter).await?;
     register_saml_provider_with_post_single_logout_service(&router, &cookie).await?;

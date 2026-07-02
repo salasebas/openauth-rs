@@ -1,10 +1,11 @@
 use super::*;
 
 #[tokio::test]
-async fn saml_slo_logout_request_deletes_matching_saml_session_and_redirects_response(
+async fn saml_slo_logout_request_allows_unsigned_opt_out_and_deletes_matching_saml_session(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut options = SsoOptions::default();
     options.saml.enable_single_logout = true;
+    options.saml.want_logout_request_signed = false;
     let (adapter, router) = router_with_options(options)?;
     let cookie = seed_session(&adapter).await?;
     register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
@@ -61,11 +62,10 @@ async fn saml_slo_logout_request_deletes_matching_saml_session_and_redirects_res
 }
 
 #[tokio::test]
-async fn saml_slo_logout_request_requires_signature_when_configured(
+async fn saml_slo_logout_request_requires_signature_by_default(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut options = SsoOptions::default();
     options.saml.enable_single_logout = true;
-    options.saml.want_logout_request_signed = true;
     let (adapter, router) = router_with_options(options)?;
     let cookie = seed_session(&adapter).await?;
     register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
@@ -79,6 +79,42 @@ async fn saml_slo_logout_request_requires_signature_when_configured(
                 r#"{{"SAMLRequest":{},"RelayState":"/logged-out"}}"#,
                 serde_json::to_string(&logout_request)?
             ),
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(response)?["code"],
+        "SAML_LOGOUT_REQUEST_SIGNATURE_REQUIRED"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn saml_slo_redirect_logout_request_requires_signature_by_default(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut options = SsoOptions::default();
+    options.saml.enable_single_logout = true;
+    let (adapter, router) = router_with_options(options)?;
+    let cookie = seed_session(&adapter).await?;
+    register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
+    let logout_request = logout_request_xml("unsigned-redirect-logout")?;
+    let logout_request_xml = String::from_utf8(
+        base64::engine::general_purpose::STANDARD.decode(logout_request.as_bytes())?,
+    )?;
+    let saml_request = deflate_redirect_binding(&logout_request_xml)?;
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("SAMLRequest", &saml_request)
+        .append_pair("RelayState", "/logged-out")
+        .finish();
+
+    let response = router
+        .handle_async(json_request(
+            Method::GET,
+            &format!("/sso/saml2/sp/slo/saml-okta?{query}"),
+            "",
             None,
         )?)
         .await?;
@@ -305,6 +341,7 @@ async fn saml_slo_logout_request_session_index_mismatch_preserves_session_state(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut options = SsoOptions::default();
     options.saml.enable_single_logout = true;
+    options.saml.want_logout_request_signed = false;
     let (adapter, router) = router_with_options(options)?;
     let cookie = seed_session(&adapter).await?;
     register_saml_provider_allowing_unsigned_assertions(&router, &cookie).await?;
