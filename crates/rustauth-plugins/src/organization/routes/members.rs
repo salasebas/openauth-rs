@@ -160,16 +160,17 @@ fn add_member(options: OrganizationOptions) -> AsyncAuthEndpoint {
                 if !roles_exist(&store, &organization_id, &member_data.role, &options).await? {
                     return http::organization_error(StatusCode::BAD_REQUEST, "ROLE_NOT_FOUND");
                 }
-                let mut member = store
-                    .create_member(
-                        &member_data.organization_id,
-                        &member_data.user_id,
-                        &member_data.role,
-                        additional_fields,
-                    )
-                    .await?;
-                retain_returned_member_fields(&mut member, &options);
-                if let Some(team_id) = input.team_id.as_deref() {
+                let team = if let Some(team_id) = input.team_id.as_deref() {
+                    if !has_permission(
+                        &actor_member.role,
+                        &options,
+                        OrganizationPermission::TeamUpdate,
+                    ) {
+                        return http::organization_error(
+                            StatusCode::FORBIDDEN,
+                            "YOU_ARE_NOT_ALLOWED_TO_CREATE_A_NEW_TEAM_MEMBER",
+                        );
+                    }
                     let Some(team) = store.team_by_id(team_id).await? else {
                         return http::organization_error(StatusCode::BAD_REQUEST, "TEAM_NOT_FOUND");
                     };
@@ -184,6 +185,20 @@ fn add_member(options: OrganizationOptions) -> AsyncAuthEndpoint {
                             );
                         }
                     }
+                    Some(team)
+                } else {
+                    None
+                };
+                let mut member = store
+                    .create_member(
+                        &member_data.organization_id,
+                        &member_data.user_id,
+                        &member_data.role,
+                        additional_fields,
+                    )
+                    .await?;
+                retain_returned_member_fields(&mut member, &options);
+                if let Some(team) = team {
                     store
                         .create_team_member(&team.id, &user.id, rustauth_core::db::DbRecord::new())
                         .await?;
