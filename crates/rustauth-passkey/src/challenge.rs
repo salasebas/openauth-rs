@@ -7,6 +7,7 @@ use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 
 use crate::options::PasskeyRegistrationUser;
+use crate::webauthn::WebAuthnConfig;
 
 pub const CHALLENGE_MAX_AGE_SECONDS: u64 = 60 * 5;
 
@@ -20,6 +21,7 @@ pub enum ChallengeKind {
 pub struct ChallengeValue {
     pub kind: ChallengeKind,
     pub state: Value,
+    pub webauthn_config: WebAuthnConfig,
     pub user: Option<PasskeyRegistrationUser>,
     pub context: Option<String>,
 }

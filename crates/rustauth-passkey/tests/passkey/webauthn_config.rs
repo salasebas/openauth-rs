@@ -1,5 +1,5 @@
 use http::{Method, StatusCode};
-use rustauth_core::options::{AdvancedOptions, RustAuthOptions};
+use rustauth_core::options::{AdvancedOptions, RustAuthOptions, TrustedOriginOptions};
 use rustauth_passkey::{PasskeyOptions, PasskeyRegistrationOptions, PasskeyRegistrationUser};
 use serde_json::Value;
 
@@ -137,8 +137,16 @@ async fn generate_authenticate_options_derives_origin_and_rp_id_from_base_url(
 #[tokio::test]
 async fn generate_authenticate_options_prefers_request_origin_header(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (_adapter, router, _backend) =
-        seeded_router_with_auth_options(test_auth_options(None), PasskeyOptions::default()).await?;
+    let (_adapter, router, _backend) = seeded_router_with_auth_options(
+        RustAuthOptions {
+            trusted_origins: TrustedOriginOptions::Static(vec![
+                "https://auth.example.com".to_owned()
+            ]),
+            ..test_auth_options(None)
+        },
+        PasskeyOptions::default(),
+    )
+    .await?;
 
     let response = router
         .handle_async(get_request_with_origin(
@@ -152,5 +160,26 @@ async fn generate_authenticate_options_prefers_request_origin_header(
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = serde_json::from_slice(response.body())?;
     assert_eq!(body["rpId"], "auth.example.com");
+    Ok(())
+}
+
+#[tokio::test]
+async fn generate_authenticate_options_rejects_untrusted_request_origin_without_base_url(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_adapter, router, _backend) =
+        seeded_router_with_auth_options(test_auth_options(None), PasskeyOptions::default()).await?;
+
+    let response = router
+        .handle_async(get_request_with_origin(
+            Method::GET,
+            "example.test",
+            "/api/auth/passkey/generate-authenticate-options",
+            Some("https://evil.example.com"),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "INVALID_ORIGIN");
     Ok(())
 }

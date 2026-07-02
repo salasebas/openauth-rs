@@ -19,10 +19,11 @@ use crate::options::{
     PasskeyRegistrationUser,
 };
 use crate::response::{
-    authentication_failed, error_response, internal_error, json_response, too_many_requests,
+    authentication_failed, error_response, internal_error, invalid_origin, json_response,
+    too_many_requests,
 };
 use crate::routes::{
-    resolve_extensions, verification_webauthn_config, webauthn_config, VerifyAuthenticationBody,
+    resolve_extensions, webauthn_config, VerifyAuthenticationBody, WebAuthnConfigError,
 };
 use crate::session::{create_session_for_user, current_session};
 use crate::store::PasskeyStore;
@@ -63,8 +64,13 @@ pub(super) fn generate_authenticate_options_endpoint(
                         Vec::new()
                     };
                     let session_user_id = session.as_ref().map(|(_, user, _)| user.id.clone());
+                    let config = match webauthn_config(&context, &options, &request) {
+                        Ok(config) => config,
+                        Err(WebAuthnConfigError::InvalidOrigin) => return invalid_origin(),
+                        Err(WebAuthnConfigError::RustAuth(error)) => return Err(error),
+                    };
                     let start = options.backend.start_authentication(
-                        webauthn_config(&context, &options, &request)?,
+                        config.clone(),
                         credentials,
                         resolve_extensions(
                             &options.authentication.extensions,
@@ -80,6 +86,7 @@ pub(super) fn generate_authenticate_options_endpoint(
                         ChallengeValue {
                             kind: ChallengeKind::Authentication,
                             state: start.state,
+                            webauthn_config: config,
                             user: session.map(|(_, user, _)| PasskeyRegistrationUser {
                                 id: user.id,
                                 name: user.email,
@@ -184,20 +191,12 @@ pub(super) fn verify_authentication_endpoint(options: Arc<PasskeyOptions>) -> As
                     {
                         return authentication_failed();
                     }
-                    let Some(config) = verification_webauthn_config(&context, &options, &request)?
-                    else {
-                        return error_response(
-                            StatusCode::BAD_REQUEST,
-                            "origin missing",
-                            "origin missing",
-                        );
-                    };
                     let credential = match passkey.authentication_credential_value() {
                         Ok(Some(credential)) => credential,
                         Ok(None) | Err(_) => return authentication_failed(),
                     };
                     let verified = match options.backend.finish_authentication(
-                        config,
+                        challenge.webauthn_config,
                         body.response.clone(),
                         challenge.state,
                         Some(credential),

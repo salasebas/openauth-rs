@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 
 use http::{HeaderValue, Method, StatusCode};
 use rustauth_core::db::{Create, DbAdapter, DbValue, Delete, FindMany, FindOne, Where};
-use rustauth_core::options::{AdvancedOptions, IpAddressOptions};
+use rustauth_core::options::{
+    AdvancedOptions, IpAddressOptions, RustAuthOptions, TrustedOriginOptions,
+};
 use rustauth_passkey::{
     PasskeyAuthenticationOptions, PasskeyAuthenticationRejected, PasskeyOptions,
     PasskeyWebAuthnBackend, RealPasskeyWebAuthnBackend, WebAuthnConfig,
@@ -11,11 +13,13 @@ use rustauth_passkey::{
 use serde_json::{json, Value};
 
 use crate::support::{
-    allow_credentials_contains_id, cookie_header_from_response, empty_request, join_cookies,
-    json_request, json_request_with_origin, passkey_challenge_cookie_name, router_with_adapter,
+    allow_credentials_contains_id, cookie_header_from_response, empty_request,
+    get_request_with_origin, join_cookies, json_request, json_request_with_custom_origin,
+    json_request_with_origin, passkey_challenge_cookie_name, router_with_adapter,
     seed_legacy_passkey, seed_passkey, seed_user, seed_user_two, seeded_router,
-    seeded_router_with_advanced, set_cookie_values, sign_in_cookie,
-    signed_passkey_challenge_cookie, single_verification_expires_at, RevokedOnAuthUpdateAdapter,
+    seeded_router_with_advanced, seeded_router_with_auth_options, set_cookie_values,
+    sign_in_cookie, signed_passkey_challenge_cookie, single_verification_expires_at,
+    RevokedOnAuthUpdateAdapter,
 };
 
 #[tokio::test]
@@ -505,7 +509,7 @@ async fn verify_authentication_creates_session_and_returns_user(
 }
 
 #[tokio::test]
-async fn verify_authentication_rejects_missing_origin_when_origin_is_not_configured(
+async fn verify_authentication_uses_challenge_origin_when_request_origin_is_missing(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router, _backend) = seeded_router(PasskeyOptions::default()).await?;
     seed_passkey(
@@ -534,9 +538,71 @@ async fn verify_authentication_rejects_missing_origin_when_origin_is_not_configu
         )?)
         .await?;
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::OK);
     let body: Value = serde_json::from_slice(response.body())?;
-    assert_eq!(body["code"], "origin missing");
+    assert_eq!(body["user"]["id"], "user_1");
+    assert!(set_cookie_values(&response)
+        .iter()
+        .any(|cookie| cookie.contains("session_token")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_authentication_uses_challenge_webauthn_config_when_origin_changes(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let auth_options = rustauth_core::test_utils::with_integration_test_defaults(RustAuthOptions {
+        secret: Some("secret-a-at-least-32-chars-long!!".to_owned()),
+        trusted_origins: TrustedOriginOptions::Static(vec!["https://auth.example.com".to_owned()]),
+        advanced: AdvancedOptions {
+            disable_csrf_check: true,
+            disable_origin_check: true,
+            ..AdvancedOptions::default()
+        },
+        ..RustAuthOptions::default()
+    });
+    let (adapter, router, backend) =
+        seeded_router_with_auth_options(auth_options, PasskeyOptions::default()).await?;
+    seed_passkey(
+        adapter.as_ref(),
+        "passkey_1",
+        "user_1",
+        "Laptop",
+        "credential-id",
+    )
+    .await?;
+    let options_response = router
+        .handle_async(get_request_with_origin(
+            Method::GET,
+            "localhost:3000",
+            "/api/auth/passkey/generate-authenticate-options",
+            Some("https://auth.example.com"),
+        )?)
+        .await?;
+    let passkey_cookie = cookie_header_from_response(&options_response);
+
+    let response = router
+        .handle_async(json_request_with_custom_origin(
+            Method::POST,
+            "/api/auth/passkey/verify-authentication",
+            r#"{"response":{"id":"credential-id"}}"#,
+            Some(&passkey_cookie),
+            "https://evil.example.com",
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let finish_configs = backend
+        .authentication_finish_configs
+        .lock()
+        .map_err(|_| "authentication finish config mutex poisoned")?;
+    assert_eq!(
+        finish_configs.as_slice(),
+        &[WebAuthnConfig {
+            rp_id: "auth.example.com".to_owned(),
+            rp_name: "RustAuth".to_owned(),
+            origins: vec!["https://auth.example.com".to_owned()],
+        }]
+    );
     Ok(())
 }
 

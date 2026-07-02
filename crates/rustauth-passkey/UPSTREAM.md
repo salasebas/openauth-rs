@@ -34,12 +34,12 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 | Surface | RustAuth tests | Upstream tests | Notes |
 | --- | --- | --- | --- |
 | Registration routes | `tests/passkey/register.rs` | `packages/passkey/src/passkey.test.ts` | Covers session-required, pre-auth `resolve_user`, context/name, extensions, stale sessions, duplicate credentials, challenge cleanup, and after-verification user override. |
-| Authentication routes | `tests/passkey/authenticate.rs` | `packages/passkey/src/passkey.test.ts` | Covers discoverable credentials, session allow lists, counter updates, session creation, credential enumeration resistance, replay rejection, and missing-origin failures. |
+| Authentication routes | `tests/passkey/authenticate.rs` | `packages/passkey/src/passkey.test.ts` | Covers discoverable credentials, session allow lists, counter updates, session creation, credential enumeration resistance, replay rejection, and challenge-bound WebAuthn config. |
 | Management routes | `tests/passkey/management.rs` | `packages/passkey/src/passkey.test.ts` | Covers list/update/delete, missing passkeys, cross-user ownership, and RustAuth's fresh-session hardening. |
 | Rate limits and cookies | `tests/passkey/rate_limit.rs`, `tests/passkey/cookie_config.rs` | Global Better Auth limiter behavior, no dedicated upstream package tests | RustAuth adds ceremony and per-challenge limits plus cookie prefix/attribute tests. |
 | Schema and adapters | `tests/passkey/schema.rs`, `tests/passkey/sql.rs`, `tests/passkey/sqlite.rs`, `tests/passkey/secondary_storage.rs` | Upstream adapter behavior through Better Auth test harness | Covers plural table name, physical schema renames, unique credential ID indexes, SQLite/Postgres/MySQL migrations, and secondary storage for shared deployments. |
-| OpenAPI and WebAuthn config | `tests/passkey/openapi.rs`, `tests/passkey/webauthn_config.rs`, `src/webauthn.rs` unit tests | Upstream route metadata and SimpleWebAuthn behavior | Covers operation metadata, RP ID/origin derivation, fail-closed config, and `webauthn-rs` option/verification shape. |
-| Counts and verify command | 96 Rust `#[test]` / `#[tokio::test]` functions | 17 upstream server Vitest cases plus 1 Node smoke test under `e2e/smoke/test/passkey-preauth.spec.ts` | Verify with `cargo nextest run -p rustauth-passkey`. The installed nextest may not support `-- --list-tests`; use `rg '#\[(test|tokio::test)\]' crates/rustauth-passkey` for a static count. |
+| OpenAPI and WebAuthn config | `tests/passkey/openapi.rs`, `tests/passkey/webauthn_config.rs`, `src/webauthn.rs` unit tests | Upstream route metadata and SimpleWebAuthn behavior | Covers operation metadata, RP ID/origin derivation, trusted request-origin fail-closed config, and `webauthn-rs` option/verification shape. |
+| Counts and verify command | 99 Rust `#[test]` / `#[tokio::test]` functions | 17 upstream server Vitest cases plus 1 Node smoke test under `e2e/smoke/test/passkey-preauth.spec.ts` | Verify with `cargo nextest run -p rustauth-passkey`. The installed nextest may not support `-- --list-tests`; use `rg '#\[(test|tokio::test)\]' crates/rustauth-passkey` for a static count. |
 
 ## Intentional Differences
 
@@ -64,7 +64,8 @@ Status symbols are defined in the [parity index](../../docs/parity/README.md#sta
 
 ## Hardening
 
-- Verification records are one-time-use and expire after 5 minutes.
+- Verification records are one-time-use, expire after 5 minutes, and bind the WebAuthn config used to generate the challenge.
+- Request-derived passkey origins must be allowed by RustAuth trusted origins when no stable `base_url` is configured.
 - Signed challenge cookies use the upstream `better-auth-passkey` default name and inherit RustAuth cookie prefix/attribute settings.
 - Authentication verifies that session-scoped challenges cannot be satisfied by another user's credential.
 - Duplicate credential IDs are checked before insert and remapped after insert races to `PREVIOUSLY_REGISTERED`.

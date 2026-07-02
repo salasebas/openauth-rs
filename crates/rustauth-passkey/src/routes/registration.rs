@@ -12,12 +12,11 @@ use crate::options::{
     PasskeyOptions, RegistrationWebAuthnOptions,
 };
 use crate::response::{
-    error_response, internal_error, json_response, not_allowed, session_not_fresh,
+    error_response, internal_error, invalid_origin, json_response, not_allowed, session_not_fresh,
     too_many_requests,
 };
 use crate::routes::{
-    query_param, resolve_extensions, verification_webauthn_config, webauthn_config,
-    VerifyRegistrationBody,
+    query_param, resolve_extensions, webauthn_config, VerifyRegistrationBody, WebAuthnConfigError,
 };
 use crate::session::{current_session, registration_user, session_is_fresh, RegistrationUserError};
 use crate::store::{Passkey, PasskeyStore};
@@ -128,8 +127,13 @@ pub(super) fn generate_register_options_endpoint(
                             .with_attachment_override(attachment),
                         extensions,
                     );
+                    let config = match webauthn_config(&context, &options, &request) {
+                        Ok(config) => config,
+                        Err(WebAuthnConfigError::InvalidOrigin) => return invalid_origin(),
+                        Err(WebAuthnConfigError::RustAuth(error)) => return Err(error),
+                    };
                     let start = options.backend.start_registration(
-                        webauthn_config(&context, &options, &request)?,
+                        config.clone(),
                         &webauthn_user,
                         user_passkeys
                             .iter()
@@ -142,6 +146,7 @@ pub(super) fn generate_register_options_endpoint(
                         ChallengeValue {
                             kind: ChallengeKind::Registration,
                             state: start.state,
+                            webauthn_config: config,
                             user: Some(user),
                             context: context_value,
                         },
@@ -243,16 +248,8 @@ pub(super) fn verify_registration_endpoint(options: Arc<PasskeyOptions>) -> Asyn
                             return not_allowed();
                         }
                     }
-                    let Some(config) = verification_webauthn_config(&context, &options, &request)?
-                    else {
-                        return error_response(
-                            StatusCode::BAD_REQUEST,
-                            "FAILED_TO_VERIFY_REGISTRATION",
-                            "Failed to verify registration",
-                        );
-                    };
                     let verified = match options.backend.finish_registration(
-                        config,
+                        challenge.webauthn_config,
                         body.response.clone(),
                         challenge.state,
                     ) {

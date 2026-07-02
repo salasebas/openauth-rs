@@ -401,12 +401,25 @@ pub fn json_request_with_origin(
     body: &str,
     cookie: Option<&str>,
 ) -> Result<Request<Vec<u8>>, http::Error> {
-    let mut request = json_request(method, path, body, cookie)?;
-    request.headers_mut().insert(
-        header::ORIGIN,
-        http::HeaderValue::from_static("http://localhost:3000"),
-    );
-    Ok(request)
+    json_request_with_custom_origin(method, path, body, cookie, "http://localhost:3000")
+}
+
+pub fn json_request_with_custom_origin(
+    method: Method,
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+    origin: &str,
+) -> Result<Request<Vec<u8>>, http::Error> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(format!("http://localhost:3000{path}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, origin);
+    if let Some(cookie) = cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    builder.body(body.as_bytes().to_vec())
 }
 
 pub fn set_cookie_values(response: &http::Response<Vec<u8>>) -> Vec<String> {
@@ -474,6 +487,11 @@ pub async fn expired_registration_challenge_cookie(
             serde_json::to_string(&json!({
                 "kind": "Registration",
                 "state": { "kind": "registration-state" },
+                "webauthn_config": {
+                    "rp_id": "localhost",
+                    "rp_name": "RustAuth",
+                    "origins": ["http://localhost:3000"],
+                },
                 "user": {
                     "id": "user_1",
                     "name": "ada@example.com",
@@ -758,6 +776,8 @@ pub async fn seed_passkey(
 #[derive(Default)]
 pub struct FakeWebAuthnBackend {
     pub registration_users: Mutex<Vec<String>>,
+    pub registration_finish_configs: Mutex<Vec<WebAuthnConfig>>,
+    pub authentication_finish_configs: Mutex<Vec<WebAuthnConfig>>,
     pub fail_finish_authentication: AtomicBool,
 }
 
@@ -806,10 +826,14 @@ impl PasskeyWebAuthnBackend for FakeWebAuthnBackend {
 
     fn finish_registration(
         &self,
-        _config: WebAuthnConfig,
+        config: WebAuthnConfig,
         response: Value,
         _state: Value,
     ) -> Result<VerifiedPasskeyCredential, rustauth_core::error::RustAuthError> {
+        self.registration_finish_configs
+            .lock()
+            .map_err(|_| rustauth_core::error::RustAuthError::Adapter("mutex poisoned".to_owned()))?
+            .push(config);
         let credential_id = response
             .get("id")
             .and_then(Value::as_str)
@@ -852,11 +876,15 @@ impl PasskeyWebAuthnBackend for FakeWebAuthnBackend {
 
     fn finish_authentication(
         &self,
-        _config: WebAuthnConfig,
+        config: WebAuthnConfig,
         _response: Value,
         _state: Value,
         _credential: Option<Value>,
     ) -> Result<VerifiedAuthentication, rustauth_core::error::RustAuthError> {
+        self.authentication_finish_configs
+            .lock()
+            .map_err(|_| rustauth_core::error::RustAuthError::Adapter("mutex poisoned".to_owned()))?
+            .push(config);
         if self.fail_finish_authentication.load(Ordering::Relaxed) {
             return Err(rustauth_core::error::RustAuthError::Adapter(
                 "authentication failed".to_owned(),
