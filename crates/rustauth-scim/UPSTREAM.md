@@ -65,6 +65,7 @@ Verify command: `cargo nextest run -p rustauth-scim`
 | `userName` identity | Opaque strings allowed in tests | Resolved identity must be a valid email | RustAuth persists users in an email-centered identity model. |
 | Created user email state | Does not force verified email | Sets `email_verified: true` for SCIM-created users | External IdP provisioning is treated as authoritative. |
 | DELETE user | Deletes the global user row | Defaults to unlinking the SCIM account/profile | Prevents one IdP from destroying shared email-linked identities. |
+| Empty SCIM role allow-list | `requiredRole: []` allows any organization member to manage org-scoped connections | `required_role: Some(vec![])` denies every role | Configured allow-lists fail closed when no allowed roles are listed. |
 | Metadata capabilities | Bulk/sort/etag unsupported in 1.6.9 | Advertises implemented RustAuth capabilities | Callers should see the actual server contract. |
 | Groups | Not implemented | Organization team-backed Groups | Adds enterprise provisioning while reusing RustAuth org data. |
 | Bulk | Not implemented | Independent and atomic bulk modes | Adds RFC-style batch provisioning with adapter-aware transactions. |
@@ -74,7 +75,7 @@ Verify command: `cargo nextest run -p rustauth-scim`
 
 | ID | Gap | Severity | Notes |
 | --- | --- | --- | --- |
-| SCIM-1 | No open Better Auth 1.6.9 server parity gaps | None | Re-audited against `packages/scim/src/`; open items below are intentional RustAuth extensions or deployment/sibling-crate scope. |
+| SCIM-1 | No open unintentional Better Auth 1.6.9 server parity gaps | None | Re-audited against `packages/scim/src/`; open items below and differences above are intentional RustAuth security hardening, extensions, or deployment/sibling-crate scope. |
 
 ## Intentional Extension / Out-of-Scope Notes
 
