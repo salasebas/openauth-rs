@@ -425,7 +425,7 @@ impl Default for SamlOptions {
             max_metadata_size: DEFAULT_MAX_SAML_METADATA_SIZE,
             enable_single_logout: false,
             logout_request_ttl: Duration::minutes(5),
-            want_logout_request_signed: false,
+            want_logout_request_signed: true,
             want_logout_response_signed: false,
             algorithms: SamlAlgorithmOptions::default(),
         }
