@@ -416,7 +416,7 @@ impl Default for SamlOptions {
     fn default() -> Self {
         Self {
             enable_in_response_to_validation: true,
-            allow_idp_initiated: true,
+            allow_idp_initiated: false,
             request_ttl: Duration::minutes(5),
             clock_skew: Duration::minutes(5),
             require_timestamps: false,

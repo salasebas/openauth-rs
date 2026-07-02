@@ -123,13 +123,16 @@ async fn handle_acs(
     }
     let Some(saml_response) = body.saml_response else {
         let state_store = SsoStateStore::new(context, adapter);
-        let authn_record =
+        let authn_record = if relay_state.is_some_and(|value| !value.is_empty()) {
             match load_authn_record_by_relay_state(options.as_ref(), &state_store, relay_state)
                 .await?
             {
                 Ok(record) => record,
                 Err(response) => return Ok(response),
-            };
+            }
+        } else {
+            None
+        };
         return acs_error_response(
             context,
             &config,
@@ -888,12 +891,12 @@ fn validate_parsed_saml_response(
         return Err("SAML_RESPONSE_NOT_SUCCESS");
     }
     let acs_url = assertion_consumer_service_url(&provider.provider_id, base_url, config);
-    if parsed
-        .response_destination
-        .as_deref()
-        .is_some_and(|destination| destination != acs_url)
-    {
-        return Err("SAML_DESTINATION_MISMATCH");
+    let is_unsolicited = authn_record.is_none();
+    match parsed.response_destination.as_deref() {
+        Some(destination) if destination != acs_url => return Err("SAML_DESTINATION_MISMATCH"),
+        Some(_) => {}
+        None if is_unsolicited => return Err("SAML_DESTINATION_REQUIRED"),
+        None => {}
     }
     let expected_issuer = expected_idp_issuer(provider, config);
     if parsed
@@ -908,7 +911,11 @@ fn validate_parsed_saml_response(
     {
         return Err("SAML_ISSUER_MISMATCH");
     }
-    if !parsed.assertion.audiences.is_empty() {
+    if parsed.assertion.audiences.is_empty() {
+        if is_unsolicited {
+            return Err("SAML_AUDIENCE_REQUIRED");
+        }
+    } else {
         let expected_audience = expected_saml_audience(config);
         if !parsed
             .assertion
@@ -934,20 +941,21 @@ fn validate_parsed_saml_response(
     }
     let timestamp_options = TimestampValidationOptions {
         clock_skew: options.saml.clock_skew,
-        require_timestamps: options.saml.require_timestamps,
+        require_timestamps: options.saml.require_timestamps || is_unsolicited,
     };
     validate_saml_timestamp(parsed.assertion.conditions.as_ref(), timestamp_options)
         .map_err(|_| "SAML_TIMESTAMP_INVALID")?;
     if let Some(confirmation) = &parsed.assertion.subject_confirmation {
-        if confirmation
-            .recipient
-            .as_deref()
-            .is_some_and(|recipient| recipient != acs_url)
-        {
-            return Err("SAML_RECIPIENT_MISMATCH");
+        match confirmation.recipient.as_deref() {
+            Some(recipient) if recipient != acs_url => return Err("SAML_RECIPIENT_MISMATCH"),
+            Some(_) => {}
+            None if is_unsolicited => return Err("SAML_RECIPIENT_REQUIRED"),
+            None => {}
         }
         validate_saml_timestamp(confirmation.conditions.as_ref(), timestamp_options)
             .map_err(|_| "SAML_TIMESTAMP_INVALID")?;
+    } else if is_unsolicited && !parsed.signature_verified {
+        return Err("SAML_RECIPIENT_REQUIRED");
     }
     Ok(())
 }
