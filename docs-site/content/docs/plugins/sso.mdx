@@ -70,6 +70,8 @@ let auth = RustAuth::builder()
 
 **OIDC vs SAML:** OIDC is plug-and-play with discovery and client credentials. SAML requires per-IdP certificates, entry points, and SP metadata — enable `saml` only when the tenant requires it.
 
+For SAML single logout, RustAuth requires signed inbound `LogoutRequest` messages by default. If an IdP cannot sign SLO messages, set `saml.want_logout_request_signed` to `false` explicitly and treat that as a compatibility exception.
+
 ## HTTP endpoints
 
 Clients call these routes under your configured `base_path`.
