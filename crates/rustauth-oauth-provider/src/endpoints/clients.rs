@@ -493,6 +493,13 @@ pub(super) fn update_client_endpoint(
                         "token_endpoint_auth_method is immutable",
                     ));
                 }
+                if body.update.public.is_some() {
+                    return error_response(OAuthProviderError::new(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_client_metadata",
+                        "public is immutable",
+                    ));
+                }
                 if body.update.reference_id.is_some() {
                     return error_response(OAuthProviderError::new(
                         StatusCode::BAD_REQUEST,
