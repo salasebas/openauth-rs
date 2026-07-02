@@ -77,7 +77,7 @@ async fn management_get_provider_connection_requires_provider_id() {
 }
 
 #[tokio::test]
-async fn management_empty_required_role_allows_any_org_member() {
+async fn management_empty_required_role_denies_any_org_member() {
     let (adapter, router, context) = router_with_context_and_organization(ScimOptions {
         required_role: Some(Vec::new()),
         ..ScimOptions::default()
@@ -94,7 +94,7 @@ async fn management_empty_required_role_allows_any_org_member() {
         .await
         .expect("member");
 
-    let generated = router
+    let denied = router
         .handle_async(session_json_request(
             Method::POST,
             "/scim/generate-token",
@@ -104,7 +104,11 @@ async fn management_empty_required_role_allows_any_org_member() {
         .await
         .expect("request should succeed");
 
-    assert_eq!(generated.status(), StatusCode::CREATED);
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        json_body(denied)["message"],
+        "Insufficient role for this operation"
+    );
 }
 
 #[tokio::test]

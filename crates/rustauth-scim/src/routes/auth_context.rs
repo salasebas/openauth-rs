@@ -222,7 +222,6 @@ pub(super) fn role_has_required_access(
 ) -> bool {
     let roles = parse_roles(role);
     match required {
-        Some([]) => true,
         Some(required) => roles
             .iter()
             .any(|role| required.iter().any(|required| role == required)),
