@@ -207,6 +207,18 @@ fn create_invitation(options: OrganizationOptions) -> AsyncAuthEndpoint {
                         }
                     }
                 }
+                if team_id.as_deref().is_some_and(|team_ids| {
+                    team_ids.split(',').map(str::trim).any(|id| !id.is_empty())
+                }) && !has_permission(
+                    &actor_member.role,
+                    &options,
+                    OrganizationPermission::TeamUpdate,
+                ) {
+                    return http::organization_error(
+                        StatusCode::FORBIDDEN,
+                        "YOU_ARE_NOT_ALLOWED_TO_CREATE_A_NEW_TEAM_MEMBER",
+                    );
+                }
                 if store
                     .member_by_email(&organization_id, &email)
                     .await?
