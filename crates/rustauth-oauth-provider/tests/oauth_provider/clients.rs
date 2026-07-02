@@ -186,6 +186,109 @@ async fn dynamic_registration_rejects_unsafe_redirect_urls(
 }
 
 #[tokio::test]
+async fn user_facing_create_client_rejects_skip_consent() -> Result<(), Box<dyn std::error::Error>>
+{
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            allow_dynamic_client_registration: true,
+            ..default_options()
+        })?,
+        Arc::clone(&adapter),
+    )?;
+
+    let response = router
+        .handle_async(request(
+            Method::POST,
+            "/api/auth/oauth2/create-client",
+            r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid","skip_consent":true}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response)?["error"], "invalid_client_metadata");
+    assert_eq!(adapter.records("oauth_client").await.len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_facing_update_client_rejects_skip_consent() -> Result<(), Box<dyn std::error::Error>>
+{
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            allow_dynamic_client_registration: true,
+            ..default_options()
+        })?,
+        Arc::clone(&adapter),
+    )?;
+    let client = register_client(
+        &router,
+        r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid"}"#,
+        Some(&cookie),
+    )
+    .await?;
+    let client_id = client["client_id"].as_str().ok_or("missing client_id")?;
+
+    let response = router
+        .handle_async(request(
+            Method::POST,
+            "/api/auth/oauth2/update-client",
+            &format!(r#"{{"client_id":"{client_id}","update":{{"skip_consent":true}}}}"#),
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response)?["error"], "invalid_client_metadata");
+    let stored = adapter.records("oauth_client").await;
+    assert_eq!(stored[0].get("skip_consent"), Some(&DbValue::Null));
+    Ok(())
+}
+
+#[tokio::test]
+async fn admin_create_client_is_server_only() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            allow_dynamic_client_registration: true,
+            ..default_options()
+        })?,
+        Arc::clone(&adapter),
+    )?;
+
+    let external_response = router
+        .handle_async(request(
+            Method::POST,
+            "/api/auth/admin/oauth2/create-client",
+            r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid","skip_consent":true}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(external_response.status(), StatusCode::NOT_FOUND);
+
+    let server_response = router
+        .handle_async_server(request(
+            Method::POST,
+            "/api/auth/admin/oauth2/create-client",
+            r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid","skip_consent":true}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(server_response.status(), StatusCode::CREATED);
+    let body = json_body(server_response)?;
+    assert_eq!(body["skip_consent"], true);
+    Ok(())
+}
+
+#[tokio::test]
 async fn dynamic_registration_allows_https_loopback_and_custom_scheme_redirects(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = adapter();
@@ -319,7 +422,7 @@ async fn client_privileges_can_deny_client_crud_actions() -> Result<(), Box<dyn 
     )
     .await?;
     let response = router
-        .handle_async(request(
+        .handle_async_server(request(
             Method::POST,
             "/api/auth/admin/oauth2/update-client",
             &format!(
@@ -422,9 +525,12 @@ async fn cached_trusted_clients_reject_manual_update_delete_and_rotate(
             r#"{"client_id":"trusted_client"}"#,
         ),
     ] {
-        let response = router
-            .handle_async(request(Method::POST, path, body, Some(&cookie))?)
-            .await?;
+        let request = request(Method::POST, path, body, Some(&cookie))?;
+        let response = if path.starts_with("/api/auth/admin/") {
+            router.handle_async_server(request).await?
+        } else {
+            router.handle_async(request).await?
+        };
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(json_body(response)?["error"], "invalid_client");
     }

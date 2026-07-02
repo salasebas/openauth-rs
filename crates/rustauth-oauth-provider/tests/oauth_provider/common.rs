@@ -48,9 +48,12 @@ pub async fn register_client(
     } else {
         "/api/auth/oauth2/register"
     };
-    let response = router
-        .handle_async(request(Method::POST, path, body, cookie)?)
-        .await?;
+    let request = request(Method::POST, path, body, cookie)?;
+    let response = if path.starts_with("/api/auth/admin/") {
+        router.handle_async_server(request).await?
+    } else {
+        router.handle_async(request).await?
+    };
     assert_eq!(response.status(), StatusCode::CREATED);
     json_body(response)
 }
@@ -61,7 +64,7 @@ pub async fn create_admin_client(
     cookie: &str,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let response = router
-        .handle_async(request(
+        .handle_async_server(request(
             Method::POST,
             "/api/auth/admin/oauth2/create-client",
             body,
