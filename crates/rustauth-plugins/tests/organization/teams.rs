@@ -100,6 +100,121 @@ async fn team_routes_cover_default_team_members_and_active_team(
 }
 
 #[tokio::test]
+async fn invite_with_team_requires_team_update_permission() -> Result<(), Box<dyn std::error::Error>>
+{
+    let adapter = Arc::new(MemoryAdapter::new());
+    let options = OrganizationOptions::builder()
+        .custom_role(
+            "inviter",
+            json!({ "invitation": ["create"], "ac": ["read"] }),
+        )
+        .teams(TeamOptions {
+            enabled: true,
+            create_default_team: false,
+            allow_removing_all_teams: true,
+            ..TeamOptions::default()
+        })
+        .build();
+    let auth = super::test_router(adapter, options)?;
+
+    let owner = super::sign_up(&auth, "Owner", "owner-invite-team-authz@example.com").await?;
+    let inviter = super::sign_up(&auth, "Inviter", "inviter-team-authz@example.com").await?;
+    let invited = super::sign_up(&auth, "Invited", "invited-team-authz@example.com").await?;
+    let org = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Invite Team Authz","slug":"invite-team-authz"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+    let organization_id = org.body["id"].as_str().ok_or("missing organization id")?;
+
+    let team = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create-team",
+        json!({"organizationId": organization_id, "name":"Privileged Team"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(team.status, StatusCode::OK);
+    let team_id = team.body["id"].as_str().ok_or("missing team id")?;
+
+    let inviter_member = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({"organizationId": organization_id, "userId": inviter.user_id, "role": "inviter"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(inviter_member.status, StatusCode::OK);
+
+    let denied = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/invite-member",
+        json!({
+            "organizationId": organization_id,
+            "email": "blocked-invite-team-authz@example.com",
+            "role": "member",
+            "teamId": team_id
+        }),
+        Some(&inviter.cookie),
+    )
+    .await?;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        denied.body["code"],
+        "YOU_ARE_NOT_ALLOWED_TO_CREATE_A_NEW_TEAM_MEMBER"
+    );
+
+    let allowed = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/invite-member",
+        json!({
+            "organizationId": organization_id,
+            "email": "invited-team-authz@example.com",
+            "role": "member",
+            "teamId": team_id
+        }),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(allowed.status, StatusCode::OK);
+    let invitation_id = allowed.body["id"]
+        .as_str()
+        .ok_or("missing invitation id")?
+        .to_owned();
+
+    let accepted = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/accept-invitation",
+        json!({"invitationId": invitation_id}),
+        Some(&invited.cookie),
+    )
+    .await?;
+    assert_eq!(accepted.status, StatusCode::OK);
+
+    let members = super::request_json(
+        &auth,
+        Method::GET,
+        &format!("/api/auth/organization/list-team-members?teamId={team_id}"),
+        json!({}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(members.status, StatusCode::OK);
+    assert_eq!(members.body.as_array().map(Vec::len), Some(2));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn accepting_invitation_to_full_team_does_not_create_partial_membership(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(MemoryAdapter::new());
