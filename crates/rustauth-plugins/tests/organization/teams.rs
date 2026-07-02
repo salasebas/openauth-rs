@@ -215,6 +215,120 @@ async fn invite_with_team_requires_team_update_permission() -> Result<(), Box<dy
 }
 
 #[tokio::test]
+async fn add_member_with_team_id_requires_team_update_permission(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(MemoryAdapter::new());
+    let options = OrganizationOptions::builder()
+        .teams(TeamOptions {
+            enabled: true,
+            create_default_team: false,
+            ..TeamOptions::default()
+        })
+        .custom_role("member_creator", json!({"member": ["create"]}))
+        .build();
+    let auth = super::test_router(adapter, options)?;
+
+    let owner = super::sign_up(&auth, "Owner", "owner-add-member-team@example.com").await?;
+    let org = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create",
+        json!({"name":"Team Add Member Authz","slug":"team-add-member-authz"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(org.status, StatusCode::OK);
+    let organization_id = org.body["id"].as_str().ok_or("missing organization id")?;
+
+    let team = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/create-team",
+        json!({"organizationId": organization_id, "name":"Engineering"}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(team.status, StatusCode::OK);
+    let team_id = team.body["id"].as_str().ok_or("missing team id")?;
+
+    let allowed_user =
+        super::sign_up(&auth, "Allowed", "allowed-add-member-team@example.com").await?;
+    let allowed = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({
+            "organizationId": organization_id,
+            "userId": allowed_user.user_id,
+            "role": "member",
+            "teamId": team_id
+        }),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(allowed.status, StatusCode::OK);
+
+    let actor = super::sign_up(&auth, "Actor", "actor-add-member-team@example.com").await?;
+    let actor_member = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({
+            "organizationId": organization_id,
+            "userId": actor.user_id,
+            "role": "member_creator"
+        }),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(actor_member.status, StatusCode::OK);
+
+    let denied_user = super::sign_up(&auth, "Denied", "denied-add-member-team@example.com").await?;
+    let denied = super::request_json(
+        &auth,
+        Method::POST,
+        "/api/auth/organization/add-member",
+        json!({
+            "organizationId": organization_id,
+            "userId": denied_user.user_id,
+            "role": "member",
+            "teamId": team_id
+        }),
+        Some(&actor.cookie),
+    )
+    .await?;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        denied.body["code"],
+        "YOU_ARE_NOT_ALLOWED_TO_CREATE_A_NEW_TEAM_MEMBER"
+    );
+
+    let members = super::request_json(
+        &auth,
+        Method::GET,
+        &format!("/api/auth/organization/list-members?organizationId={organization_id}"),
+        json!({}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(members.status, StatusCode::OK);
+    assert_eq!(members.body["members"].as_array().map(Vec::len), Some(3));
+
+    let team_members = super::request_json(
+        &auth,
+        Method::GET,
+        &format!("/api/auth/organization/list-team-members?teamId={team_id}"),
+        json!({}),
+        Some(&owner.cookie),
+    )
+    .await?;
+    assert_eq!(team_members.status, StatusCode::OK);
+    assert_eq!(team_members.body.as_array().map(Vec::len), Some(2));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn accepting_invitation_to_full_team_does_not_create_partial_membership(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(MemoryAdapter::new());
