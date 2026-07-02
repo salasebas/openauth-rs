@@ -40,6 +40,52 @@ async fn sign_in_social_returns_authorization_url_and_location_header(
 }
 
 #[tokio::test]
+async fn sign_in_social_rejects_untrusted_form_callback_urls_before_state_generation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = Arc::new(RouteAdapter::default());
+    let router = origin_checked_social_router(adapter.clone())?;
+
+    for (body, code, message) in [
+        (
+            "provider=github&callbackURL=https%3A%2F%2Fevil.example.com%2Fcallback",
+            "INVALID_CALLBACK_URL",
+            "Invalid callbackURL",
+        ),
+        (
+            "provider=github&errorCallbackURL=https%3A%2F%2Fevil.example.com%2Ferror",
+            "INVALID_ERROR_CALLBACK_URL",
+            "Invalid errorCallbackURL",
+        ),
+        (
+            "provider=github&newUserCallbackURL=https%3A%2F%2Fevil.example.com%2Fnew-user",
+            "INVALID_NEW_USER_CALLBACK_URL",
+            "Invalid newUserCallbackURL",
+        ),
+        (
+            "provider=github&callbackUrl=https%3A%2F%2Fevil.example.com%2Falias",
+            "INVALID_CALLBACK_URL",
+            "Invalid callbackURL",
+        ),
+    ] {
+        let response = router
+            .handle_async(form_request(
+                Method::POST,
+                "/api/auth/sign-in/social",
+                body,
+                None,
+                None,
+            )?)
+            .await?;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_error_body(&response, code, message)?;
+        assert_eq!(adapter.len("verification").await, 0);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn callback_oauth_creates_user_account_session_and_redirects(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(RouteAdapter::default());
@@ -832,6 +878,38 @@ async fn callback_link_social_updates_existing_account_tokens(
 }
 
 #[tokio::test]
+async fn link_social_rejects_untrusted_form_error_callback_url_before_state_generation(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = OffsetDateTime::now_utc();
+    let adapter = Arc::new(RouteAdapter::default());
+    adapter.insert_user(user(now)).await;
+    adapter
+        .insert_session(session(now, now + Duration::hours(1)))
+        .await;
+    let router = origin_checked_social_router(adapter.clone())?;
+    let cookie = signed_session_cookie("token_1")?;
+
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/link-social",
+            "provider=github&callbackURL=/settings&errorCallbackURL=https%3A%2F%2Fevil.example.com%2Flink-error",
+            Some(&cookie),
+            Some("http://localhost:3000"),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_error_body(
+        &response,
+        "INVALID_ERROR_CALLBACK_URL",
+        "Invalid errorCallbackURL",
+    )?;
+    assert_eq!(adapter.len("verification").await, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn callback_link_social_redirects_when_account_belongs_to_different_user(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let now = OffsetDateTime::now_utc();
@@ -992,6 +1070,59 @@ fn query_value(url: &str, key: &str) -> Option<String> {
         let (name, value) = pair.split_once('=')?;
         (name == key).then(|| value.to_owned())
     })
+}
+
+fn origin_checked_social_router(
+    adapter: Arc<RouteAdapter>,
+) -> Result<AuthRouter, Box<dyn std::error::Error>> {
+    let context = create_auth_context_with_adapter(
+        super::with_test_defaults(RustAuthOptions {
+            secret: Some(secret().to_owned()),
+            base_url: Some("http://localhost:3000/api/auth".to_owned()),
+            trusted_origins: rustauth_core::options::TrustedOriginOptions::Static(vec![
+                "http://localhost:3000".to_owned(),
+            ]),
+            social_providers: vec![Arc::new(FakeProvider::new("github"))],
+            ..RustAuthOptions::default()
+        }),
+        adapter,
+    )?;
+    Ok(AuthRouter::with_async_endpoints(
+        context,
+        Vec::new(),
+        core_auth_async_endpoints(),
+    )?)
+}
+
+fn form_request(
+    method: Method,
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+    origin: Option<&str>,
+) -> Result<Request<Vec<u8>>, http::Error> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(format!("http://localhost:3000{path}"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    if let Some(cookie) = cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    if let Some(origin) = origin {
+        builder = builder.header(header::ORIGIN, origin);
+    }
+    builder.body(body.as_bytes().to_vec())
+}
+
+fn assert_error_body(
+    response: &http::Response<Vec<u8>>,
+    code: &str,
+    message: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let body: ApiErrorResponse = serde_json::from_slice(response.body())?;
+    assert_eq!(body.code, code);
+    assert_eq!(body.message, message);
+    Ok(())
 }
 
 fn oauth_state_cookie_header(
