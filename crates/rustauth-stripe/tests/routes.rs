@@ -728,6 +728,43 @@ async fn subscription_success_redirects_when_checkout_session_retrieval_fails(
 }
 
 #[tokio::test]
+async fn subscription_success_rejects_callback_reopened_by_checkout_session_id(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(FailingCheckoutSessionTransport::default());
+    let options = StripeOptions::new(
+        StripeClient::with_transport(
+            "sk_test",
+            Arc::clone(&transport) as Arc<dyn StripeTransport>,
+        ),
+        "whsec_test",
+    )
+    .subscription(SubscriptionOptions::enabled(vec![
+        StripePlan::new("pro").price_id("price_pro")
+    ]));
+    let plugin = stripe(options).unwrap();
+    let endpoint = plugin
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.path == "/subscription/success")
+        .ok_or("success endpoint")?;
+    let (context, _adapter, cookie_header) = authenticated_context().await?;
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("http://localhost:3000/api/auth/subscription/success?callbackURL=/%7BCHECKOUT_SESSION_ID%7D&checkoutSessionId=%2Fevil.example")
+        .header("cookie", cookie_header)
+        .body(Vec::new())?;
+
+    let response = (endpoint.handler)(&context, request).await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers().get(http::header::LOCATION), None);
+    let body: Value = serde_json::from_slice(response.body())?;
+    assert_eq!(body["code"], "INVALID_REQUEST_BODY");
+    assert!(transport.requests()?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn billing_portal_uses_current_users_subscription_customer(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let transport = Arc::new(CaptureTransport::default());

@@ -138,6 +138,12 @@ pub fn subscription_success(options: StripeOptions) -> rustauth_core::api::Async
                     return redirect_response(&callback);
                 };
                 callback = callback.replace("{CHECKOUT_SESSION_ID}", &checkout_session_id);
+                let Some(callback) = validate_redirect_url(&context, &request, callback)? else {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        StripeErrorCode::InvalidRequestBody,
+                    );
+                };
                 let Some(adapter) = context.adapter() else {
                     return redirect_response(&callback);
                 };
