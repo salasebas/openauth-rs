@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1](https://github.com/salasebas/rustauth/compare/v0.3.0...v0.3.1) - 2026-07-02
+
+### Fixed
+
+- fix oauth client reference id update ([#181](https://github.com/salasebas/rustauth/pull/181))
+- *(oauth)* enforce skip-consent boundary
+- *(oauth)* prevent public client downgrade
+- *(oauth)* bind introspection and revocation to clients
+
 ## [0.2.0] - 2026-06-14
 
 Initial public working release.
