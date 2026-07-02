@@ -426,10 +426,15 @@ fn is_reserved_create_user_field(field: &str) -> bool {
             | "role"
             | "banned"
             | "banReason"
+            | "ban_reason"
             | "banExpires"
+            | "ban_expires"
             | "emailVerified"
+            | "email_verified"
             | "createdAt"
+            | "created_at"
             | "updatedAt"
+            | "updated_at"
             | "image"
     )
 }
