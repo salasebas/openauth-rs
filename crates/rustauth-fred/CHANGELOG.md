@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.2](https://github.com/salasebas/rustauth/compare/v0.3.0...v0.3.2) - 2026-07-02
+
+### Changed
+
+- release v0.3.1 ([#175](https://github.com/salasebas/rustauth/pull/175))
+
+### Fixed
+
+- break plugins/fred dev-dep cycle and repair post-0.3.0 CI
+
 ## [0.3.1](https://github.com/salasebas/rustauth/compare/v0.3.0...v0.3.1) - 2026-07-02
 
 ### Fixed
