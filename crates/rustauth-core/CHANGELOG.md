@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.1](https://github.com/salasebas/rustauth/compare/v0.3.0...v0.3.1) - 2026-07-02
+
+### Fixed
+
+- *(core)* validate social oauth callback aliases ([#197](https://github.com/salasebas/rustauth/pull/197))
+
 ## [0.2.0] - 2026-06-14
 
 Initial public working release.
