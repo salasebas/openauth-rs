@@ -421,6 +421,179 @@ async fn introspect_and_revoke_require_valid_client_authentication(
 }
 
 #[tokio::test]
+async fn introspect_rejects_public_client_authentication() -> Result<(), Box<dyn std::error::Error>>
+{
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            allow_dynamic_client_registration: true,
+            ..default_options()
+        })?,
+        adapter,
+    )?;
+    let client = register_client(
+        &router,
+        r#"{"redirect_uris":["http://127.0.0.1/callback"],"token_endpoint_auth_method":"none","type":"native","scope":"openid"}"#,
+        Some(&cookie),
+    )
+    .await?;
+    let client_id = client["client_id"].as_str().ok_or("missing client_id")?;
+
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/introspect",
+            &format!("token=opaque&client_id={}", query_encode(client_id)),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json_body(response)?["error"], "invalid_client");
+    Ok(())
+}
+
+#[tokio::test]
+async fn introspect_and_revoke_are_bound_to_authenticated_client(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            disable_jwt_plugin: true,
+            allow_dynamic_client_registration: true,
+            ..default_options()
+        })?,
+        adapter,
+    )?;
+    let client_a = register_client(
+        &router,
+        r#"{"redirect_uris":["https://rp.example/callback"],"scope":"openid offline_access","skip_consent":true}"#,
+        Some(&cookie),
+    )
+    .await?;
+    let client_b = register_client(
+        &router,
+        r#"{"redirect_uris":["https://client-b.example/callback"],"scope":"openid offline_access","skip_consent":true}"#,
+        Some(&cookie),
+    )
+    .await?;
+    let client_a_id = client_a["client_id"].as_str().ok_or("missing client_id")?;
+    let client_a_secret = client_a["client_secret"]
+        .as_str()
+        .ok_or("missing client_secret")?;
+    let client_b_id = client_b["client_id"].as_str().ok_or("missing client_id")?;
+    let client_b_secret = client_b["client_secret"]
+        .as_str()
+        .ok_or("missing client_secret")?;
+    let tokens =
+        exchange_authorization_code(&router, &cookie, client_a_id, client_a_secret).await?;
+    let access_token = tokens["access_token"]
+        .as_str()
+        .ok_or("missing access_token")?;
+    let refresh_token = tokens["refresh_token"]
+        .as_str()
+        .ok_or("missing refresh_token")?;
+
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/introspect",
+            &format!(
+                "token={}&token_type_hint=access_token&client_id={}&client_secret={}",
+                query_encode(access_token),
+                query_encode(client_b_id),
+                query_encode(client_b_secret)
+            ),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response)?, json!({ "active": false }));
+
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/introspect",
+            &format!(
+                "token={}&token_type_hint=refresh_token&client_id={}&client_secret={}",
+                query_encode(refresh_token),
+                query_encode(client_b_id),
+                query_encode(client_b_secret)
+            ),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response)?, json!({ "active": false }));
+
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/revoke",
+            &format!(
+                "token={}&token_type_hint=access_token&client_id={}&client_secret={}",
+                query_encode(access_token),
+                query_encode(client_b_id),
+                query_encode(client_b_secret)
+            ),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.body().is_empty());
+
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/revoke",
+            &format!(
+                "token={}&token_type_hint=refresh_token&client_id={}&client_secret={}",
+                query_encode(refresh_token),
+                query_encode(client_b_id),
+                query_encode(client_b_secret)
+            ),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.body().is_empty());
+
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/introspect",
+            &format!(
+                "token={}&token_type_hint=access_token&client_id={}&client_secret={}",
+                query_encode(access_token),
+                query_encode(client_a_id),
+                query_encode(client_a_secret)
+            ),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response)?;
+    assert_eq!(body["active"], true);
+    assert_eq!(body["client_id"], client_a_id);
+
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/introspect",
+            &format!(
+                "token={}&token_type_hint=refresh_token&client_id={}&client_secret={}",
+                query_encode(refresh_token),
+                query_encode(client_a_id),
+                query_encode(client_a_secret)
+            ),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response)?;
+    assert_eq!(body["active"], true);
+    assert_eq!(body["client_id"], client_a_id);
+    Ok(())
+}
+
+#[tokio::test]
 async fn introspect_and_revoke_respect_token_type_hint() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = adapter();
     seed_user_session(adapter.as_ref()).await?;

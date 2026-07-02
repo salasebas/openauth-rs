@@ -1,4 +1,5 @@
 use super::*;
+use crate::models::SchemaClient;
 
 pub(super) fn introspect_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> AsyncAuthEndpoint {
     create_auth_endpoint(
@@ -15,17 +16,19 @@ pub(super) fn introspect_endpoint(options: Arc<ResolvedOAuthProviderOptions>) ->
                     ));
                 };
                 let body: serde_json::Value = parse_body(&request)?;
-                if let Some(response) = authenticate_endpoint_client(
+                let client = match authenticate_endpoint_client(
                     &context,
                     adapter.as_ref(),
                     &options,
                     &request,
                     &body,
+                    ClientSecretPolicy::Required,
                 )
                 .await?
                 {
-                    return Ok(response);
-                }
+                    Ok(client) => client,
+                    Err(response) => return Ok(response),
+                };
                 let Some(token) = body.get("token").and_then(|value| value.as_str()) else {
                     return error_response(OAuthProviderError::invalid_request(
                         "token is required",
@@ -38,6 +41,7 @@ pub(super) fn introspect_endpoint(options: Arc<ResolvedOAuthProviderOptions>) ->
                     &options,
                     token,
                     token_type_hint,
+                    &client.client_id,
                 )
                 .await
                 {
@@ -66,25 +70,33 @@ pub(super) fn revoke_endpoint(options: Arc<ResolvedOAuthProviderOptions>) -> Asy
                     ));
                 };
                 let body: serde_json::Value = parse_body(&request)?;
-                if let Some(response) = authenticate_endpoint_client(
+                let client = match authenticate_endpoint_client(
                     &context,
                     adapter.as_ref(),
                     &options,
                     &request,
                     &body,
+                    ClientSecretPolicy::PerClientType,
                 )
                 .await?
                 {
-                    return Ok(response);
-                }
+                    Ok(client) => client,
+                    Err(response) => return Ok(response),
+                };
                 let Some(token) = body.get("token").and_then(|value| value.as_str()) else {
                     return error_response(OAuthProviderError::invalid_request(
                         "token is required",
                     ));
                 };
                 let token_type_hint = body.get("token_type_hint").and_then(|value| value.as_str());
-                match revoke_token_with_hint(adapter.as_ref(), &options, token, token_type_hint)
-                    .await
+                match revoke_token_with_hint(
+                    adapter.as_ref(),
+                    &options,
+                    token,
+                    token_type_hint,
+                    &client.client_id,
+                )
+                .await
                 {
                     Ok(()) => empty_success_response(),
                     Err(error) => {
@@ -102,16 +114,22 @@ async fn authenticate_endpoint_client(
     options: &ResolvedOAuthProviderOptions,
     request: &ApiRequest,
     body: &serde_json::Value,
-) -> Result<Option<ApiResponse>, RustAuthError> {
+    secret_policy: ClientSecretPolicy,
+) -> Result<Result<SchemaClient, ApiResponse>, RustAuthError> {
     let (client_id, client_secret) = match request_client_auth(request, body) {
         Ok(credentials) => credentials,
-        Err(error) => return error_response(error).map(Some),
+        Err(error) => return Ok(Err(error_response(error)?)),
     };
     let Some(client_id) = client_id else {
-        return Ok(Some(error_response(OAuthProviderError::unauthorized(
+        return Ok(Err(error_response(OAuthProviderError::unauthorized(
             "client authentication required",
         ))?));
     };
+    if secret_policy == ClientSecretPolicy::Required && client_secret.is_none() {
+        return Ok(Err(error_response(OAuthProviderError::unauthorized(
+            "client secret must be provided",
+        ))?));
+    }
     match validate_client_credentials(
         context,
         adapter,
@@ -122,9 +140,15 @@ async fn authenticate_endpoint_client(
     )
     .await
     {
-        Ok(_) => Ok(None),
-        Err(error) => client_auth_failure_response(error).map(Some),
+        Ok(client) => Ok(Ok(client)),
+        Err(error) => Ok(Err(client_auth_failure_response(error)?)),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientSecretPolicy {
+    Required,
+    PerClientType,
 }
 
 fn request_client_auth(
