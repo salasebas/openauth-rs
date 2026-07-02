@@ -19,7 +19,7 @@ use crate::options::{
     OidcConfig, OidcMapping, SamlMapping, SsoAuditEvent, SsoAuditEventKind, SsoAuditSeverity,
     SsoOptions, TokenEndpointAuthentication,
 };
-use crate::org::{can_manage_provider, can_register_for_organization};
+use crate::org::can_manage_provider;
 use crate::store::{SsoProviderStore, UpdateSsoProviderInput};
 use crate::utils;
 
@@ -31,7 +31,6 @@ struct UpdateProviderBody {
     provider_id: String,
     issuer: Option<String>,
     domain: Option<String>,
-    organization_id: Option<String>,
     oidc_config: Option<UpdateOidcConfig>,
     saml_config: Option<UpdateSamlConfig>,
 }
@@ -40,7 +39,6 @@ impl UpdateProviderBody {
     fn has_update_fields(&self) -> bool {
         self.issuer.is_some()
             || self.domain.is_some()
-            || self.organization_id.is_some()
             || self.oidc_config.is_some()
             || self.saml_config.is_some()
     }
@@ -154,24 +152,6 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                             return utils::json(
                                 http::StatusCode::BAD_REQUEST,
                                 &json!({"code": "INVALID_DOMAIN"}),
-                            );
-                        }
-                    }
-                    if let Some(organization_id) = &body.organization_id {
-                        if !can_register_for_organization(
-                            &context,
-                            adapter.as_ref(),
-                            &user_id,
-                            organization_id,
-                        )
-                        .await?
-                        {
-                            return utils::json(
-                                http::StatusCode::BAD_REQUEST,
-                                &json!({
-                                    "code": "ORGANIZATION_ADMIN_REQUIRED",
-                                    "message": "You must be an admin or owner of the organization"
-                                }),
                             );
                         }
                     }
@@ -294,7 +274,6 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                             UpdateSsoProviderInput {
                                 issuer: body.issuer,
                                 domain: body.domain,
-                                organization_id: body.organization_id,
                                 oidc_config: merged_oidc_config.map(Some),
                                 saml_config: merged_saml_config.map(Some),
                                 domain_verified: reset_domain_verified.then_some(false),

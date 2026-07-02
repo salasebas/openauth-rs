@@ -30,6 +30,11 @@ fn sso_openapi_exposes_public_route_metadata() -> Result<(), Box<dyn std::error:
     );
     assert!(
         openapi["paths"]["/sso/register"]["post"]["requestBody"]["content"]["application/json"]
+            ["schema"]["properties"]["organizationId"]
+            .is_object()
+    );
+    assert!(
+        openapi["paths"]["/sso/register"]["post"]["requestBody"]["content"]["application/json"]
             ["schema"]["properties"]["oidcConfig"]["description"]
             .as_str()
             .is_some_and(|description| description.contains("skipDiscovery"))
@@ -79,6 +84,11 @@ fn sso_openapi_exposes_public_route_metadata() -> Result<(), Box<dyn std::error:
         openapi["paths"]["/sso/update-provider"]["post"]["requestBody"]["content"]
             ["application/json"]["schema"]["properties"]["samlConfig"]
             .is_object()
+    );
+    assert!(
+        openapi["paths"]["/sso/update-provider"]["post"]["requestBody"]["content"]
+            ["application/json"]["schema"]["properties"]["organizationId"]
+            .is_null()
     );
     #[cfg(feature = "saml")]
     {

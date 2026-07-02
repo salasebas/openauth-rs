@@ -325,9 +325,6 @@ impl<'a> SsoProviderStore<'a> {
         if let Some(domain) = input.domain {
             query = query.data("domain", DbValue::String(domain));
         }
-        if let Some(organization_id) = input.organization_id {
-            query = query.data("organization_id", DbValue::String(organization_id));
-        }
         if let Some(oidc_config) = input.oidc_config {
             query = query.data("oidc_config", optional_string(oidc_config));
         }
@@ -405,8 +402,6 @@ pub struct UpdateSsoProviderInput {
     pub issuer: Option<String>,
     /// Updated domains.
     pub domain: Option<String>,
-    /// Updated organization id.
-    pub organization_id: Option<String>,
     /// Updated serialized OIDC config; `Some(None)` clears it.
     pub oidc_config: Option<Option<String>>,
     /// Updated serialized SAML config; `Some(None)` clears it.
