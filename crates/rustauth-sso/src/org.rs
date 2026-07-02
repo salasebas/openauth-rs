@@ -65,7 +65,7 @@ pub async fn can_register_for_organization(
     if !context.has_plugin("organization") {
         return Ok(true);
     }
-    is_org_member(adapter, user_id, organization_id).await
+    is_org_admin(adapter, user_id, organization_id).await
 }
 
 pub async fn can_verify_provider_domain(

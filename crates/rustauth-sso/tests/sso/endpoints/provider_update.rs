@@ -46,7 +46,7 @@ async fn update_provider_applies_owner_scope_and_resets_domain_verification(
 }
 
 #[tokio::test]
-async fn update_provider_rejects_organization_id_without_membership(
+async fn update_provider_rejects_organization_id_without_admin_role(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (adapter, router) = router_with_options_and_extra_plugins(
         SsoOptions::default(),
@@ -73,10 +73,42 @@ async fn update_provider_rejects_organization_id_without_membership(
         .await?;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(response)?["code"],
-        "ORGANIZATION_MEMBERSHIP_REQUIRED"
-    );
+    assert_eq!(json_body(response)?["code"], "ORGANIZATION_ADMIN_REQUIRED");
+    let records = adapter.records("sso_provider").await;
+    assert_eq!(records[0].get("organization_id"), Some(&DbValue::Null));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_provider_rejects_organization_id_for_plain_member(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (adapter, router) = router_with_options_and_extra_plugins(
+        SsoOptions::default(),
+        vec![AuthPlugin::new("organization")],
+    )?;
+    let cookie = seed_session(&adapter).await?;
+    seed_org_member(&adapter, "member_update", "org_1", "user_1", "member").await?;
+    router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/register",
+            r#"{"providerId":"okta","issuer":"https://idp.example.com","domain":"example.com"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    let response = router
+        .handle_async(json_request(
+            Method::POST,
+            "/sso/update-provider",
+            r#"{"providerId":"okta","organizationId":"org_1"}"#,
+            Some(&cookie),
+        )?)
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response)?["code"], "ORGANIZATION_ADMIN_REQUIRED");
     let records = adapter.records("sso_provider").await;
     assert_eq!(records[0].get("organization_id"), Some(&DbValue::Null));
 

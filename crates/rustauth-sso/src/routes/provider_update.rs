@@ -169,8 +169,8 @@ pub(super) fn endpoint(options: Arc<SsoOptions>) -> AsyncAuthEndpoint {
                             return utils::json(
                                 http::StatusCode::BAD_REQUEST,
                                 &json!({
-                                    "code": "ORGANIZATION_MEMBERSHIP_REQUIRED",
-                                    "message": "You are not a member of the organization"
+                                    "code": "ORGANIZATION_ADMIN_REQUIRED",
+                                    "message": "You must be an admin or owner of the organization"
                                 }),
                             );
                         }
