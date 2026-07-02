@@ -710,6 +710,82 @@ async fn update_client_rejects_token_auth_method_changes() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
+async fn update_client_rejects_public_downgrade_and_keeps_secret_required(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = adapter();
+    seed_user_session(adapter.as_ref()).await?;
+    let cookie = signed_session_cookie("token_1")?;
+    let router = router(
+        oauth_provider(OAuthProviderOptions {
+            allow_dynamic_client_registration: true,
+            scopes: vec!["read:reports".to_owned()],
+            ..default_options()
+        })?,
+        Arc::clone(&adapter),
+    )?;
+    let client = create_admin_client(
+        &router,
+        r#"{"redirect_uris":["https://rp.example/callback"],"grant_types":["client_credentials"],"scope":"read:reports"}"#,
+        &cookie,
+    )
+    .await?;
+    let client_id = client["client_id"].as_str().ok_or("missing client_id")?;
+    let client_secret = client["client_secret"]
+        .as_str()
+        .ok_or("missing client_secret")?;
+
+    let response = router
+        .handle_async(request(
+            Method::POST,
+            "/api/auth/oauth2/update-client",
+            &format!(r#"{{"client_id":"{client_id}","update":{{"public":true}}}}"#),
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response)?["error"], "invalid_client_metadata");
+
+    let stored_clients = adapter
+        .find_many(FindMany::new("oauth_client").where_clause(Where::new(
+            "client_id",
+            DbValue::String(client_id.to_owned()),
+        )))
+        .await?;
+    assert_eq!(
+        stored_clients
+            .first()
+            .and_then(|record| record.get("public")),
+        Some(&DbValue::Boolean(false))
+    );
+
+    let missing_secret_body =
+        format!("grant_type=client_credentials&client_id={client_id}&scope=read%3Areports");
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/token",
+            &missing_secret_body,
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json_body(response)?["error"], "invalid_client");
+
+    let token_body = format!(
+        "grant_type=client_credentials&client_id={client_id}&client_secret={}&scope=read%3Areports",
+        query_encode(client_secret)
+    );
+    let response = router
+        .handle_async(form_request(
+            Method::POST,
+            "/api/auth/oauth2/token",
+            &token_body,
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    Ok(())
+}
+
+#[tokio::test]
 async fn update_client_rejects_reference_id_changes_and_preserves_token_reference(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let adapter = adapter();
